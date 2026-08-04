@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+
+# 仮想環境
+venv/
+.venv/
+env/
+
+# mgtkit の生成物
+mgtkit_out/
+*.log
+
+# 入力データ (業務ファイルは共有しない)
+*.mgt
+*.xlsx
+*.xls
+
+# エディタ
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

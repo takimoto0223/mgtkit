@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>mgtkit - MIDAS mgt ツール</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; margin: 0;
+         background: #f4f5f7; color: #222; font-size: 14px; }
+  header { background: #2b4a6f; color: #fff; padding: 10px 18px; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  header span { font-size: 12px; opacity: .8; margin-left: 10px; }
+  nav { display: flex; background: #fff; border-bottom: 2px solid #2b4a6f; }
+  nav button { border: none; background: none; padding: 10px 20px;
+               font-size: 14px; cursor: pointer; color: #444;
+               border-bottom: 3px solid transparent; }
+  nav button.active { color: #2b4a6f; font-weight: bold;
+                      border-bottom-color: #2b4a6f; }
+  main { padding: 14px 18px; max-width: 1400px; margin: 0 auto; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  fieldset { border: 1px solid #ccd; background: #fff; border-radius: 4px;
+             margin: 0 0 12px; padding: 10px 14px; }
+  legend { font-weight: bold; color: #2b4a6f; padding: 0 6px; }
+  label.inline { margin-right: 14px; white-space: nowrap; }
+  input[type=text], input[type=number], select {
+      border: 1px solid #aab; border-radius: 3px; padding: 5px 7px;
+      font-size: 13px; }
+  input.path { width: min(640px, 90%); }
+  input.path.dragover { outline: 2px dashed #2b6cb0; background: #eef4fb; }
+  input[type=number] { width: 80px; }
+  button.act { background: #2b4a6f; color: #fff; border: none;
+               border-radius: 4px; padding: 8px 22px; font-size: 14px;
+               cursor: pointer; }
+  button.act:hover { background: #3a6191; }
+  button.sub { background: #eef1f5; border: 1px solid #aab; color: #234;
+               border-radius: 3px; padding: 4px 10px; cursor: pointer;
+               font-size: 12px; }
+  button.sub.emph { background: #b95d18; border-color: #b95d18; color: #fff;
+                    font-weight: bold; }
+  .row { margin: 6px 0; }
+  .msg-err { background: #fdecea; border: 1px solid #e5b4ae; color: #a12b1e;
+             padding: 8px 12px; border-radius: 4px; margin: 8px 0;
+             white-space: pre-wrap; }
+  .msg-note { background: #fff8e0; border: 1px solid #e0d09a; color: #6b5b10;
+              padding: 6px 12px; border-radius: 4px; margin: 8px 0;
+              white-space: pre-wrap; font-size: 12px; }
+  .msg-ok { background: #e9f5ec; border: 1px solid #b0d5ba; color: #1d6335;
+            padding: 6px 12px; border-radius: 4px; margin: 8px 0; }
+  .groupbox { display: flex; flex-wrap: wrap; gap: 4px 14px;
+              max-height: 130px; overflow-y: auto; padding: 4px;
+              border: 1px solid #dde; border-radius: 3px; background: #fafbfc; }
+  .pdfblock { background: #fff; border: 1px solid #ccd; border-radius: 4px;
+              margin: 10px 0; padding: 8px 12px; }
+  .pdfblock h4 { margin: 2px 0 6px; font-size: 13px; }
+  details.pdfdet > summary { cursor: pointer; font-size: 13px;
+                             font-weight: 600; color: #234; }
+  details.pdflist { margin: 10px 0; border: 1px solid #ccd;
+                    border-radius: 4px; background: #fff;
+                    padding: 4px 12px; }
+  details.pdflist > summary { cursor: pointer; font-weight: 600;
+                              color: #2b4a6f; font-size: 13px;
+                              padding: 5px 0; }
+  details.pdflist .pdfblock { margin: 6px 0; background: #fafbfd; }
+  details.pdfdet[open] > summary { margin-bottom: 6px; }
+  embed.pdf { width: 100%; height: 640px; border: 1px solid #ddd; }
+  table.res { border-collapse: collapse; background: #fff; width: 100%;
+              font-size: 13px; }
+  table.res th, table.res td { border: 1px solid #ccd; padding: 4px 8px;
+                               text-align: center; }
+  table.res th { background: #e8edf4; }
+  table.res td.name { text-align: left; }
+  td.ng { background: #f6c8c4; font-weight: bold; }
+  td.warn { background: #fbe9b8; }
+  td.na { color: #999; }
+  #viewer3d { width: 100%; height: 560px; background: #fdfdfe;
+              border: 1px solid #ccd; border-radius: 4px; position: relative; }
+  #tooltip3d { position: absolute; pointer-events: none; background: #234;
+               color: #fff; font-size: 12px; padding: 3px 8px;
+               border-radius: 3px; display: none; z-index: 5; }
+  #overlay { position: fixed; inset: 0; background: rgba(255,255,255,.65);
+             display: none; z-index: 100; align-items: center;
+             justify-content: center; flex-direction: column; }
+  #overlay.show { display: flex; }
+  .spinner { width: 46px; height: 46px; border: 5px solid #cdd6e2;
+             border-top-color: #2b4a6f; border-radius: 50%;
+             animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #overlay p { color: #2b4a6f; font-weight: bold; margin-top: 12px; }
+  pre.texbox { background: #fff; border: 1px solid #ccd; border-radius: 4px;
+               padding: 10px; max-height: 560px; overflow: auto;
+               font-size: 12px; }
+  pre.detailtext { background: #f8f9fb; border: 1px solid #dde; padding: 8px;
+                   font-size: 12px; overflow: auto; max-height: 400px;
+                   white-space: pre-wrap; }
+  .cell-ele { display: block; font-size: 10px; color: #667; }
+  .dl { margin-left: 10px; font-size: 12px; }
+  .hint { color: #778; font-size: 12px; }
+  .frow { display: flex; align-items: center; gap: 8px; margin: 6px 0;
+          flex-wrap: wrap; }
+  .flabel { flex: 0 0 130px; text-align: right; color: #345;
+            font-size: 13px; white-space: nowrap; }
+  .flabel.w2 { flex-basis: 215px; }
+  .frow .fhint.w2 { margin-left: 223px; }
+  .frow input.path { flex: 1 1 320px; width: auto; min-width: 240px;
+                     max-width: 620px; }
+  .fhint { flex-basis: 100%; margin: 0 0 2px 138px; color: #889;
+           font-size: 11px; line-height: 1.6; }
+  input[type=file] { width: 118px; font-size: 12px; color: transparent; }
+  input[type=file]::file-selector-button {
+      background: #eef1f5; border: 1px solid #aab; color: #234;
+      border-radius: 3px; padding: 4px 10px; cursor: pointer;
+      font-size: 12px; }
+  input[type=file]::file-selector-button:hover { background: #e2e7ee; }
+  details.adv { margin: 10px 0; border: 1px solid #dde; border-radius: 4px;
+                background: #fafbfd; padding: 2px 10px 6px; }
+  details.adv > summary { cursor: pointer; color: #2b4a6f; font-size: 13px;
+                          font-weight: 600; padding: 6px 0; }
+  .rcglab { display: inline-block; min-width: 8em; }
+  table.res td.rcgcell { text-align: left; }
+  .rcgpair { white-space: nowrap; }
+</style>
+</head>
+<body>
+<header><h1>mgtkit<span>MIDAS mgt モデル図・応力図・断面検定・TeX・DXF ツール</span></h1></header>
+<nav>
+  <button data-tab="model" class="active">モデル</button>
+  <button data-tab="stress">応力図</button>
+  <button data-tab="qr">QR図 (反力・分担・偏心)</button>
+  <button data-tab="check">断面検定 (S/木/RC/SRC)</button>
+  <button data-tab="ratio">検定比図</button>
+  <button data-tab="tex">TeX表</button>
+  <button data-tab="dxf">DXF</button>
+</nav>
+<main>
+
+<!-- ============ 共通: mgtパス ============ -->
+<fieldset>
+  <legend>mgtファイル (全タブ共通)</legend>
+  <div class="row">
+    <input type="text" id="mgt_path" class="path"
+           placeholder="例: C:\work\model.mgt (フルパス)">
+    <button class="sub" onclick="loadMgt()">読み込み</button>
+    <span class="hint">またはアップロード(ここへのドラッグ＆ドロップ可):</span>
+    <input type="file" id="mgt_upload" style="font-size:12px"
+           onchange="uploadTo(this,'mgt_path',loadMgt)">
+    <button class="sub open-folder" data-dir=""
+            title="アップロードファイルの保存先 (Temp&#92;mgtkit_uploads) を開く">保存先フォルダを開く</button>
+  </div>
+  <div class="row">出力先フォルダ (任意):
+    <input type="text" id="mgt_out_base" class="path"
+           placeholder="例: C:\work\壁式事例2 (空欄=mgtと同じフォルダ)">
+    <span class="hint">生成物は &lt;出力先&gt;\mgtkit_out\ のタブ別フォルダ
+      (model / stress / ratio_tex / ratio_plot / tex / dxf / qr) に保存されます。
+      mgtを「アップロード」で読み込んだ場合はmgtが一時フォルダ(AppData)扱いに
+      なるため、ここに事例フォルダを指定してください。</span>
+  </div>
+  <div id="mgt_msg"></div>
+</fieldset>
+
+<!-- ============ タブ1: モデル ============ -->
+<section class="tab active" id="tab-model">
+  <fieldset>
+    <legend>3Dワイヤフレーム表示</legend>
+    <div class="row">
+      <button class="act" onclick="show3D()">3D表示</button>
+      <span class="hint">マウス左ドラッグ: 回転 / ホイール: 拡大縮小 /
+        右ドラッグ: 移動 / 要素にマウスを乗せると断面名を表示</span>
+    </div>
+    <div id="viewer3d"><div id="tooltip3d"></div></div>
+    <div id="model3d_msg"></div>
+  </fieldset>
+  <fieldset>
+    <legend>軸組図・伏図PDF生成</legend>
+    <div class="row"><b>鉛直構面 (軸組図)</b>
+      <button class="sub" onclick="checkAll('axgroup',true)">全選択</button>
+      <button class="sub" onclick="checkAll('axgroup',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="axes_box"><span class="hint">
+      「読み込み」でmgtのグループ一覧を表示します</span></div>
+    <div class="row"><b>水平構面 (伏図)</b>
+      <button class="sub" onclick="checkAll('flgroup',true)">全選択</button>
+      <button class="sub" onclick="checkAll('flgroup',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="floors_box"><span class="hint">-</span></div>
+    <div class="row"><b>高さ寸法レベル (軸組図)</b>
+      <button class="sub" onclick="checkAll('hlevel',true)">全選択</button>
+      <button class="sub" onclick="checkAll('hlevel',false)">全解除</button>
+      <button class="sub emph" onclick="presetColumns('hlevel')">柱端点のみ</button>
+      <span class="hint">既定=全レベル(従来どおり)。勾配屋根等でレベルが
+        多い場合は「柱端点のみ」推奨 (*印=柱端点以外のレベル)</span>
+    </div>
+    <div class="groupbox" id="heights_box"><span class="hint">
+      「読み込み」で高さ候補を表示します</span></div>
+    <div class="row"><b>通り芯符号に表示する通り</b>
+      <button class="sub" onclick="checkAll('symgroup',true)">全選択</button>
+      <button class="sub" onclick="checkAll('symgroup',false)">全解除</button>
+      <span class="hint">図中に交差通り芯符号・間隔寸法として示す通り
+        (既定=全選択。描画構面の選択とは独立)</span>
+    </div>
+    <div class="groupbox" id="symbols_box"><span class="hint">
+      「読み込み」でmgtのグループ一覧を表示します</span></div>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="m_element" checked>
+        断面符号図・要素ID図・使用材料図</label>
+      <label class="inline"><input type="checkbox" id="m_end">
+        要素境界条件図</label>
+      <label class="inline"><input type="checkbox" id="m_node">
+        節点ID図</label>
+      <label class="inline">用紙
+        <select id="m_paper"><option value="1">A1</option>
+          <option value="2">A2</option><option value="3">A3</option>
+          <option value="4" selected>A4</option></select></label>
+      <label class="inline">ダミー材断面番号下限
+        <input type="number" id="m_limit" value="9000"></label>
+    </div>
+    <details class="row" style="margin:8px 0">
+      <summary style="cursor:pointer;color:#2b4a6f;font-weight:bold">
+        詳細設定 (文字サイズ・位置・マージン)</summary>
+      <div class="row">文字サイズ:
+        <label class="inline">寸法値
+          <input type="number" id="m_f_d" value="5" step="0.5"></label>
+        <label class="inline">交差通り芯符号
+          <input type="number" id="m_f_a" value="6" step="0.5"></label>
+        <label class="inline">タイトル
+          <input type="number" id="m_f_t" value="8" step="0.5"></label>
+      </div>
+      <div class="row">位置:
+        <label class="inline">寸法線位置
+          <input type="number" id="m_line_loc" value="2.0" step="0.5"></label>
+        <label class="inline">通り芯符号位置
+          <input type="number" id="m_axis_loc" value="3.0" step="0.5"></label>
+      </div>
+      <div class="row">マージン:
+        <label class="inline">左
+          <input type="number" id="m_mg_l" value="5" step="0.5"></label>
+        <label class="inline">右
+          <input type="number" id="m_mg_r" value="2" step="0.5"></label>
+        <label class="inline">上
+          <input type="number" id="m_mg_t" value="5" step="0.5"></label>
+        <label class="inline">下
+          <input type="number" id="m_mg_b" value="5" step="0.5"></label>
+      </div>
+    </details>
+    <div class="row"><button class="act" onclick="runPlotModel()">
+      PDF生成</button></div>
+    <div id="model_msg"></div>
+    <div id="model_pdfs"></div>
+  </fieldset>
+</section>
+
+<!-- ============ タブ2: 応力図 ============ -->
+<section class="tab" id="tab-stress">
+  <fieldset>
+    <legend>応力ファイル</legend>
+    <div class="row">beam_stress:
+      <input type="text" id="beam_stress_path" class="path"
+             placeholder="例: C:\work\beam_stress.txt">
+      <input type="file" style="font-size:12px"
+             onchange="uploadTo(this,'beam_stress_path',loadCases)">
+    </div>
+    <div class="row">truss_stress (任意):
+      <input type="text" id="truss_stress_path" class="path"
+             placeholder="無い場合は空欄">
+      <input type="file" style="font-size:12px"
+             onchange="uploadTo(this,'truss_stress_path')">
+    </div>
+    <div class="row"><button class="sub" onclick="loadCases()">
+      荷重ケース読込</button></div>
+  </fieldset>
+  <fieldset>
+    <legend>描画条件</legend>
+    <div class="row"><b>荷重ケース</b></div>
+    <div class="groupbox" id="cases_box"><span class="hint">
+      「荷重ケース読込」でbeam_stressのケース一覧を表示します</span></div>
+    <div class="row"><b>鉛直構面</b>
+      <button class="sub" onclick="checkAll('stgroup',true)">全選択</button>
+      <button class="sub" onclick="checkAll('stgroup',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="staxes_box"><span class="hint">
+      mgt読み込みでグループ一覧を表示します</span></div>
+    <div class="row"><b>高さ寸法レベル</b>
+      <button class="sub" onclick="checkAll('shlevel',true)">全選択</button>
+      <button class="sub" onclick="checkAll('shlevel',false)">全解除</button>
+      <button class="sub emph" onclick="presetColumns('shlevel')">柱端点のみ</button>
+      <span class="hint">既定=全レベル。「柱端点のみ」で斜材の中間レベルを
+        除外 (*印=柱端点以外)</span>
+    </div>
+    <div class="groupbox" id="sheights_box"><span class="hint">
+      mgt読み込みで高さ候補を表示します</span></div>
+    <div class="row"><b>通り芯符号に表示する通り</b>
+      <button class="sub" onclick="checkAll('ssymgroup',true)">全選択</button>
+      <button class="sub" onclick="checkAll('ssymgroup',false)">全解除</button>
+      <span class="hint">図中に交差通り芯符号・間隔寸法として示す通り
+        (既定=全選択。描画構面の選択とは独立)</span>
+    </div>
+    <div class="groupbox" id="ssymbols_box"><span class="hint">
+      mgt読み込みでグループ一覧を表示します</span></div>
+    <div class="row">
+      成分:
+      <label class="inline"><input type="checkbox" id="s_N" checked>N (軸力)</label>
+      <label class="inline"><input type="checkbox" id="s_M" checked>M (曲げ)</label>
+      <label class="inline"><input type="checkbox" id="s_Q" checked>Q (せん断)</label>
+      <label class="inline">M図倍率
+        <input type="number" id="s_mscale" value="0.0005" step="0.0001"></label>
+      <label class="inline"><input type="checkbox" id="s_trussL">
+        鉛直時もトラス応力を描く</label>
+      <label class="inline"><input type="checkbox" id="s_unit" checked>
+        分割部材を一部材として表記 (最大応力表示)</label>
+      <label class="inline">用紙
+        <select id="s_paper"><option value="1">A1</option>
+          <option value="2">A2</option><option value="3">A3</option>
+          <option value="4" selected>A4</option></select></label>
+    </div>
+    <details class="row" style="margin:8px 0">
+      <summary style="cursor:pointer;color:#2b4a6f;font-weight:bold">
+        詳細設定 (文字サイズ・位置・マージン)</summary>
+      <div class="row">文字サイズ:
+        <label class="inline">応力値
+          <input type="number" id="s_f_s" value="4" step="0.5"></label>
+        <label class="inline">寸法値
+          <input type="number" id="s_f_d" value="5" step="0.5"></label>
+        <label class="inline">通り芯符号
+          <input type="number" id="s_f_a" value="6" step="0.5"></label>
+        <label class="inline">タイトル
+          <input type="number" id="s_f_t" value="8" step="0.5"></label>
+        <label class="inline">反力値
+          <input type="number" id="s_f_r" value="5" step="0.5"></label>
+      </div>
+      <div class="row">位置:
+        <label class="inline">寸法線位置
+          <input type="number" id="s_line_loc" value="2.0" step="0.5"></label>
+        <label class="inline">通り芯符号位置
+          <input type="number" id="s_axis_loc" value="3.0" step="0.5"></label>
+      </div>
+      <div class="row">マージン:
+        <label class="inline">左
+          <input type="number" id="s_mg_l" value="5" step="0.5"></label>
+        <label class="inline">右
+          <input type="number" id="s_mg_r" value="2" step="0.5"></label>
+        <label class="inline">上
+          <input type="number" id="s_mg_t" value="5" step="0.5"></label>
+        <label class="inline">下
+          <input type="number" id="s_mg_b" value="5" step="0.5"></label>
+      </div>
+    </details>
+    <div class="row"><button class="act" onclick="runPlotStress()">
+      PDF生成</button></div>
+    <div id="stress_msg"></div>
+    <div id="stress_pdfs"></div>
+  </fieldset>
+</section>
+
+<!-- ============ タブ2b: QR図 (反力・せん断分担・偏心率) ============ -->
+<section class="tab" id="tab-qr">
+  <fieldset>
+    <legend>入力 (MATLAB版 Midas_QR: 反力図・柱脚データ・せん断力分担図・層間変形角・偏心率)</legend>
+    <div class="frow"><span class="flabel w2">beam_stress</span>
+      <input type="text" id="q_beam_stress_path" class="path">
+      <input type="file" onchange="uploadTo(this,'q_beam_stress_path')">
+      <span class="hint">空欄なら応力図タブの値を使用</span>
+    </div>
+    <div class="frow"><span class="flabel w2">truss_stress (任意)</span>
+      <input type="text" id="q_truss_stress_path" class="path">
+      <input type="file" onchange="uploadTo(this,'q_truss_stress_path')">
+    </div>
+    <div class="frow"><span class="flabel w2">wall_stress (任意)</span>
+      <input type="text" id="q_wall_stress_path" class="path">
+      <input type="file" onchange="uploadTo(this,'q_wall_stress_path')">
+      <span class="hint">壁要素がある場合のせん断分担・偏心率に使用</span>
+    </div>
+    <div class="frow"><span class="flabel w2">plate_stress (任意)</span>
+      <input type="text" id="q_plate_stress_path" class="path">
+      <input type="file" onchange="uploadTo(this,'q_plate_stress_path')">
+      <label class="inline">割増係数
+        <input type="number" id="q_plate_up" value="1.0" step="0.1"
+          style="width:70px"></label>
+      <span class="hint">板要素がある場合の偏心率に使用</span>
+    </div>
+    <div class="frow"><span class="flabel w2">reaction (反力図・柱脚)</span>
+      <input type="text" id="q_reaction_path" class="path">
+      <input type="file" onchange="uploadTo(this,'q_reaction_path')">
+      <span class="hint">8列 [節点, ケース, FX, FY, FZ, MX, MY, MZ]</span>
+    </div>
+    <div class="frow"><span class="flabel w2">deformation (変形角・偏心率)</span>
+      <input type="text" id="q_deformation_path" class="path">
+      <input type="file" onchange="uploadTo(this,'q_deformation_path')">
+      <span class="hint">5列 [節点, ケース, dx, dy, dz]</span>
+    </div>
+    <div class="frow"><span class="flabel w2"></span>
+      <button class="sub" onclick="loadQrInfo()">ケース・レベル読込</button>
+      <span class="hint">応力ファイルの荷重ケースと柱脚レベル
+        (柱下端Z+壁ベース) を読み込み、下の各設定表を作ります。
+        mgt読み込み後に実行してください。</span>
+    </div>
+    <div id="qr_info_msg"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>共通設定</legend>
+    <div class="row"><b>荷重ケース名</b>
+      <span class="hint">(3ケースの場合の既定: TL / KX / KY)</span></div>
+    <div class="groupbox" id="qr_cases_box"><span class="hint">
+      「ケース・レベル読込」でケース一覧を表示します</span></div>
+    <div class="row"><b>層構成 (柱脚レベル → 層番号)</b>
+      <span class="hint">せん断力分担図・層間変形角・偏心率で使う層の定義。
+        mgtのフロアグループ (1F/2F/RF等) から自動設定されます
+        (どのフロアにも属さないレベル=トラス下弦材などは空欄=対象外)。
+        同じ層番号を付けたレベルは1つの層として算定 (勾配屋根はRFの
+        複数レベルが同じ番号に)。手動修正も可能。</span></div>
+    <div class="groupbox" id="qr_levels_box"><span class="hint">
+      「ケース・レベル読込」でレベル一覧を表示します</span></div>
+    <div class="row"><b>断面の分類 (せん断力分担図用)</b>
+      <span class="hint">断面名から初期推定します。要確認。</span></div>
+    <div class="groupbox" id="qr_secs_box"><span class="hint">
+      「ケース・レベル読込」で断面一覧を表示します</span></div>
+    <div class="row"><b>表示構面 (通り芯)</b>
+      <button class="sub" onclick="checkAll('qgroup',true)">全選択</button>
+      <button class="sub" onclick="checkAll('qgroup',false)">全解除</button>
+      <span class="hint">図の通り芯表示に使う鉛直構面</span>
+    </div>
+    <div class="groupbox" id="qaxes_box"><span class="hint">
+      mgt読み込みでグループ一覧を表示します</span></div>
+    <div class="row"><b>算定範囲</b>
+      <label class="inline"><input type="radio" name="q_scope" value="all"
+        checked> 全体</label>
+      <label class="inline"><input type="radio" name="q_scope" value="group">
+        選択グループのみ (byGroup)</label>
+      <span class="hint">byGroupは下で選択したグループの要素だけで算定</span>
+    </div>
+    <div class="groupbox" id="qcalc_box"><span class="hint">
+      mgt読み込みでグループ一覧を表示します</span></div>
+    <details class="row">
+      <summary>詳細設定 (文字サイズ・位置・用紙)</summary>
+      <div class="row" style="margin-left:1.5em">
+        <label class="inline">応力値
+          <input type="number" id="q_f_s" value="3"></label>
+        <label class="inline">寸法値
+          <input type="number" id="q_f_d" value="5"></label>
+        <label class="inline">通り芯符号
+          <input type="number" id="q_f_a" value="5"></label>
+        <label class="inline">タイトル
+          <input type="number" id="q_f_t" value="7"></label>
+        <label class="inline">反力値
+          <input type="number" id="q_f_re" value="5"></label>
+      </div>
+      <div class="row" style="margin-left:1.5em">
+        <label class="inline">寸法線位置
+          <input type="number" id="q_line_loc" value="1.5" step="0.1"></label>
+        <label class="inline">通り芯符号位置
+          <input type="number" id="q_axis_loc" value="1.7" step="0.1"></label>
+        <label class="inline">余白 左
+          <input type="number" id="q_mg_l" value="3" step="0.5"></label>
+        <label class="inline">右
+          <input type="number" id="q_mg_r" value="3" step="0.5"></label>
+        <label class="inline">上
+          <input type="number" id="q_mg_t" value="3" step="0.5"></label>
+        <label class="inline">下
+          <input type="number" id="q_mg_b" value="5" step="0.5"></label>
+      </div>
+      <div class="row" style="margin-left:1.5em">
+        <label class="inline">用紙
+          <select id="q_paper">
+            <option value="1">A1</option>
+            <option value="2">A2</option>
+            <option value="3">A3</option>
+            <option value="4" selected>A4</option></select></label>
+        <label class="inline">向き
+          <select id="q_orient">
+            <option value="1">横</option>
+            <option value="2" selected>縦</option></select></label>
+        <label class="inline">ダミー材断面番号下限
+          <input type="number" id="q_limit" value="9000"></label>
+      </div>
+    </details>
+  </fieldset>
+
+  <fieldset>
+    <legend>1. 反力図</legend>
+    <div class="row"><b>鉛直荷重ケース</b>
+      <span class="groupbox-inline" id="q_re_l_box"></span></div>
+    <div class="row"><b>短期/水平荷重ケース</b>
+      <span class="groupbox-inline" id="q_re_s_box"></span>
+      <label class="inline">種別
+        <select id="q_re_kind">
+          <option value="H">水平荷重のみ (鉛直と組合せて表示)</option>
+          <option value="S">短期荷重 (長期鉛直+水平を含む)</option></select></label>
+    </div>
+    <div class="row"><button class="act" onclick="runQrReaction()">
+      反力図PDF生成</button></div>
+    <div id="qr_re_msg"></div><div id="qr_re_pdfs"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>2. 柱脚設計用データ (CB)</legend>
+    <div class="row"><b>荷重ケース</b>
+      <span class="groupbox-inline" id="q_cb_case_box"></span></div>
+    <div class="row"><b>柱脚レベル</b>
+      <span class="groupbox-inline" id="q_cb_z_box"></span></div>
+    <div class="row"><button class="act" onclick="runQrCB()">
+      柱脚データ生成 (xlsx+図)</button></div>
+    <div id="qr_cb_msg"></div><div id="qr_cb_pdfs"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>3. せん断力分担図</legend>
+    <div class="row"><b>水平荷重ケースと加力方向</b>
+      <span class="hint">チェックしたケースごとに層別のせん断力分担図を生成</span></div>
+    <div class="groupbox" id="q_sh_case_box"><span class="hint">
+      「ケース・レベル読込」でケース一覧を表示します</span></div>
+    <div class="row"><button class="act" onclick="runQrShear()">
+      せん断力分担図PDF生成</button></div>
+    <div id="qr_sh_msg"></div><div id="qr_sh_pdfs"></div>
+    <div id="qr_sh_tex"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>4. 層間変形角</legend>
+    <div class="row"><b>荷重ケース (deformationのケース)</b>
+      <span class="groupbox-inline" id="q_dr_case_box"></span></div>
+    <div class="row"><button class="act" onclick="runQrDrift()">
+      層間変形角PDF生成</button></div>
+    <div id="qr_dr_msg"></div><div id="qr_dr_pdfs"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>5. 重心・剛心・偏心率</legend>
+    <div class="row">
+      <label class="inline">剛性評価
+        <select id="q_ce_mode">
+          <option value="baisu" selected>壁倍率×壁長 (板・ブレース)</option>
+          <option value="fem">Q/δ (解析値: 変形・板応力が必要)</option>
+        </select></label>
+      <label class="inline">重心ケース (鉛直)
+        <select id="q_ce_n"></select></label>
+      <label class="inline">X方向剛心ケース
+        <select id="q_ce_kx"></select></label>
+      <label class="inline">Y方向剛心ケース
+        <select id="q_ce_ky"></select></label>
+      <span class="hint">剛心ケースは Q/δ 方式のときのみ使用</span>
+    </div>
+    <div class="row">
+      <label class="inline">ブレース倍率 (断面番号:倍率)
+        <input type="text" id="q_ce_brace" style="width:280px"
+          placeholder="例: 1001:1.0, 1002:1.5"></label>
+      <span class="hint">壁倍率方式のとき、ブレース断面を壁倍率換算で
+        剛心に含めます (空欄なら板のみ)。板は厚み=壁倍率、
+        剛性は 倍率×長さ、斜め壁・ブレースは cos² で両方向へ配分。</span>
+    </div>
+    <div class="row"><button class="act" onclick="runQrCenter()">
+      重心・剛心図PDF+偏心率表生成</button></div>
+    <div id="qr_ce_msg"></div><div id="qr_ce_pdfs"></div>
+    <div id="qr_ce_table"></div><div id="qr_ce_tex"></div>
+  </fieldset>
+</section>
+
+<!-- ============ タブ3: 断面検定 (S造・木造) ============ -->
+<section class="tab" id="tab-check">
+  <fieldset>
+    <legend>入力 (S造・木造・RC・SRC断面検定)</legend>
+    <div class="frow"><span class="flabel">beam_stress</span>
+      <input type="text" id="c_beam_stress_path" class="path">
+      <input type="file" onchange="uploadTo(this,'c_beam_stress_path')">
+      <span class="hint">空欄なら応力図タブの値を使用</span>
+    </div>
+    <div class="frow"><span class="flabel">truss_stress (任意)</span>
+      <input type="text" id="c_truss_stress_path" class="path">
+      <input type="file" onchange="uploadTo(this,'c_truss_stress_path')">
+    </div>
+    <div class="frow"><span class="flabel">plate_stress (任意)</span>
+      <input type="text" id="c_plate_stress_path" class="path">
+      <input type="file" onchange="uploadTo(this,'c_plate_stress_path')">
+      <label class="inline">用途
+        <select id="c_plate_use">
+          <option value="plywood" selected>木合板検定のみ</option>
+          <option value="matlab">板・壁の応力度検定 (MATLAB版)</option>
+        </select></label>
+      <label class="inline">木合板許容 qa
+        <input type="number" id="pw_qa" value="1.96" step="0.01"
+          style="width:75px">kN/m</label>
+      <span class="fhint">4列 [板要素番号, 荷重ケース, 節点番号, Fxy(kN/m)]。
+        用途「木合板検定のみ」では「検定実行」で断面検定に続けて
+        木合板耐力壁の検定 (厚み=壁倍率、許容 qa×倍率×壁長、
+        検定比=｜壁内平均Fxy｜/(qa×倍率)。階ごとに検定、床・屋根は自動除外)
+        を実行し、結果を一覧に追記します。
+        「応力度検定 (S板/RC板)」に使う場合は長期を含む全ケースの出力が
+        必要です (未検証経路)。</span>
+    </div>
+    <div class="frow"><span class="flabel">wall_stress (任意)</span>
+      <input type="text" id="c_wall_stress_path" class="path">
+      <input type="file" onchange="uploadTo(this,'c_wall_stress_path')">
+      <span class="hint">RC板壁の応力 (2行1組)。mgtに WALL 要素と
+        *REBAR-WALL が必要 (未検証経路)</span>
+    </div>
+    <div class="frow"><span class="flabel">検定ケース</span>
+      <button class="sub" onclick="loadCheckCases()">ケース読込 (種別指定)</button>
+      <label class="inline">木材の長期許容応力度
+        <select id="c_wal_up">
+          <option value="1.0" selected>長期 (1.1F/3)</option>
+          <option value="1.3">中長期・積雪 (1.3×1.1F/3)</option></select></label>
+      <span class="fhint">荷重ケースごとの種別 (長期/水平のみ/短期(組合せ済み))
+        と木材種別 (W_AL行)・RC配筋設定をここで指定します。
+        未読込のまま検定するとケース数からの自動判定になります。</span>
+    </div>
+    <div id="check_cases_box"></div>
+    <div id="check_wood_box"></div>
+    <div id="check_rc_box"></div>
+    <details class="adv">
+      <summary>詳細設定 (座屈長・応力割増・かぶり厚・板応力度)</summary>
+      <div class="row">
+        <label class="inline">座屈長 select_length
+          <select id="c_select_length">
+            <option value="1" selected>1: 実長指定</option>
+            <option value="2">2: 部材倍数指定</option>
+            <option value="3">3: 部材長</option></select></label>
+        <label class="inline">judge_H
+          <input type="number" id="c_judge_H" value="2"></label>
+        <label class="inline">H梁RCスラブ拘束
+          <select id="c_H_beam_RCsupport">
+            <option value="1">1: 考慮する</option>
+            <option value="2" selected>2: 考慮しない</option></select></label>
+        <label class="inline">ダミー材断面番号下限
+          <input type="number" id="c_limit" value="9000"></label>
+      </div>
+      <div class="row">
+        冷間成形角形鋼管の応力割増 c_up:
+        <label class="inline">STKR <input type="number" id="c_up_STKR"
+          value="1.4" step="0.1"></label>
+        <label class="inline">BCR <input type="number" id="c_up_BCR"
+          value="1.3" step="0.1"></label>
+        <label class="inline">BCP <input type="number" id="c_up_BCP"
+          value="1.2" step="0.1"></label>
+        <label class="inline">BSH <input type="number" id="c_up_BSH"
+          value="1.0" step="0.1"></label>
+      </div>
+      <div class="row">
+        <label class="inline">SRCコンクリートかぶり厚
+          <input type="number" id="c_src_cover" value="40" step="1"
+            style="width:70px">mm</label>
+        <label class="inline">RC杭かぶり厚
+          <input type="number" id="c_pile_cover" value="100" step="1"
+            style="width:70px">mm</label>
+        <span class="hint">SRCはKCUA物件でMATLAB全数一致を確認済
+          (鋼管被覆円柱等は未照合)。杭 (材料名 pile・円形断面のみ)・
+          PC・RM・CFT は移植済・未検証</span>
+      </div>
+      <div class="row">
+        <label class="inline">板の水平応力割増 plate_up
+          <input type="number" id="c_plate_up" value="1.0" step="0.1"
+            style="width:70px"></label>
+        <label class="inline">板の長期応力
+          <select id="c_pl_long">
+            <option value="1" selected>考慮する</option>
+            <option value="0">考慮しない</option></select></label>
+        <span class="hint">用途「板・壁の応力度検定」のときのみ使用
+          (MATLAB版既定 1.0/考慮する)</span>
+      </div>
+    </details>
+    <details class="adv" id="pc_box">
+      <summary>PC検定の設定 (材料名に Pc を含むCONC材料がある場合)</summary>
+      <div class="row" style="margin-left:1.5em">
+        <label class="inline"><input type="checkbox" id="pc_skip">
+          PC部材の検定を行わない (検定値100のダミー出力)</label>
+      </div>
+      <div class="row" style="margin-left:1.5em">
+        <label class="inline">プレストレス有効率 PC_eff
+          <input type="number" id="pc_eff" value="0.85" step="0.01"
+            style="width:70px"></label>
+        <label class="inline">許容ひび割れ幅 (Ⅲ種)
+          <input type="number" id="pc_type" value="0.1" step="0.05"
+            style="width:70px">mm</label>
+        <label class="inline">DL比率 DL_ratio
+          <input type="number" id="pc_dl" value="0.6" step="0.05"
+            style="width:70px"></label>
+        <span class="hint">PC_type: Ⅰ種=1/Ⅱ種=2 は原典(MATLAB)未実装のため
+          エラー停止します (Ⅲ種のみ使用可)</span>
+      </div>
+      <div class="row" style="margin-left:1.5em">pc_stress (任意):
+        <input type="text" id="c_pc_stress_path" class="path">
+        <input type="file" onchange="uploadTo(this,'c_pc_stress_path')">
+        <span class="hint">プレストレス不静定応力 8列
+          [要素番号,位置,N,Fy,Fz,Mx,My,Mz]×長期ケースと同行数。
+          長期応力へ ×有効率 で事前加算されます</span>
+      </div>
+      <div class="row" style="margin-left:1.5em">pc_cable:
+        <input type="text" id="c_pc_cable_path" class="path">
+        <input type="file" onchange="uploadTo(this,'c_pc_cable_path')">
+        <span class="hint">3列 [断面番号, 鋼種(1-6), 総本数]。鋼種:
+          1=SWPR7A-12.4 2=SWPR7B-12.7 3=SWPR7B-15.2
+          4=SWPR19-17.8 5=SWPR19-19.3 6=SWPR19-21.8</span>
+      </div>
+      <div class="row" style="margin-left:1.5em">PC_slab (任意):
+        <input type="text" id="c_pc_slab_path" class="path">
+        <input type="file" onchange="uploadTo(this,'c_pc_slab_path')">
+        <span class="hint">合成スラブ 4列 [断面番号, t, tbm, tbn (mm)]。
+          ケーブル偏心はmgtの *PRESTRESS から自動取得します</span>
+      </div>
+    </details>
+    <div class="row"><button class="act" onclick="runCheck()">
+      検定実行</button></div>
+  </fieldset>
+  <div id="check_msg"></div>
+  <div id="check_result"></div>
+  <fieldset>
+    <legend>検定詳細TeX (10detail)</legend>
+    <div class="row">
+      <label class="inline">出力ケース
+        <select id="dtex_mode">
+          <option value="all" selected>全検定ケース</option>
+          <option value="pick">長期＋短期最大の2つ</option></select></label>
+      <button class="act" onclick="runDetailTex()">検定詳細TeX生成</button>
+      <span class="hint">各断面の最大検定値の検定詳細文をTeXソースへ出力します
+        (MATLAB版 ratio_detail_tex.m 相当・Shift-JIS)。ケース別の
+        10detail_matlabN.tex と本体 10detail.tex (\rhead=ケース名) を
+        生成します。「検定実行」のあとに実行してください。</span>
+    </div>
+    <div id="dtex_msg"></div>
+    <div id="dtex_out"></div>
+  </fieldset>
+</section>
+
+<!-- ============ タブ3b: 検定比図 ============ -->
+<section class="tab" id="tab-ratio">
+  <fieldset>
+    <legend>検定比図 (構面別PDF)</legend>
+    <div class="row"><span class="hint">「検定実行」のあとに生成できます
+      (検定条件・入力ファイルを変えた場合は再度「検定実行」してください)。
+      壁要素(板要素)・伏図(水平構面)は未対応です。</span></div>
+    <div class="row"><b>検定ケース</b>
+      <button class="sub" onclick="checkAll('rcase',true)">全選択</button>
+      <button class="sub" onclick="checkAll('rcase',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="rcases_box"><span class="hint">
+      「検定実行」で検定ケース一覧を表示します</span></div>
+    <div class="row"><b>鉛直構面</b>
+      <button class="sub" onclick="checkAll('rgroup',true)">全選択</button>
+      <button class="sub" onclick="checkAll('rgroup',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="raxes_box"><span class="hint">
+      mgt読み込みでグループ一覧を表示します</span></div>
+    <div class="row"><b>高さ寸法レベル</b>
+      <button class="sub" onclick="checkAll('rhlevel',true)">全選択</button>
+      <button class="sub" onclick="checkAll('rhlevel',false)">全解除</button>
+      <button class="sub emph" onclick="presetColumns('rhlevel')">柱端点のみ</button>
+    </div>
+    <div class="groupbox" id="rheights_box"><span class="hint">
+      mgt読み込みで高さ候補を表示します</span></div>
+    <div class="row"><b>通り芯符号に表示する通り</b>
+      <button class="sub" onclick="checkAll('rsymgroup',true)">全選択</button>
+      <button class="sub" onclick="checkAll('rsymgroup',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="rsymbols_box"><span class="hint">
+      mgt読み込みでグループ一覧を表示します</span></div>
+    <div class="row">
+      <label class="inline">用紙
+        <select id="r_paper"><option value="1">A1</option>
+          <option value="2">A2</option><option value="3">A3</option>
+          <option value="4" selected>A4</option></select></label>
+      <label class="inline"><input type="checkbox" id="r_unit" checked>
+        分割部材を一部材として表記 (最大検定値表示)</label>
+      <span class="hint">OFFにすると分割要素ごとに検定値を表記します
+        (文字が重なる場合があります)</span>
+    </div>
+    <details class="row" style="margin:8px 0">
+      <summary style="cursor:pointer;color:#2b4a6f;font-weight:bold">
+        詳細設定 (文字サイズ・位置・マージン)</summary>
+      <div class="row">文字サイズ:
+        <label class="inline">検定値
+          <input type="number" id="r_f_s" value="4" step="0.5"></label>
+        <label class="inline">寸法値
+          <input type="number" id="r_f_d" value="5" step="0.5"></label>
+        <label class="inline">通り芯符号
+          <input type="number" id="r_f_a" value="6" step="0.5"></label>
+        <label class="inline">タイトル
+          <input type="number" id="r_f_t" value="8" step="0.5"></label>
+      </div>
+      <div class="row">位置:
+        <label class="inline">寸法線位置
+          <input type="number" id="r_line_loc" value="2.0" step="0.5"></label>
+        <label class="inline">通り芯符号位置
+          <input type="number" id="r_axis_loc" value="3.0" step="0.5"></label>
+      </div>
+      <div class="row">マージン:
+        <label class="inline">左
+          <input type="number" id="r_mg_l" value="5" step="0.5"></label>
+        <label class="inline">右
+          <input type="number" id="r_mg_r" value="2" step="0.5"></label>
+        <label class="inline">上
+          <input type="number" id="r_mg_t" value="5" step="0.5"></label>
+        <label class="inline">下
+          <input type="number" id="r_mg_b" value="5" step="0.5"></label>
+      </div>
+    </details>
+    <div class="row">
+      <label class="inline">図の出力形式
+        <select id="r_format">
+          <option value="tex" selected>TeX (PGF: \inputで組込み)</option>
+          <option value="pdf">PDF</option>
+        </select></label>
+      <button class="act" onclick="runPlotRatio()">検定比図生成</button>
+      <button class="act" onclick="runRatioTex()">検定比表TeX生成</button>
+      <span class="hint">TeX図は内容がPDF版と同一のPGFコードで、計算書へ
+        \input{...} で直接組み込めます (要 \usepackage{pgf})。
+        「検定比表TeX」は図の値をlongtableの表にしたものです</span></div>
+    <div id="ratio_msg"></div>
+    <div id="ratio_pdfs"></div>
+    <div id="ratio_tex_out"></div>
+  </fieldset>
+</section>
+
+<!-- ============ タブ4: TeX ============ -->
+<section class="tab" id="tab-tex">
+  <fieldset>
+    <legend>モデル諸元TeX表 (材料表・断面表・板厚表・断面係数増減表)</legend>
+    <div class="row">
+      <label class="inline">ダミー材断面番号下限
+        <input type="number" id="t_limit" value="9000"></label>
+      <button class="act" onclick="runTex()">生成</button>
+    </div>
+  </fieldset>
+  <div id="tex_msg"></div>
+  <div id="tex_out"></div>
+</section>
+
+<!-- ============ タブ5: DXF ============ -->
+<section class="tab" id="tab-dxf">
+  <fieldset>
+    <legend>DXF出力 (モデル構成図 + 部材リスト図)</legend>
+    <div class="row">
+      <label class="inline">符号文字サイズ
+        <input type="number" id="d_fontsize" value="400"></label>
+      <label class="inline">ダミー材断面番号下限
+        <input type="number" id="d_limit" value="9000"></label>
+      <button class="act" onclick="runDxf()">生成</button>
+    </div>
+  </fieldset>
+  <div id="dxf_msg"></div>
+  <div id="dxf_out"></div>
+  <fieldset>
+    <legend>構造図DXF (新規版β: 二重線・ピン接合表現・材質レイヤ・縮尺自動)</legend>
+    <div class="row"><span class="hint">MATLAB互換版とは別の新規実装です。
+      剛接合は連続、ピン接合(*FRAME-RLSの曲げ解放)は部材端を紙面上一定距離だけ
+      離して描画。分割部材(*UNIT)は一本化。レイヤは材質×部材/断面
+      (S-木_20, S-木断面_30, S-RC伏_20, S-RC軸_30, S-鉄骨_20,
+      S-鉄骨断面_30)、テキストは S-Red10。図形は実寸mm(1:1)で、縮尺は注記サイズ・ピン離隔に反映されます。</span>
+    </div>
+    <div class="row">
+      <button class="sub" onclick="loadStructInfo()">レベル読込</button>
+      <span class="hint">mgtのグループ定義から通り(軸組図)とフロア(伏図)の
+        候補と部材集計を読み込みます</span>
+    </div>
+    <div id="sdx_info_msg"></div>
+    <div class="row"><b>軸組図にする通り</b>
+      <button class="sub" onclick="checkAll('sdxframe',true)">全選択</button>
+      <button class="sub" onclick="checkAll('sdxframe',false)">全解除</button>
+      <span class="hint">mgtのグループ (節点が一直線のもの) を通りとして
+        使います。グループ未登録の場合のみ柱位置から自動検出します。</span>
+    </div>
+    <div class="groupbox" id="sdx_axes_box"><span class="hint">
+      「レベル読込」で通り一覧を表示します</span></div>
+    <div class="row"><b>伏図にするフロア</b>
+      <span class="groupbox-inline" id="sdx_levels_box">
+        <span class="hint">「レベル読込」で表示します</span></span>
+    </div>
+    <div class="row">
+      <label class="inline">縮尺
+        <select id="sdx_scale">
+          <option value="" selected>自動 (図ごと)</option>
+          <option value="50">1/50</option><option value="75">1/75</option>
+          <option value="100">1/100</option><option value="150">1/150</option>
+          <option value="200">1/200</option><option value="300">1/300</option>
+        </select></label>
+      <label class="inline">用紙
+        <select id="sdx_paper">
+          <option value="A1">A1</option><option value="A2">A2</option>
+          <option value="A3" selected>A3</option>
+          <option value="A4">A4</option></select></label>
+      <label class="inline">ピン離隔(紙面mm)
+        <input type="number" id="sdx_pin" value="1.5" step="0.5"
+          style="width:60px"></label>
+      <label class="inline">符号文字(紙面mm)
+        <input type="number" id="sdx_text" value="2.5" step="0.5"
+          style="width:60px"></label>
+      <label class="inline">出力
+        <select id="sdx_onefile">
+          <option value="1" selected>1ファイルに整列</option>
+          <option value="0">図ごとにファイル</option></select></label>
+    </div>
+    <div class="row">
+      <label class="inline">プレビュー対象
+        <select id="sdx_prev_sel" style="min-width:12em"></select></label>
+      <button class="sub" onclick="runStructPreview()">用紙プレビュー</button>
+      <button class="act" onclick="runStructDxf()">構造図DXF生成</button>
+    </div>
+    <div id="sdx_msg"></div>
+    <div id="sdx_prev" style="max-width:760px"></div>
+    <div id="sdx_files"></div>
+  </fieldset>
+</section>
+
+</main>
+<div id="overlay"><div class="spinner"></div><p>実行中...</p></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="/static/app.js?v={{ app_ver }}"></script>
+</body>
+</html>
