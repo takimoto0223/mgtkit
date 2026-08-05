@@ -18,6 +18,8 @@ figure_stress_axis.m と同一文のため draw_stress.py / draw_model.py の
 """
 
 import os
+import shutil
+import tempfile
 import sys
 import math
 
@@ -36,6 +38,7 @@ try:
         _setup_japanese_font, _finish_figure, _text, _kline,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
         _resolve_select, _safe_name, column_beam_judge_one, line_projection,
+        _save_fig_pdf_or_pgf, _write_pgf_bundle,
     )
     from .draw_stress import _load_case_split, _unit_add_ysub
 except ImportError:  # スクリプト実行時
@@ -47,13 +50,32 @@ except ImportError:  # スクリプト実行時
         _setup_japanese_font, _finish_figure, _text, _kline,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
         _resolve_select, _safe_name, column_beam_judge_one, line_projection,
+        _save_fig_pdf_or_pgf, _write_pgf_bundle,
     )
     from draw_stress import _load_case_split, _unit_add_ysub
+
+
+NOTE_GAP = 0.05  # 曲げ/せん断注記の離隔 [m] (片側。合計で約0.1m相当)
 
 
 def _f2(v):
     """MATLAB num2str(x,'%15.2f') 相当."""
     return ('%15.2f' % float(v)).strip()
+
+
+def _case_split_blocks(case_col):
+    """検定ケースの区切り検出 (出現順維持; result.LCNAME と同順).
+
+    合成ケース番号 (長期*10*i_pm+水平) は出現順が昇順とは限らないため、
+    昇順ソートする _load_case_split を使うと LCNAME (ケース名) との
+    対応がずれる。doublecheck_nonsort と同じ「連続重複のみ削除」で
+    ブロック先頭行を検出する。
+    """
+    case_col = np.asarray(case_col, dtype=float).ravel()
+    if case_col.size == 0:
+        return case_col, np.array([], dtype=int)
+    keep = np.concatenate(([True], np.diff(case_col) != 0))
+    return case_col[keep], np.where(keep)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -87,12 +109,19 @@ def _column_maxratio_plot(ax, ratio, ni, nj, nodeM, axis_cols, angle, fs):
     xm = nodeM[ni, 1] * 0.5 + nodeM[nj, 1] * 0.5
     ym = nodeM[ni, axis_cols[1]] * 0.5 + nodeM[nj, axis_cols[1]] * 0.5
 
+    # 曲げ値とせん断値が近すぎるため、文字の向きに沿って少し離す
+    # (原典から意図的調整 2026-08-03)
+    _r = math.radians(rotd)
+    _d = NOTE_GAP
+    _ux, _uy = math.cos(_r) * _d, math.sin(_r) * _d
+    _vx, _vy = -math.sin(_r) * _d, math.cos(_r) * _d
+
     # 曲げ(NM)の最大検定比 (列ごとの最大→全体最大の行列位置)
     sub = np.abs(ratio[0:3, 0:2])
     ci = np.argmax(sub, axis=0)
     c2 = int(np.argmax(sub[ci, np.arange(2)]))
     r1 = int(ci[c2])
-    _text(ax, xm, ym, _f2(ratio[r1, c2]),
+    _text(ax, xm - _ux - _vx, ym - _uy - _vy, _f2(ratio[r1, c2]),
           ha='right', va='top', fs=fs, rot=rotd)
 
     # せん断の最大検定比
@@ -100,7 +129,7 @@ def _column_maxratio_plot(ax, ratio, ni, nj, nodeM, axis_cols, angle, fs):
     ci = np.argmax(sub, axis=0)
     c2 = int(np.argmax(sub[ci, np.arange(2)]))
     r1 = int(ci[c2])
-    _text(ax, xm, ym, _f2(ratio[r1, c2 + 2]),
+    _text(ax, xm + _ux + _vx, ym + _uy + _vy, _f2(ratio[r1, c2 + 2]),
           ha='left', va='bottom', fs=fs, rot=rotd)
 
 
@@ -128,9 +157,15 @@ def _beam_maxratio_plot(ax, ratio, ni, nj, nodeM, axis_cols, angle, fs):
     xm = nodeM[ni, axis_cols[0]] * 0.5 + nodeM[nj, axis_cols[0]] * 0.5
     ym = nodeM[ni, axis_cols[1]] * 0.5 + nodeM[nj, axis_cols[1]] * 0.5
 
+    # 曲げ値(上)とせん断値(下)が近すぎるため、文字の上下方向に少し離す
+    # (原典から意図的調整 2026-08-03)
+    _r = math.radians(rotd)
+    _vx = -math.sin(_r) * NOTE_GAP
+    _vy = math.cos(_r) * NOTE_GAP
+
     # 曲げに対する検定比
     mi = int(np.argmax(np.abs(ratio[0:3, 0])))
-    _text(ax, xm, ym, _f2(ratio[mi, 0]),
+    _text(ax, xm + _vx, ym + _vy, _f2(ratio[mi, 0]),
           ha='center', va='baseline', fs=fs, rot=rotd)
 
     # せん断に対する検定比
@@ -138,7 +173,7 @@ def _beam_maxratio_plot(ax, ratio, ni, nj, nodeM, axis_cols, angle, fs):
     ci = np.argmax(sub, axis=0)
     c2 = int(np.argmax(sub[ci, np.arange(3)]))
     r1 = int(ci[c2])
-    _text(ax, xm, ym, _f2(ratio[r1, c2 + 1]),
+    _text(ax, xm - _vx, ym - _vy, _f2(ratio[r1, c2 + 1]),
           ha='center', va='top', fs=fs, rot=rotd)
 
 
@@ -485,16 +520,9 @@ def _figure_ratio_axis(C, i_axis, i_load, case_no, case_name, out_path):
 
     _finish_figure(fig, ax, title, C['axis_name_sel'][i_axis],
                    xlim, ylim, title_fs, C['paper_size'])
-    if str(out_path).lower().endswith('.tex'):
-        # TeX (PGF) 出力: 図の内容はPDF版と同一。計算書へ \input で組込む
-        # (要 \usepackage{pgf}。fontspec を要求しないよう rcfonts は無効化)
-        with matplotlib.rc_context({'pgf.rcfonts': False,
-                                    'pgf.texsystem': 'xelatex'}):
-            fig.savefig(out_path, format='pgf')
-    else:
-        fig.savefig(out_path, format='pdf')
+    fw, fh = _save_fig_pdf_or_pgf(fig, out_path)
     plt.close(fig)
-    return out_path
+    return out_path, fw, fh
 
 
 # ---------------------------------------------------------------------------
@@ -544,9 +572,9 @@ def plot_ratio(mgt_path, out_dir, beam_ratio, truss_ratio,
     axis_name, axis_element, axis_node = mgtopen_group(mgt_path)
 
     # %%%%%% 検定ケースの区切り検出 %%%%%%
-    load_case_no_beam, lci_beam = _load_case_split(beam_ratio[:, 1])
+    load_case_no_beam, lci_beam = _case_split_blocks(beam_ratio[:, 1])
     if np.size(truss_ratio) > 0:
-        load_case_no_truss, lci_truss = _load_case_split(truss_ratio[:, 1])
+        load_case_no_truss, lci_truss = _case_split_blocks(truss_ratio[:, 1])
     else:
         load_case_no_truss, lci_truss = np.array([]), np.array([], dtype=int)
 
@@ -630,6 +658,7 @@ def plot_ratio(mgt_path, out_dir, beam_ratio, truss_ratio,
 
     made = []
     meta = []
+    tex_tmp = None
     fig_no = 100
     for case in sel_cases:
         i_load = int(find_index(load_case_no, case))
@@ -641,36 +670,35 @@ def plot_ratio(mgt_path, out_dir, beam_ratio, truss_ratio,
                 print('WARNING: 構面 %s は通り芯を近似できないため'
                       'スキップします' % axis_name_sel[i_axis])
                 continue
-            ext = 'tex' if str(fig_format) == 'tex' else 'pdf'
-            out = os.path.join(
-                out_dir, 'ratio_%d_%s_%s.%s'
-                % (fig_no, _safe_name(case_name),
-                   _safe_name(axis_name_sel[i_axis]), ext))
-            made.append(_figure_ratio_axis(
-                C, i_axis, i_load, title_case_no, case_name, out))
-            meta.append((case_name, space_erace(axis_name_sel[i_axis])))
+            if str(fig_format) == 'tex':
+                # 個別図は一時フォルダに作る (出力先には一式のみ残す)
+                if tex_tmp is None:
+                    tex_tmp = tempfile.mkdtemp(prefix='mgtkit_pgf_')
+                out = os.path.join(tex_tmp, 'ratiofig%d.tex' % fig_no)
+            else:
+                out = os.path.join(
+                    out_dir, 'ratio_%d_%s_%s.pdf'
+                    % (fig_no, _safe_name(case_name),
+                       _safe_name(axis_name_sel[i_axis])))
+            out2, fw, fh = _figure_ratio_axis(
+                C, i_axis, i_load, title_case_no, case_name, out)
+            made.append(out2)
+            meta.append((case_name, space_erace(axis_name_sel[i_axis]),
+                         fw, fh))
             fig_no += 1
 
-    # TeX出力時は全図をまとめた一式ファイルも作る (1図1ページ)
+    # TeX出力時は全図をまとめた一式ファイル 10ratioplot.tex のみ出力する
+    # (1図1ページ・自己完結。詳細は draw_model._write_pgf_bundle)
     if str(fig_format) == 'tex' and made:
-        base = os.path.splitext(os.path.basename(mgt_path))[0]
-        combined = os.path.join(out_dir, base + '_ratio_figs.tex')
-        parts = ['% mgtkit 検定比図一式 (計算書へは本ファイルを \\input)',
-                 '% 要 \\usepackage{pgf}。1図1ページ (\\clearpage区切り)',
-                 '']
-        for k, f in enumerate(made):
-            cs, ax0 = meta[k]
-            parts.append('%% ---- 図%d: 検定ケース %s / 構面 %s ----'
-                         % (k + 1, cs, ax0))
-            parts.append(r'\begin{center}')
-            with open(f, encoding='utf-8') as fh:
-                parts.append(fh.read().rstrip())
-            parts.append(r'\end{center}')
-            parts.append(r'\clearpage')
-            parts.append('')
-        with open(combined, 'w', encoding='utf-8', newline='\n') as fh:
-            fh.write('\n'.join(parts) + '\n')
-        made = [combined] + made
+        combined = os.path.join(out_dir, '10ratioplot.tex')
+        _write_pgf_bundle(
+            combined, made,
+            [('検定ケース %s / 構面 %s' % (cs, ax0), fw, fh)
+             for (cs, ax0, fw, fh) in meta],
+            'mgtkitratiobox')
+        made = [combined]
+    if tex_tmp is not None:
+        shutil.rmtree(tex_tmp, ignore_errors=True)
 
     return made
 
@@ -687,18 +715,20 @@ def _tex_escape(s):
                  ('$', r'\$'), ('{', r'\{'), ('}', r'\}'),
                  ('^', r'\textasciicircum{}'), ('~', r'\textasciitilde{}')):
         s = s.replace(a, b)
+    # '--' はリガチャでエンダッシュになるため分離 (例: G+P--KX)
+    s = s.replace('--', '-{}-')
     return s
 
 
 def export_ratio_tex(mgt_path, out_dir, beam_ratio, truss_ratio, case_names,
                      cases_select=None, axes_select=None,
                      select_unit=math.inf, limit_sec_no=9000):
-    """検定比図と同じ内容 (構面×部材×検定ケースの最大検定比) をTeX表にする.
+    """断面検定値一覧表 (原典 ratiotemplate_tex 形式) をTeXで出力する.
 
-    新規機能 (MATLAB原典なし)。検定比図PDFを計算書へ貼ると重いため、
-    同じ選択 (構面・検定ケース・結合部材単位) の値を longtable の
-    TeXソースへ出力する。値は図の注記と同じく、各部材の
-    i端/中央/j端 (結合部材は全構成要素) の最大検定比。
+    構面ごとではなくモデル全体を断面(符号)ごとに1行とし、検定ケース
+    ごとに [最大検定値の要素ID, 検定値] を並べる。書式は原典計算書の
+    テンプレート (longtable + multirow + booktabs) に従う。
+    axes_select は使用しない (互換のため引数は残す)。
 
     戻り値: (生成ファイルパスのリスト, tex行のlist)
     """
@@ -721,9 +751,9 @@ def export_ratio_tex(mgt_path, out_dir, beam_ratio, truss_ratio, case_names,
             np.asarray(section_no, dtype=float)).ravel()):
         sec_names[int(n)] = str(section_name[k]).strip()
 
-    load_case_no_beam, lci_beam = _load_case_split(beam_ratio[:, 1])
+    load_case_no_beam, lci_beam = _case_split_blocks(beam_ratio[:, 1])
     if np.size(truss_ratio) > 0:
-        load_case_no_truss, lci_truss = _load_case_split(truss_ratio[:, 1])
+        load_case_no_truss, lci_truss = _case_split_blocks(truss_ratio[:, 1])
     else:
         load_case_no_truss, lci_truss = np.array([]), np.array([], dtype=int)
     load_case_no = load_case_no_beam if load_case_no_beam.size \
@@ -740,122 +770,102 @@ def export_ratio_tex(mgt_path, out_dir, beam_ratio, truss_ratio, case_names,
             raise KeyError('検定ケース %s が検定結果にありません' % c)
         i_loads.append(i)
 
-    v_idx = _resolve_select(axis_name, axes_select)
-    v_idx = [i for i in v_idx if np.size(axis_element[i]) > 0]
-    if not v_idx:
-        raise ValueError('TeX出力対象の構面がありません (ELEM_LIST付きの'
-                         '構面を選択してください)')
+    # 断面(符号)ごとに全要素から各ケースの最大検定値と要素IDを拾う
+    n_case = len(i_loads)
 
-    unit_element, uniele_ID = _unit_elements(mgt_path, element, node,
-                                             limit_sec_no)
+    def _beam_max(sr, il):
+        blk = beam_ratio[int(sr) + int(lci_beam[il]):
+                         int(sr) + int(lci_beam[il]) + 3, 2:6]
+        return float(np.max(blk))
 
-    def _beam_vals(srows):
-        vals = []
+    sec_rows = []
+    for sec in doublecheck(element[:, 2]):
+        if sec >= limit_sec_no:
+            continue  # ダミー材
+        eles = element[np.where(element[:, 2] == sec)[0], 0]
+        per_case = []
+        any_data = False
         for il in i_loads:
-            m = 0.0
-            for sr in srows:
-                blk = beam_ratio[int(sr) + int(lci_beam[il]):
-                                 int(sr) + int(lci_beam[il]) + 3, 2:6]
-                m = max(m, float(np.max(blk)))
-            vals.append(m)
-        return vals
+            best_e = None
+            best_v = -1.0
+            for e0 in eles:
+                v = None
+                sr = int(find_index(beam_ratio[:, 0], e0)) \
+                    if np.size(beam_ratio) else -1
+                if sr >= 0 and beam_ratio[sr, 0] == e0:
+                    v = _beam_max(sr, il)
+                elif np.size(truss_ratio) > 0:
+                    tr = int(find_index(truss_ratio[:, 0], e0))
+                    if tr >= 0 and truss_ratio[tr, 0] == e0:
+                        v = float(np.max(
+                            truss_ratio[tr + int(lci_truss[il]), 2:4]))
+                if v is not None and v > best_v:
+                    best_v = v
+                    best_e = int(e0)
+            if best_e is None:
+                per_case.append(None)
+            else:
+                any_data = True
+                per_case.append((best_e, best_v))
+        if any_data:
+            # 符号名は断面名の '_' より前 (例: WC2_■-120x120 → WC2)
+            name = sec_names.get(int(sec), '').split('_')[0].strip()
+            sec_rows.append((int(sec), name, per_case))
+    sec_rows.sort(key=lambda r: r[0])
+    if not sec_rows:
+        raise ValueError('検定値のある断面がありません。先に「検定実行」の'
+                         '対象・結果を確認してください')
 
-    KIND = {2.0: '柱', 1.9: '斜め柱', 1.0: '梁'}
-    KORD = {'柱': 0, '斜め柱': 1, '梁': 2, 'ブレース': 3}
+    heads_all = [_tex_escape(str(case_names[il]).strip())
+                 for il in i_loads]
 
     lines = []
-    lines.append('% mgtkit 検定比表 (検定比図と同内容の最大検定比)')
-    lines.append('% 値: 各部材の i端/中央/j端 (結合部材は全構成要素) の最大')
-    lines.append('')
-    for gi in v_idx:
-        gname = space_erace(str(axis_name[gi]))
-        axis_elems = np.atleast_1d(
-            np.asarray(axis_element[gi], dtype=float)).ravel()
-        rows = []
-        consumed = set()
-        # 結合部材 (図の「一部材として表記」と同じ扱い)
-        if select_unit == 0 and axis_elems.size:
-            for unit in unit_element:
-                eles = np.atleast_1d(np.asarray(unit[1],
-                                                dtype=float)).ravel()
-                fidx = np.atleast_1d(find_index(axis_elems, eles))
-                if not np.all(fidx >= 0):
-                    continue
-                srows = []
-                erow0 = -1
-                dummy = False
-                for e0 in eles:
-                    er = int(find_index(element[:, 0], e0))
-                    if erow0 < 0:
-                        erow0 = er
-                    if element[er, 2] >= limit_sec_no:
-                        dummy = True
-                    sr = int(find_index(beam_ratio[:, 0], e0)) \
-                        if np.size(beam_ratio) else -1
-                    if sr >= 0:
-                        srows.append(sr)
-                if dummy or not srows:
-                    continue
-                consumed.update(int(e0) for e0 in eles)
-                kind = KIND.get(
-                    float(column_beam_judge_one(erow0, element, node)),
-                    '梁')
-                label = '%d〜%d' % (int(np.min(eles)), int(np.max(eles)))
-                sec = sec_names.get(int(element[erow0, 2]), '')
-                rows.append((KORD.get(kind, 9), int(np.min(eles)),
-                             label, kind, sec, _beam_vals(srows)))
-        # 単一要素
-        for e0 in axis_elems:
-            if int(e0) in consumed:
-                continue
-            er = int(find_index(element[:, 0], e0))
-            if er < 0 or element[er, 2] >= limit_sec_no:
-                continue
-            sec = sec_names.get(int(element[er, 2]), '')
-            sr = int(find_index(beam_ratio[:, 0], e0)) \
-                if np.size(beam_ratio) else -1
-            if sr >= 0 and beam_ratio[sr, 0] == e0:
-                kind = KIND.get(
-                    float(column_beam_judge_one(er, element, node)), '梁')
-                rows.append((KORD.get(kind, 9), int(e0), str(int(e0)),
-                             kind, sec, _beam_vals([sr])))
-                continue
-            if np.size(truss_ratio) > 0:
-                tr = int(find_index(truss_ratio[:, 0], e0))
-                if tr >= 0 and truss_ratio[tr, 0] == e0:
-                    vals = []
-                    for il in i_loads:
-                        vals.append(float(np.max(
-                            truss_ratio[tr + int(lci_truss[il]), 2:4])))
-                    rows.append((KORD['ブレース'], int(e0), str(int(e0)),
-                                 'ブレース', sec, vals))
-        if not rows:
-            print('注意: 構面 %s に検定値のある部材が無いためTeX表を'
-                  'スキップします' % gname)
-            continue
-        rows.sort(key=lambda r: (r[0], r[1]))
-
-        heads = ' & '.join(_tex_escape(str(case_names[il]).strip())
-                           for il in i_loads)
-        lines.append(r'\noindent\textbf{構面 %s}\par'
-                     % _tex_escape(gname))
-        lines.append(r'\begin{longtable}{ll%s}'
-                     % ('r' * (len(i_loads) + 1)))
-        lines.append(r'\hline')
-        lines.append('部材(要素) & 断面 & %s & 最大 \\\\ \\hline'
-                     % heads)
-        lines.append(r'\endhead')
-        for _o, _e, label, kind, sec, vals in rows:
-            lines.append('%s (%s) & %s & %s & %.2f \\\\'
-                         % (label, kind, _tex_escape(sec),
-                            ' & '.join('%.2f' % v for v in vals),
-                            max(vals)))
-        lines.append(r'\hline')
+    lines.append('% mgtkit 断面検定値一覧表 (原典 ratiotemplate_tex 形式)')
+    lines.append('% 各断面×検定ケースの最大検定値とその要素ID')
+    lines.append('% 検定ケース5個ごとに表を分割 (A4幅に収まる上限が5ケース)')
+    lines.append('% 要 \\usepackage{longtable,multirow,booktabs,array}')
+    lines.append(r'\vspace*{1zh}')
+    lines.append(r'\def\arraystretch{1.0}')
+    lines.append(r'\footnotesize')
+    PER_TABLE = 5
+    for t0 in range(0, n_case, PER_TABLE):
+        m = min(PER_TABLE, n_case - t0)
+        heads = heads_all[t0:t0 + m]
+        head1 = (r'\multirow{2}{*}{断面ID} & \multirow{2}{*}{符号名}'
+                 + ''.join(r'& \multicolumn{2}{c}{%s}' % h for h in heads)
+                 + r'\\')
+        sub = '&& ' + ' & '.join([r'要素ID & 検定値'] * m)
+        if t0 > 0:
+            lines.append(r'\clearpage')
+        lines.append(r'\begin{center}')
+        lines.append(r'\begin{longtable}{>{\centering\arraybackslash}p{4zw}'
+                     r'>{\centering\arraybackslash}p{5zw}'
+                     r'*{%d}{>{\centering\arraybackslash}p{4zw}}}'
+                     % (2 * m))
+        lines.append(r'\caption{\normalsize{断面検定値一覧表}} ')
+        lines.append(r'\\\toprule')
+        lines.append(head1)
+        lines.append(r'\cline{3-%d}' % (2 + 2 * m))
+        lines.append(sub + r' \\ \hline \endfirsthead ')
+        lines.append(r'\toprule')
+        lines.append(head1)
+        lines.append(r'\cline{3-%d}' % (2 + 2 * m))
+        lines.append(sub + r' \\ \hline \endhead')
+        for sec, name, per_case in sec_rows:
+            cells = []
+            for pc in per_case[t0:t0 + m]:
+                cells.append('-- & --' if pc is None
+                             else '%d & %.2f' % pc)
+            lines.append('%d & %s & %s' % (sec, _tex_escape(name),
+                                           ' & '.join(cells))
+                         + r' \\\hline ')
         lines.append(r'\end{longtable}')
-        lines.append('')
+        lines.append(r'\end{center}')
+    lines.append(r'\normalsize')
 
-    base = os.path.splitext(os.path.basename(mgt_path))[0]
-    out_path = os.path.join(out_dir, base + '_ratio_table.tex')
+    # \input{10ratiotable.tex} で読めるようアンダースコア無しのASCII短名
+    # (10ratioplot.tex / 09stressplot.tex と同じ規約)
+    out_path = os.path.join(out_dir, '10ratiotable.tex')
     with open(out_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(lines) + '\n')
     return [out_path], lines

@@ -242,8 +242,16 @@
           <input type="number" id="m_mg_b" value="5" step="0.5"></label>
       </div>
     </details>
-    <div class="row"><button class="act" onclick="runPlotModel()">
-      PDF生成</button></div>
+    <div class="row">
+      <label class="inline">図の出力形式
+        <select id="m_format">
+          <option value="pdf" selected>PDF</option>
+          <option value="tex">TeX (PGF: \inputで組込み)</option>
+        </select></label>
+      <button class="act" onclick="runPlotModel()">モデル図生成</button>
+      <span class="hint">TeXは自己完結の 09modelplot.tex を生成します
+        (計算書フォルダへコピーして \input{09modelplot.tex}。
+        要 \usepackage{pgf})</span></div>
     <div id="model_msg"></div>
     <div id="model_pdfs"></div>
   </fieldset>
@@ -264,6 +272,14 @@
              placeholder="無い場合は空欄">
       <input type="file" style="font-size:12px"
              onchange="uploadTo(this,'truss_stress_path')">
+    </div>
+    <div class="row">plate_stress (任意):
+      <input type="text" id="plate_stress_path" class="path"
+             placeholder="無い場合は空欄">
+      <input type="file" style="font-size:12px"
+             onchange="uploadTo(this,'plate_stress_path')">
+      <span class="hint">板要素 (面材壁) の面内せん断Fxyの最大値を
+        要素中心に注記します</span>
     </div>
     <div class="row"><button class="sub" onclick="loadCases()">
       荷重ケース読込</button></div>
@@ -344,8 +360,16 @@
           <input type="number" id="s_mg_b" value="5" step="0.5"></label>
       </div>
     </details>
-    <div class="row"><button class="act" onclick="runPlotStress()">
-      PDF生成</button></div>
+    <div class="row">
+      <label class="inline">図の出力形式
+        <select id="s_format">
+          <option value="tex" selected>TeX (PGF: \inputで組込み)</option>
+          <option value="pdf">PDF</option>
+        </select></label>
+      <button class="act" onclick="runPlotStress()">応力図生成</button>
+      <span class="hint">TeXは自己完結の 09stressplot.tex を生成します
+        (計算書フォルダへコピーして \input{09stressplot.tex}。
+        要 \usepackage{pgf})</span></div>
     <div id="stress_msg"></div>
     <div id="stress_pdfs"></div>
   </fieldset>
@@ -701,22 +725,6 @@
   </fieldset>
   <div id="check_msg"></div>
   <div id="check_result"></div>
-  <fieldset>
-    <legend>検定詳細TeX (10detail)</legend>
-    <div class="row">
-      <label class="inline">出力ケース
-        <select id="dtex_mode">
-          <option value="all" selected>全検定ケース</option>
-          <option value="pick">長期＋短期最大の2つ</option></select></label>
-      <button class="act" onclick="runDetailTex()">検定詳細TeX生成</button>
-      <span class="hint">各断面の最大検定値の検定詳細文をTeXソースへ出力します
-        (MATLAB版 ratio_detail_tex.m 相当・Shift-JIS)。ケース別の
-        10detail_matlabN.tex と本体 10detail.tex (\rhead=ケース名) を
-        生成します。「検定実行」のあとに実行してください。</span>
-    </div>
-    <div id="dtex_msg"></div>
-    <div id="dtex_out"></div>
-  </fieldset>
 </section>
 
 <!-- ============ タブ3b: 検定比図 ============ -->
@@ -798,13 +806,11 @@
           <option value="pdf">PDF</option>
         </select></label>
       <button class="act" onclick="runPlotRatio()">検定比図生成</button>
-      <button class="act" onclick="runRatioTex()">検定比表TeX生成</button>
       <span class="hint">TeX図は内容がPDF版と同一のPGFコードで、計算書へ
         \input{...} で直接組み込めます (要 \usepackage{pgf})。
-        「検定比表TeX」は図の値をlongtableの表にしたものです</span></div>
+        検定値一覧表 (10ratiotable.tex) は断面検定タブで生成できます</span></div>
     <div id="ratio_msg"></div>
     <div id="ratio_pdfs"></div>
-    <div id="ratio_tex_out"></div>
   </fieldset>
 </section>
 

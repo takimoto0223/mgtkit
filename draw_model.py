@@ -24,7 +24,7 @@ MATLAB版との意図的差異:
   - print_format の分岐は PDF 保存に一本化 (要件による)。
   - 用紙サイズのデフォルトは A3 (GUI初期値はA4だが要件によりA3)。
     横長/縦長は MATLAB 同様に図の縦横比から自動決定。
-  - 交差通り芯符号は丸囲み(○付き)で描画 (要件による。MATLAB版は無枠テキスト)。
+  - 交差通り芯符号は無枠テキスト (丸囲みは2026-08-04のユーザー指示で廃止)。
   - グループの節点リストが空/1点のみで通り芯の一次近似ができない場合、
     MATLAB版は stop (エラー) するが、本移植では警告を出してスキップする。
   - 伏図の壁要素注記で MATLAB 版は wallelement_plot に axis=2 (スカラ) を
@@ -34,6 +34,9 @@ MATLAB版との意図的差異:
 """
 
 import os
+import re
+import shutil
+import tempfile
 import re
 import sys
 import math
@@ -144,6 +147,188 @@ def _finish_figure(fig, ax, title, xlabel_str, xlim, ylim,
 # ---------------------------------------------------------------------------
 # 小物関数 (逐語移植)
 # ---------------------------------------------------------------------------
+
+_PGF_PATH_PT = re.compile(
+    r'\\pgfpath(line|move)to\{\\pgfqpoint'
+    r'\{(-?\d+\.\d+)in\}\{(-?\d+\.\d+)in\}\}')
+
+
+def _pgf_short_pt(m):
+    r"""頻出パスコマンドを短縮マクロ \mgtL/\mgtM へ置換する.
+
+    \pgfpathlineto{\pgfqpoint{1.234567in}{2.345678in}} (約50字) を
+    \mgtL{1.2346}{2.3457} (約22字) にする。座標は6桁→4桁に丸める
+    (0.0001in≒2.5µmで見た目への影響なし)。展開マクロは一式冒頭で定義。
+    """
+    cmd = 'L' if m.group(1) == 'line' else 'M'
+    return '\\mgt%s{%.4f}{%.4f}' % (cmd, float(m.group(2)),
+                                    float(m.group(3)))
+
+
+def _merge_lines_for_pgf(fig):
+    """同スタイルのLine2DをLineCollectionへ統合しPGF出力を圧縮する.
+
+    PGFバックエンドは線1本ごとに色・線種等の設定コード(約15行)を出す
+    ため、板要素の多いモデルの伏図では1図で数十万行になり計算書の
+    コンパイルが極端に遅くなる。マーカー無しの線をスタイルごとに
+    まとめて1つの描画命令で出す (サイズ・時間とも約1/10)。
+    zorderを維持するので見た目は変わらない。
+    """
+    import matplotlib.lines as _mlines
+    for ax in fig.axes:
+        groups = {}
+        merged = []
+        for ln in list(ax.lines):
+            if ln.get_marker() not in (None, 'None', ''):
+                continue  # マーカー付き (節点printなど) はそのまま
+            xy = ln.get_xydata()
+            if xy.shape[0] < 2:
+                continue
+            color = ln.get_color()
+            if not isinstance(color, str):
+                color = tuple(np.atleast_1d(np.asarray(color,
+                                                       dtype=float)).ravel())
+            key = (color, float(ln.get_linewidth()),
+                   str(ln.get_linestyle()),
+                   float(ln.get_alpha() if ln.get_alpha() is not None
+                         else 1.0),
+                   float(ln.get_zorder()))
+            groups.setdefault(key, []).append(xy)
+            merged.append(ln)
+        if not groups:
+            continue
+        for ln in merged:
+            ln.remove()
+        # NaN区切りで1本のLine2Dに連結 (LineCollectionはPGFバックエンド
+        # が1セグメントずつ描くため効果がない。1本のLine2Dなら1つの
+        # パス・1つのスコープで出力される)
+        for (color, lw, ls, alpha, zorder), segs in groups.items():
+            xs = []
+            ys = []
+            for xy in segs:
+                xs.extend(float(v) for v in xy[:, 0])
+                xs.append(np.nan)
+                ys.extend(float(v) for v in xy[:, 1])
+                ys.append(np.nan)
+            ax.add_line(_mlines.Line2D(
+                xs, ys, color=color, linewidth=lw, linestyle=ls,
+                alpha=(None if alpha == 1.0 else alpha), zorder=zorder,
+                marker='None'))
+
+
+def _save_fig_pdf_or_pgf(fig, out_path):
+    """図をPDFまたはTeX (PGF) で保存し、図サイズ (インチ) を返す.
+
+    .tex 拡張子なら matplotlib の PGF バックエンドで保存する
+    (fontspec を要求しないよう pgf.rcfonts は無効化)。
+    """
+    import io as _io
+    import matplotlib as _mpl
+    fw, fh = [float(v) for v in fig.get_size_inches()]
+    if str(out_path).lower().endswith('.tex'):
+        _merge_lines_for_pgf(fig)
+        with _mpl.rc_context({'pgf.rcfonts': False,
+                              'pgf.texsystem': 'xelatex'}):
+            fig.savefig(out_path, format='pgf')
+        # 注記テキスト中の _ (グループ名 RF_1 等) はそのままだと数式モード
+        # 扱いでコンパイルエラーになるためエスケープする。PGF内部コマンドは
+        # _ を使わないが、画像取込行とコメント行は念のため対象外
+        s = _io.open(out_path, encoding='utf-8').read()
+        if '_' in s:
+            fixed = []
+            for ln in s.splitlines():
+                if ('_' in ln and not ln.lstrip().startswith('%')
+                        and 'pgfimage' not in ln
+                        and 'includegraphics' not in ln):
+                    ln = ln.replace('\\_', '_').replace('_', '\\_')
+                fixed.append(ln)
+            s = '\n'.join(fixed) + '\n'
+        # 頻出パスコマンドの短縮マクロ化+座標丸め (サイズ・コンパイル時間
+        # を約半減。展開マクロ \mgtM/\mgtL は _write_pgf_bundle が定義)
+        s = _PGF_PATH_PT.sub(_pgf_short_pt, s)
+        _io.open(out_path, 'w', encoding='utf-8',
+                 newline='\n').write(s)
+    else:
+        fig.savefig(out_path, format='pdf')
+    return fw, fh
+
+
+def _write_pgf_bundle(combined, made, meta, box_name):
+    """PGF図の一式TeX (自己完結・lrbox方式) を書き出す.
+
+    made: 図ファイル (.tex/PGF) のパス列
+    meta: [(見出し文字列, 幅in, 高さin)] (madeと同順)
+    box_name: saveboxマクロ名 (ASCII)。lrbox環境でPGFを逐次読み込み
+    してから resizebox/rotatebox する (マクロ引数への直接展開は
+    catcode変更が効かず壊れるため不可)。空行は hbox 内で \\par に
+    なるため除去する。横長の図は自動で90度回転する。
+    """
+    parts = ['% mgtkit 図一式 (このファイル1つを計算書フォルダへコピーして'
+             ' \\input)',
+             '% 要 \\usepackage{pgf}。1図1ページ (\\clearpage区切り)。',
+             '% 横長の図は自動で90度回転し、本文領域に収まるよう縮小します',
+             '\\ifdefined\\%s\\else\\newsavebox{\\%s}\\fi'
+             % (box_name, box_name),
+             # 短縮パスマクロの展開定義 (_pgf_short_pt が出力)
+             '\\ifdefined\\mgtM\\else',
+             '\\def\\mgtM#1#2{\\pgfpathmoveto{\\pgfqpoint{#1in}{#2in}}}%',
+             '\\def\\mgtL#1#2{\\pgfpathlineto{\\pgfqpoint{#1in}{#2in}}}%',
+             '\\fi',
+             # \resizebox は内部で \copy を使い図2個分のメモリを要する。
+             # 大規模モデルでの main memory 超過対策として、ボックスを
+             # \box (移動) で取り出しながら拡縮するマクロを埋め込む
+             '\\ifdefined\\mgtkitfitw\\else',
+             '\\makeatletter',
+             '% \\resizebox相当 (ボックスをコピーせず移動: メモリ半減)',
+             '\\def\\mgtkitfitw#1{%',
+             '  \\Gscale@div\\mgtkit@r\\textwidth{\\wd#1}\\mgtkit@fit#1}',
+             '\\def\\mgtkitfith#1{%',
+             '  \\@tempdimc0.94\\textheight',
+             '  \\dimen@\\ht#1\\advance\\dimen@\\dp#1%',
+             '  \\Gscale@div\\mgtkit@r\\@tempdimc\\dimen@\\mgtkit@fit#1}',
+             '\\def\\mgtkit@fit#1{\\leavevmode',
+             '  \\@tempdima\\mgtkit@r\\wd#1%',
+             '  \\@tempdimb\\mgtkit@r\\ht#1%',
+             '  \\@tempdimc\\mgtkit@r\\dp#1%',
+             '  \\let\\Gscale@x\\mgtkit@r\\let\\Gscale@y\\mgtkit@r',
+             '  \\setbox\\tw@\\hbox{\\Gscale@start\\rlap{\\box#1}'
+             '\\Gscale@end}%',
+             '  \\wd\\tw@\\@tempdima\\ht\\tw@\\@tempdimb'
+             '\\dp\\tw@\\@tempdimc',
+             '  \\box\\tw@}',
+             '\\makeatother',
+             '\\fi',
+             '']
+    for k, f in enumerate(made):
+        label, fw, fh = meta[k]
+        landscape = fw > fh
+        eff_w, eff_h = (fh, fw) if landscape else (fw, fh)
+        # 本文領域の縦横比 (A4系のおよそ0.66) との比較で縮小方向を決定
+        fit_w = (eff_w / eff_h) >= 0.66
+        parts.append('%% ---- 図%d: %s%s ----'
+                     % (k + 1, label,
+                        ' (横長のため90度回転)' if landscape else ''))
+        parts.append('\\begin{lrbox}{\\%s}%%' % box_name)
+        with open(f, encoding='utf-8') as fh2:
+            for ln in fh2.read().splitlines():
+                if ln.strip():
+                    parts.append(ln)
+        parts.append('\\end{lrbox}%')
+        parts.append('\\begin{center}')
+        if landscape:
+            # \rotatebox は内部が移動 (\box) なのでコピーは発生しない
+            parts.append('\\sbox{\\%s}{\\rotatebox{90}{\\box\\%s}}'
+                         % (box_name, box_name))
+        if fit_w:
+            parts.append('\\mgtkitfitw{\\%s}' % box_name)
+        else:
+            parts.append('\\mgtkitfith{\\%s}' % box_name)
+        parts.append('\\end{center}')
+        parts.append('\\clearpage')
+        parts.append('')
+    with open(combined, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write('\n'.join(parts) + '\n')
+
 
 def chg_CONST(const):
     """chg_CONST.m: 支持条件の6桁数値を文字列(Fx..Rz)へ変換."""
@@ -774,7 +959,7 @@ def _figure_vertical(kind, C, i_axis, out_path):
                 pick_axis_xy = nodeM[ii, 1:3]
                 _text(ax, pick_axis_xy[0], zmin - C['axisname_location'],
                       space_erace(C['axis_name_sel'][iname]),
-                      ha='center', va='middle', fs=axis_fs, circled=True)
+                      ha='center', va='middle', fs=axis_fs)
                 select_tick.append(list(pick_axis_xy))
                 break
 
@@ -821,9 +1006,9 @@ def _figure_vertical(kind, C, i_axis, out_path):
 
     _finish_figure(fig, ax, _V_TITLES[kind], C['axis_name_sel'][i_axis],
                    xlim, ylim, title_fs, C['paper_size'])
-    fig.savefig(out_path, format='pdf')
+    fw, fh = _save_fig_pdf_or_pgf(fig, out_path)
     plt.close(fig)
-    return out_path
+    return out_path, fw, fh
 
 
 # ---------------------------------------------------------------------------
@@ -1128,9 +1313,9 @@ def _figure_floor(kind, C, i_axis, out_path):
 
     _finish_figure(fig, ax, _F_TITLES[kind], C['floor_name_sel'][i_axis],
                    xlim, ylim, title_fs, C['paper_size'])
-    fig.savefig(out_path, format='pdf')
+    fw, fh = _save_fig_pdf_or_pgf(fig, out_path)
     plt.close(fig)
-    return out_path
+    return out_path, fw, fh
 
 
 # ---------------------------------------------------------------------------
@@ -1311,7 +1496,7 @@ def plot_model(mgt_path, out_dir,
                mergins=(5.0, 2.0, 5.0, 5.0), fontsize=(5.0, 6.0, 8.0),
                paper_size=3, paper_orient=None,
                cross_axis=1, cross_height=None, judge_XY=1,
-               w_select=None):
+               w_select=None, fig_format='pdf'):
     """MIDAS mgtファイルからモデル構成図PDFを作成する.
 
     Parameters
@@ -1403,6 +1588,8 @@ def plot_model(mgt_path, out_dir,
         v_idx = [i for i in v_idx if np.size(axis_node[i]) > 0]
 
     made = []
+    meta = []
+    tex_tmp = None
     fig_no = 100
 
     # 通り芯符号の表示対象 (symbols_select) を axes_select と切り離す。
@@ -1461,14 +1648,27 @@ def plot_model(mgt_path, out_dir,
                  line_location=line_location, paper_size=paper_size)
 
         def _run_kind(kind, prefix):
-            nonlocal fig_no
+            nonlocal fig_no, tex_tmp
             for i_axis in range(len(v_idx)):
                 if axis_plot_coefi[i_axis, 0] == 0:
                     continue  # 通芯の近似ができなかった構面
-                out = os.path.join(
-                    out_dir, '%s_%d_%s.pdf'
-                    % (prefix, fig_no, _safe_name(axis_name_sel[i_axis])))
-                made.append(_figure_vertical(kind, C, i_axis, out))
+                if str(fig_format) == 'tex':
+                    # 個別図は一時フォルダに作る (出力先には一式のみ残す)
+                    if tex_tmp is None:
+                        tex_tmp = tempfile.mkdtemp(prefix='mgtkit_pgf_')
+                    out = os.path.join(tex_tmp,
+                                       'modelfig%d.tex' % (100 + len(made)))
+                else:
+                    out = os.path.join(
+                        out_dir, '%s_%d_%s.pdf'
+                        % (prefix, fig_no,
+                           _safe_name(axis_name_sel[i_axis])))
+                out2, fw, fh = _figure_vertical(kind, C, i_axis, out)
+                made.append(out2)
+                meta.append(('%s / %s'
+                             % (_V_TITLES[kind],
+                                space_erace(axis_name_sel[i_axis])),
+                             fw, fh))
                 fig_no += 1
 
         if node_onoff:
@@ -1523,16 +1723,28 @@ def plot_model(mgt_path, out_dir,
                   line_location=line_location, paper_size=paper_size)
 
         def _run_floor(kind, prefix):
+            nonlocal tex_tmp
             fno = 100
             for i_axis in range(len(f_idx)):
                 if floor_node_sel[i_axis].size == 0:
                     print('WARNING: 伏図 %s は節点が空のためスキップします'
                           % floor_name_sel[i_axis])
                     continue
-                out = os.path.join(
-                    out_dir, '%s_%d_%s.pdf'
-                    % (prefix, fno, _safe_name(floor_name_sel[i_axis])))
-                made.append(_figure_floor(kind, C2, i_axis, out))
+                if str(fig_format) == 'tex':
+                    if tex_tmp is None:
+                        tex_tmp = tempfile.mkdtemp(prefix='mgtkit_pgf_')
+                    out = os.path.join(tex_tmp,
+                                       'modelfig%d.tex' % (100 + len(made)))
+                else:
+                    out = os.path.join(
+                        out_dir, '%s_%d_%s.pdf'
+                        % (prefix, fno, _safe_name(floor_name_sel[i_axis])))
+                out2, fw, fh = _figure_floor(kind, C2, i_axis, out)
+                made.append(out2)
+                meta.append(('%s / %s'
+                             % (_F_TITLES[kind],
+                                space_erace(floor_name_sel[i_axis])),
+                             fw, fh))
                 fno += 1
 
         if node_onoff:
@@ -1543,6 +1755,15 @@ def plot_model(mgt_path, out_dir,
             _run_floor('section', '04_section_floor')
         if end_onoff:
             _run_floor('end', '05_end_floor')
+
+    # TeX出力時は全図をまとめた一式ファイル 09modelplot.tex のみ出力する
+    # (1図1ページ・自己完結。詳細は _write_pgf_bundle)
+    if str(fig_format) == 'tex' and made:
+        combined = os.path.join(out_dir, '09modelplot.tex')
+        _write_pgf_bundle(combined, made, meta, 'mgtkitmodelbox')
+        made = [combined]
+    if tex_tmp is not None:
+        shutil.rmtree(tex_tmp, ignore_errors=True)
 
     return made
 

@@ -47,6 +47,8 @@ MATLAB版との意図的差異:
 """
 
 import os
+import shutil
+import tempfile
 import sys
 import math
 
@@ -66,6 +68,7 @@ try:
         _setup_japanese_font, _finish_figure, _text, _kline, _plate_plot,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
         _resolve_select, _safe_name, column_beam_judge_one, line_projection,
+        _save_fig_pdf_or_pgf, _write_pgf_bundle,
     )
 except ImportError:  # スクリプト実行時
     from mgt import (
@@ -78,6 +81,7 @@ except ImportError:  # スクリプト実行時
         _setup_japanese_font, _finish_figure, _text, _kline, _plate_plot,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
         _resolve_select, _safe_name, column_beam_judge_one, line_projection,
+        _save_fig_pdf_or_pgf, _write_pgf_bundle,
     )
 
 
@@ -316,6 +320,31 @@ def _beam_rotd(nodeM, ni, nj, a1, a2):
 # 柱の応力plot (column_maxstress_plot.m / column_stress_plot.m)
 # ---------------------------------------------------------------------------
 
+STRESS_GAP = 0.05  # 応力注記の離隔 [m] (値同士・部材線との重なり防止)
+
+
+def _stext(ax, x, y, s, ha='center', va='baseline', fs=5.0, rot=0.0):
+    """応力注記用テキスト: 文字の寄せ方向に沿ってアンカーから少し離す.
+
+    上寄せ(top/cap)は下へ、下寄せ(bottom/baseline)は上へ、
+    左寄せは右へ、右寄せは左へ STRESS_GAP だけ移動してから描く
+    (値同士や部材線との重なり対策。原典から意図的調整 2026-08-05)。
+    """
+    r = math.radians(rot)
+    d = STRESS_GAP
+    ux, uy = math.cos(r) * d, math.sin(r) * d
+    vx, vy = -math.sin(r) * d, math.cos(r) * d
+    if va in ('bottom', 'baseline'):
+        x, y = x + vx, y + vy
+    elif va in ('top', 'cap'):
+        x, y = x - vx, y - vy
+    if ha == 'left':
+        x, y = x + ux, y + uy
+    elif ha == 'right':
+        x, y = x - ux, y - uy
+    _text(ax, x, y, s, ha=ha, va=va, fs=fs, rot=rot)
+
+
 def _column_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
                            mscale, fontsize, dot, axis_direction, comp):
     """column_maxstress_plot.m: 柱の最大応力をplot (axis=[2 4]相当)."""
@@ -332,13 +361,13 @@ def _column_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
         if (0 <= beta <= 45) or (135 < beta < 225) or (315 <= beta <= 360):
             # 強軸がX方向: M=col5(My), Q=col3(Fz)
             if 'M' in comp:
-                _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 4]),
+                _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 4]),
                       ha='right', va='middle', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 2]),
+                _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 2]),
                       ha='left', va='top', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='left', va='baseline', fs=fontsize)
             if 'M' in comp and mscale > 0:
                 trig = math.cos(beta * math.pi / 180)
@@ -361,13 +390,13 @@ def _column_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
                 raise RuntimeError('柱部材の定義ミス？')
 
             if 'M' in comp:
-                _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 5]),
+                _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 5]),
                       ha='right', va='middle', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 1]),
+                _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 1]),
                       ha='left', va='top', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='left', va='baseline', fs=fontsize)
             if 'M' in comp and mscale > 0:
                 trig = math.sin(beta * math.pi / 180)
@@ -394,13 +423,13 @@ def _column_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
             mcol, qcol = 4, 2
 
         if 'M' in comp:
-            _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, mcol]),
+            _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, mcol]),
                   ha='right', va='middle', fs=fontsize, rot=rotd)
         if 'Q' in comp:
-            _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, qcol]),
+            _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, qcol]),
                   ha='left', va='top', fs=fontsize, rot=rotd)
         if 'N' in comp:
-            _text(ax, mid_x, mid_y, fp % stress[1, 0],
+            _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                   ha='left', va='baseline', fs=fontsize, rot=rotd)
         if 'M' in comp and mscale > 0:
             dM = direction_M * mscale * converse_M
@@ -436,19 +465,19 @@ def _column_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
         if (0 <= beta <= 45) or (135 < beta < 225) or (315 <= beta <= 360):
             # 強軸まわりのモーメント(5)をplot
             if 'M' in comp:
-                _text(ax, p73x, p73y, fp % stress[0, 4],
+                _stext(ax, p73x, p73y, fp % stress[0, 4],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p73x, p73y, fp % stress[0, 5],
+                _stext(ax, p73x, p73y, fp % stress[0, 5],
                       ha='left', va='baseline', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 4],
+                _stext(ax, p37x, p37y, fp % stress[2, 4],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 5],
+                _stext(ax, p37x, p37y, fp % stress[2, 5],
                       ha='left', va='baseline', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 2],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 2],
                       ha='left', va='middle', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='right', va='middle', fs=fontsize)
             if 'M' in comp:
                 # axis(1)=2 -> 3+axis(1)=5 (My, 0-based 4)
@@ -471,19 +500,19 @@ def _column_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
                 raise RuntimeError('柱部材の定義ミス？')
 
             if 'M' in comp:
-                _text(ax, p73x, p73y, fp % stress[0, 5],
+                _stext(ax, p73x, p73y, fp % stress[0, 5],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p73x, p73y, fp % stress[0, 4],
+                _stext(ax, p73x, p73y, fp % stress[0, 4],
                       ha='left', va='baseline', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 5],
+                _stext(ax, p37x, p37y, fp % stress[2, 5],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 4],
+                _stext(ax, p37x, p37y, fp % stress[2, 4],
                       ha='left', va='baseline', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 1],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 1],
                       ha='left', va='middle', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='right', va='middle', fs=fontsize)
             if 'M' in comp:
                 trig = math.sin(beta * math.pi / 180)
@@ -504,37 +533,37 @@ def _column_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
             # MzとFy (注記はMATLAB版どおり My/Mz 両方・Q=Fz)
             direction_M = 1.0 if (shear_direction @ YAXIS) < 0 else -1.0
             if 'M' in comp:
-                _text(ax, p73x, p73y, fp % stress[0, 4],
+                _stext(ax, p73x, p73y, fp % stress[0, 4],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p73x, p73y, fp % stress[0, 5],
+                _stext(ax, p73x, p73y, fp % stress[0, 5],
                       ha='left', va='baseline', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 4],
+                _stext(ax, p37x, p37y, fp % stress[2, 4],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 5],
+                _stext(ax, p37x, p37y, fp % stress[2, 5],
                       ha='left', va='baseline', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 2],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 2],
                       ha='left', va='middle', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='right', va='middle', fs=fontsize)
             mcol = 5
         else:
             direction_M = 1.0 if (shear_direction @ ZAXIS) < 0 else -1.0
             if 'M' in comp:
-                _text(ax, p73x, p73y, fp % stress[0, 5],
+                _stext(ax, p73x, p73y, fp % stress[0, 5],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p73x, p73y, fp % stress[0, 4],
+                _stext(ax, p73x, p73y, fp % stress[0, 4],
                       ha='left', va='baseline', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 5],
+                _stext(ax, p37x, p37y, fp % stress[2, 5],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 4],
+                _stext(ax, p37x, p37y, fp % stress[2, 4],
                       ha='left', va='baseline', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 1],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 1],
                       ha='left', va='middle', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='right', va='middle', fs=fontsize)
             mcol = 4
 
@@ -572,13 +601,13 @@ def _beam_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
         if (0 <= beta <= 45) or (135 <= beta <= 225) or (315 <= beta <= 360):
             # 通常の強軸つかい (My=col5をplot)
             if 'M' in comp:
-                _text(ax, mid_x, mid_y,
-                      fp % _maxabs(stress[0:3, 4]) + '|'
+                _stext(ax, mid_x, mid_y,
+                      fp % _maxabs(stress[0:3, 4]) + '｜'
                       + fp % _maxabs(stress[0:3, 5]),
                       ha='center', va='bottom', fs=fontsize, rot=rotd)
             if ('Q' in comp) or ('N' in comp):
-                _text(ax, mid_x, mid_y,
-                      fp % _maxabs(stress[0:3, 2]) + '|'
+                _stext(ax, mid_x, mid_y,
+                      fp % _maxabs(stress[0:3, 2]) + '｜'
                       + fp % _maxabs(stress[0:3, 0]),
                       ha='center', va='cap', fs=fontsize, rot=rotd)
             if 'M' in comp and mscale > 0:
@@ -599,12 +628,12 @@ def _beam_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
         elif (45 < beta < 135) or (225 < beta < 315):
             # ヨコヅカイ (Mz=col6をplot)
             if 'M' in comp:
-                _text(ax, mid_x, mid_y,
+                _stext(ax, mid_x, mid_y,
                       fp % _maxabs(stress[0:3, 5])
                       + fp % _maxabs(stress[0:3, 4]),
                       ha='center', va='bottom', fs=fontsize, rot=rotd)
             if ('Q' in comp) or ('N' in comp):
-                _text(ax, mid_x, mid_y,
+                _stext(ax, mid_x, mid_y,
                       fp % _maxabs(stress[0:3, 1])
                       + fp % _maxabs(stress[0:3, 0]),
                       ha='center', va='cap', fs=fontsize, rot=rotd)
@@ -639,12 +668,12 @@ def _beam_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
     # MATLAB版: if angle(1)==1 || 1.9 は常に真
     if (0 <= beta <= 45) or (135 <= beta <= 225) or (315 <= beta <= 360):
         if 'M' in comp:
-            _text(ax, mid_x, mid_y,
+            _stext(ax, mid_x, mid_y,
                   fp % stress[0, 4] + '｜' + fp % stress[1, 4]
                   + '｜' + fp % stress[2, 4],
                   ha='center', va='bottom', fs=fontsize, rot=rotd)
         if ('Q' in comp) or ('N' in comp):
-            _text(ax, mid_x, mid_y,
+            _stext(ax, mid_x, mid_y,
                   fp % stress[0, 2] + '｜' + fp % _maxabs(stress[0:3, 0])
                   + '｜' + fp % _maxabs(stress[0:3, 5])
                   + '｜' + fp % stress[2, 2],
@@ -666,12 +695,12 @@ def _beam_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
 
     elif (45 < beta < 135) or (225 < beta < 315):
         if 'M' in comp:
-            _text(ax, mid_x, mid_y,
+            _stext(ax, mid_x, mid_y,
                   fp % stress[0, 5] + '｜' + fp % stress[1, 5]
                   + '｜' + fp % stress[2, 5],
                   ha='center', va='bottom', fs=fontsize, rot=rotd)
         if ('Q' in comp) or ('N' in comp):
-            _text(ax, mid_x, mid_y,
+            _stext(ax, mid_x, mid_y,
                   fp % stress[0, 1] + '｜' + fp % _maxabs(stress[0:3, 0])
                   + '｜' + fp % _maxabs(stress[0:3, 4])
                   + '｜' + fp % stress[2, 1],
@@ -725,7 +754,7 @@ def _truss_stress_plot(ax, stress, ni, nj, nodeM, fontsize, dot, comp):
         else:        # 左上あがり
             x, y = xj * 0.7 + xi * 0.3, zj * 0.7 + zi * 0.3
             va = 'baseline'
-    _text(ax, x, y, val, ha='center', va=va, fs=fontsize, rot=rotd)
+    _stext(ax, x, y, val, ha='center', va=va, fs=fontsize, rot=rotd)
 
 
 def _plate_stress_plot(ax, stress, node4_no, nodeM, fontsize, dot):
@@ -734,7 +763,7 @@ def _plate_stress_plot(ax, stress, node4_no, nodeM, fontsize, dot):
     stress_max = float(np.max(np.abs(np.asarray(stress, dtype=float))))
     node4_index = [find_index(nodeM[:, 0], nn) for nn in node4_no]
     center = nodeM[node4_index, 1:4].sum(axis=0) / len(node4_no)
-    _text(ax, center[0], center[2], fp % stress_max,
+    _stext(ax, center[0], center[2], fp % stress_max,
           ha='center', va='middle', fs=fontsize, rot=0.0)
 
 
@@ -800,12 +829,12 @@ def _wallstress_plot(ax, wall_stress_ID, wall_stress, wall_element, nodeM,
         bot_x = nodeM[ni[0], a] * 0.5 + nodeM[ni[1], a] * 0.5
         bot_y = nodeM[ni[3], 3] * 0.2 + nodeM[ni[0], 3] * 0.8
         mid_y = nodeM[ni[3], 3] * 0.5 + nodeM[ni[0], 3] * 0.5
-        _text(ax, top_x, top_y, fp % WMyt, ha='right', va='top', fs=fontsize)
-        _text(ax, top_x, top_y, fp % WMzt, ha='left', va='bottom', fs=fontsize)
-        _text(ax, bot_x, bot_y, fp % WMyb, ha='right', va='top', fs=fontsize)
-        _text(ax, bot_x, bot_y, fp % WMzb, ha='left', va='bottom', fs=fontsize)
-        _text(ax, bot_x, mid_y, fp % WN, ha='right', va='top', fs=fontsize)
-        _text(ax, bot_x, mid_y, fp % WQz, ha='left', va='bottom', fs=fontsize)
+        _stext(ax, top_x, top_y, fp % WMyt, ha='right', va='top', fs=fontsize)
+        _stext(ax, top_x, top_y, fp % WMzt, ha='left', va='bottom', fs=fontsize)
+        _stext(ax, bot_x, bot_y, fp % WMyb, ha='right', va='top', fs=fontsize)
+        _stext(ax, bot_x, bot_y, fp % WMzb, ha='left', va='bottom', fs=fontsize)
+        _stext(ax, bot_x, mid_y, fp % WN, ha='right', va='top', fs=fontsize)
+        _stext(ax, bot_x, mid_y, fp % WQz, ha='left', va='bottom', fs=fontsize)
 
 
 # ---------------------------------------------------------------------------
@@ -837,13 +866,13 @@ def _uni_column_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
     if angle[0] == 2:
         if (0 <= beta <= 45) or (135 < beta < 225) or (315 <= beta <= 360):
             if 'M' in comp:
-                _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 4]),
+                _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 4]),
                       ha='right', va='middle', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 2]),
+                _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 2]),
                       ha='left', va='top', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='left', va='baseline', fs=fontsize)
             if 'M' in comp and mscale > 0:
                 # axis(1)=2 -> stress(:,3+2)=col5 (0-based 4)
@@ -858,13 +887,13 @@ def _uni_column_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
                         nodeM[nj, a2], nodeM[nj, a2]], linewidth=0.2)
         elif (45 < beta <= 135) or (225 <= beta < 315):
             if 'M' in comp:
-                _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 5]),
+                _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 5]),
                       ha='right', va='middle', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 1]),
+                _stext(ax, mid_x, mid_y, fp % _maxabs(stress[0:3, 1]),
                       ha='left', va='top', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='left', va='baseline', fs=fontsize)
             if 'M' in comp and mscale > 0:
                 # 8-axis(1)=6 (0-based 5)
@@ -888,10 +917,10 @@ def _uni_column_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
         else:
             return
         if 'M' in comp:
-            _text(ax, mid_x2, mid_y, fp % _maxabs(stress[0:3, mcol]),
+            _stext(ax, mid_x2, mid_y, fp % _maxabs(stress[0:3, mcol]),
                   ha='center', va='bottom', fs=fontsize, rot=rotd)
         if ('Q' in comp) or ('N' in comp):
-            _text(ax, mid_x2, mid_y,
+            _stext(ax, mid_x2, mid_y,
                   fp % _maxabs(stress[0:3, qcol]) + '｜' + fp % stress[1, 0],
                   ha='center', va='cap', fs=fontsize, rot=rotd)
         if 'M' in comp and mscale > 0:
@@ -935,19 +964,19 @@ def _uni_column_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
     if angle[0] == 2:
         if (0 <= beta <= 45) or (135 < beta < 225) or (315 <= beta <= 360):
             if 'M' in comp:
-                _text(ax, p73x, p73y, fp % stress[0, 4],
+                _stext(ax, p73x, p73y, fp % stress[0, 4],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p73x, p73y, fp % stress[0, 5],
+                _stext(ax, p73x, p73y, fp % stress[0, 5],
                       ha='left', va='baseline', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 4],
+                _stext(ax, p37x, p37y, fp % stress[2, 4],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 5],
+                _stext(ax, p37x, p37y, fp % stress[2, 5],
                       ha='left', va='baseline', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 2],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 2],
                       ha='left', va='middle', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='right', va='middle', fs=fontsize)
             if 'M' in comp and mscale > 0:
                 trig = math.cos(beta * math.pi / 180)
@@ -961,19 +990,19 @@ def _uni_column_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
                         nodeM[nj, a2], nodeM[nj, a2]], linewidth=0.2)
         elif (45 < beta <= 135) or (225 <= beta < 315):
             if 'M' in comp:
-                _text(ax, p73x, p73y, fp % stress[0, 5],
+                _stext(ax, p73x, p73y, fp % stress[0, 5],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p73x, p73y, fp % stress[0, 4],
+                _stext(ax, p73x, p73y, fp % stress[0, 4],
                       ha='left', va='baseline', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 5],
+                _stext(ax, p37x, p37y, fp % stress[2, 5],
                       ha='right', va='top', fs=fontsize)
-                _text(ax, p37x, p37y, fp % stress[2, 4],
+                _stext(ax, p37x, p37y, fp % stress[2, 4],
                       ha='left', va='baseline', fs=fontsize)
             if 'Q' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 1],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 1],
                       ha='left', va='middle', fs=fontsize)
             if 'N' in comp:
-                _text(ax, mid_x, mid_y, fp % stress[1, 0],
+                _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                       ha='left', va='middle', fs=fontsize)
             if 'M' in comp and mscale > 0:
                 trig = math.sin(beta * math.pi / 180)
@@ -998,20 +1027,20 @@ def _uni_column_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
         else:
             return
         if 'M' in comp:
-            _text(ax, p73x, p73y, fp % stress[0, mcol],
+            _stext(ax, p73x, p73y, fp % stress[0, mcol],
                   ha='right', va='top', fs=fontsize)
-            _text(ax, p73x, p73y, fp % stress[0, 9 - mcol - 0],
+            _stext(ax, p73x, p73y, fp % stress[0, 9 - mcol - 0],
                   ha='left', va='baseline', fs=fontsize)
-            _text(ax, p37x, p37y, fp % stress[2, mcol],
+            _stext(ax, p37x, p37y, fp % stress[2, mcol],
                   ha='right', va='top', fs=fontsize)
-            _text(ax, p37x, p37y, fp % stress[2, 9 - mcol - 0],
+            _stext(ax, p37x, p37y, fp % stress[2, 9 - mcol - 0],
                   ha='left', va='baseline', fs=fontsize)
         if 'Q' in comp:
-            _text(ax, mid_x, mid_y, fp % stress[1, qcol],
+            _stext(ax, mid_x, mid_y, fp % stress[1, qcol],
                   ha='left', va='middle', fs=fontsize)
         if 'N' in comp:
             ha_n = 'right' if mcol == 4 else 'left'
-            _text(ax, mid_x, mid_y, fp % stress[1, 0],
+            _stext(ax, mid_x, mid_y, fp % stress[1, 0],
                   ha=ha_n, va='middle', fs=fontsize)
         if 'M' in comp and mscale > 0:
             _kline(ax, [nodeM[ni, a1], nodeM[ni, a1]],
@@ -1041,13 +1070,13 @@ def _uni_beam_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
     if angle[0] == 1:
         if (0 <= beta < 45) or (135 < beta < 225) or (315 < beta <= 360):
             if 'M' in comp:
-                _text(ax, mid_x, mid_y,
-                      fp % _maxabs(stress[0:3, 4]) + '|'
+                _stext(ax, mid_x, mid_y,
+                      fp % _maxabs(stress[0:3, 4]) + '｜'
                       + fp % _maxabs(stress[0:3, 5]),
                       ha='center', va='bottom', fs=fontsize, rot=rotd)
             if ('Q' in comp) or ('N' in comp):
-                _text(ax, mid_x, mid_y,
-                      fp % _maxabs(stress[0:3, 2]) + '|'
+                _stext(ax, mid_x, mid_y,
+                      fp % _maxabs(stress[0:3, 2]) + '｜'
                       + fp % _maxabs(stress[0:3, 0]),
                       ha='center', va='cap', fs=fontsize, rot=rotd)
             if 'M' in comp and mscale > 0:
@@ -1066,12 +1095,12 @@ def _uni_beam_maxstress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
                      nodeM[nj, a2] - stress[2, 4] * trig * mscale])
         elif (45 < beta < 135) or (225 < beta < 315):
             if 'M' in comp:
-                _text(ax, mid_x, mid_y,
+                _stext(ax, mid_x, mid_y,
                       fp % _maxabs(stress[0:3, 5])
                       + fp % _maxabs(stress[0:3, 4]),
                       ha='center', va='bottom', fs=fontsize, rot=rotd)
             if ('Q' in comp) or ('N' in comp):
-                _text(ax, mid_x, mid_y,
+                _stext(ax, mid_x, mid_y,
                       fp % _maxabs(stress[0:3, 1])
                       + fp % _maxabs(stress[0:3, 0]),
                       ha='center', va='cap', fs=fontsize, rot=rotd)
@@ -1106,12 +1135,12 @@ def _uni_beam_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
     if angle[0] == 1:
         if (0 <= beta < 45) or (135 < beta < 225) or (315 < beta <= 360):
             if 'M' in comp:
-                _text(ax, mid_x, mid_y,
+                _stext(ax, mid_x, mid_y,
                       fp % stress[0, 4] + '｜' + fp % stress[1, 4]
                       + '｜' + fp % stress[2, 4],
                       ha='center', va='bottom', fs=fontsize, rot=rotd)
             if ('Q' in comp) or ('N' in comp):
-                _text(ax, mid_x, mid_y,
+                _stext(ax, mid_x, mid_y,
                       fp % stress[0, 2] + '｜' + fp % _maxabs(stress[0:3, 0])
                       + '｜' + fp % _maxabs(stress[0:3, 5])
                       + '｜' + fp % stress[2, 2],
@@ -1132,12 +1161,12 @@ def _uni_beam_stress_plot(ax, stress, ni, nj, nodeM, axis_cols, angle,
                      nodeM[nj, a2] - stress[2, 4] * trig * mscale])
         elif (45 < beta < 135) or (225 < beta < 315):
             if 'M' in comp:
-                _text(ax, mid_x, mid_y,
+                _stext(ax, mid_x, mid_y,
                       fp % stress[0, 5] + '｜' + fp % stress[1, 5]
                       + '｜' + fp % stress[2, 5],
                       ha='center', va='bottom', fs=fontsize, rot=rotd)
             if ('Q' in comp) or ('N' in comp):
-                _text(ax, mid_x, mid_y,
+                _stext(ax, mid_x, mid_y,
                       fp % stress[0, 1] + '｜' + fp % _maxabs(stress[0:3, 0])
                       + '｜' + fp % _maxabs(stress[0:3, 4])
                       + '｜' + fp % stress[2, 1],
@@ -1338,6 +1367,21 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
     axis_elems = C['axis_element_sel'][i_axis]
     axis_nodes = C['axis_node_sel'][i_axis]
 
+    # 各応力ファイル内でのケース位置 (ケース番号で対応付け)。該当ケースが
+    # 無いファイルは -1 とし、そのデータ種別の応力注記をスキップする
+    # (原典は結合リストの位置 i_load を全ファイルに流用しており、ケース
+    #  構成がファイル間で異なると表示ずれ・IndexError になるため変更)
+    def _src_iload(case_list):
+        if np.size(case_list) == 0:
+            return -1
+        return int(find_index(np.asarray(case_list, dtype=float).ravel(),
+                              float(case_no)))
+    il_beam = _src_iload(C['load_case_no_beam'])
+    il_truss = _src_iload(C['load_case_no_truss'])
+    il_plate = _src_iload(C['load_case_no_plate'])
+    il_wall = _src_iload(C['load_case_no_wall'])
+    il_reaction = _src_iload(C['load_case_no_reaction'])
+
     # 節点を構面方向に投影: nodeM = [no, s, t, Z]
     nodeM = _project_nodes(node, direction)
 
@@ -1355,11 +1399,11 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
     if np.size(reaction) > 0:
         support_index = np.atleast_1d(find_index(reaction[:, 0], axis_nodes))
         support_index = support_index[support_index >= 0]
-        if support_index.size > 0 and i_load < len(lci_reaction):
+        if support_index.size > 0 and il_reaction >= 0:
             reac_nod_index = np.atleast_1d(
                 find_index(nodeM[:, 0], reaction[support_index, 0]))
             for k in range(support_index.size):
-                row = int(support_index[k] + lci_reaction[i_load])
+                row = int(support_index[k] + lci_reaction[il_reaction])
                 v1 = reaction[row, 4]
                 v2 = (reaction[row, 2] * direction[0]
                       + reaction[row, 3] * direction[1])
@@ -1414,9 +1458,11 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
 
             c_b = (column_beam_judge_one(row, element, nodeM),
                    element[row, 5])
+            if il_beam < 0:
+                continue  # このケースがbeam_stressに無ければ注記なし
             srow = stress_row[i_e]
-            plot_s = beam_stress[srow + lci_beam[i_load]:
-                                 srow + lci_beam[i_load] + 3, 2:8]
+            plot_s = beam_stress[srow + lci_beam[il_beam]:
+                                 srow + lci_beam[il_beam] + 3, 2:8]
 
             ele_no = element[row, 0]
             ele_judge_length = float(np.linalg.norm(
@@ -1462,8 +1508,10 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
                         [nodeM[ni, 3] * 0.85 + nodeM[nj, 3] * 0.15,
                          nodeM[ni, 3] * 0.15 + nodeM[nj, 3] * 0.85],
                         'ko-', markersize=1.5, linewidth=0.2)
+                if il_truss < 0:
+                    continue  # このケースがtruss_stressに無ければ注記なし
                 srow = stress_row[i_e]
-                plot_s = truss_stress[srow + lci_truss[i_load], 2:4]
+                plot_s = truss_stress[srow + lci_truss[il_truss], 2:4]
                 _truss_stress_plot(ax, plot_s, ni, nj, nodeM, stress_fs,
                                    dot[2], comp)
 
@@ -1477,10 +1525,12 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
             else:
                 node34 = 4
             _plate_plot(ax, plate_no, plate, nodeM, int(3 - judge_axis), 3)
-            p0 = find_index(plate_stress[:, 0], plate_no)
-            plot_s = plate_stress[p0 + lci_plate[i_load]:
-                                  p0 + lci_plate[i_load] + node34, 3]
-            _plate_stress_plot(ax, plot_s, node4_no, nodeM, stress_fs, dot[2])
+            if il_plate >= 0:  # このケースがplate_stressに無ければ注記なし
+                p0 = find_index(plate_stress[:, 0], plate_no)
+                plot_s = plate_stress[p0 + lci_plate[il_plate]:
+                                      p0 + lci_plate[il_plate] + node34, 3]
+                _plate_stress_plot(ax, plot_s, node4_no, nodeM,
+                                   stress_fs, dot[2])
 
         elif et == 0:  # 図形ラインのみプロット
             try:
@@ -1500,10 +1550,11 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
         found = fidx >= 0
         if np.all(found):
             if select_unit == 0:
-                _unit_plot(ax, unit[1], unit[2], element, nodeM,
-                           beam_stress, (1, 3), mscale, limit_sec_no,
-                           i_load, lci_beam, stress_fs, dot, select13,
-                           mini_length, direction, comp)
+                if il_beam >= 0:
+                    _unit_plot(ax, unit[1], unit[2], element, nodeM,
+                               beam_stress, (1, 3), mscale, limit_sec_no,
+                               il_beam, lci_beam, stress_fs, dot, select13,
+                               mini_length, direction, comp)
                 axis_ysubtick = _unit_add_ysub(
                     axis_ysubtick, unit[1], unit[2], element, nodeM,
                     limit_sec_no)
@@ -1514,11 +1565,11 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
 
     # %%%%%% 壁要素のplot %%%%%%
     if on_axis_wall_index.size > 0 and np.size(wall_stress_ID) > 0 \
-            and i_load < len(lci_wall):
-        if i_load == len(lci_wall) - 1:
-            cut = np.arange(lci_wall[i_load], wall_stress_ID.shape[0])
+            and il_wall >= 0:
+        if il_wall == len(lci_wall) - 1:
+            cut = np.arange(lci_wall[il_wall], wall_stress_ID.shape[0])
         else:
-            cut = np.arange(lci_wall[i_load], lci_wall[i_load + 1])
+            cut = np.arange(lci_wall[il_wall], lci_wall[il_wall + 1])
         current_ID = wall_stress_ID[cut, :]
         widx = np.atleast_1d(find_index(wall_base[:, 0], on_axis_wall_ID))
         for wi in widx:
@@ -1532,11 +1583,11 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
                             '壁応力IDが重複しています (MATLAB: stop)')
             if pick_ID:
                 j = pick_ID[0]
-                pick2 = j + lci_wall[i_load]
+                pick2 = j + lci_wall[il_wall]
                 _wallstress_plot(
                     ax, current_ID[[j], :],
                     wall_stress[2 * pick2: 2 * pick2 + 2, :],
-                    wall_element, nodeM, C['load_case_no_wall'][i_load],
+                    wall_element, nodeM, C['load_case_no_wall'][il_wall],
                     mscale / 10.0, stress_fs, dot[3])
 
     # %%%%%% 通り芯情報 %%%%%%
@@ -1615,9 +1666,9 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
 
     _finish_figure(fig, ax, title, C['axis_name_sel'][i_axis],
                    xlim, ylim, title_fs, C['paper_size'])
-    fig.savefig(out_path, format='pdf')
+    fw, fh = _save_fig_pdf_or_pgf(fig, out_path)
     plt.close(fig)
-    return out_path
+    return out_path, fw, fh
 
 
 # ---------------------------------------------------------------------------
@@ -1666,7 +1717,8 @@ def plot_stress(mgt_path, beam_stress_path, out_dir,
                 axisname_location=3.0, line_location=2.0,
                 mergins=(5.0, 2.0, 5.0, 5.0), reactiondis=0.5,
                 fontsize=(4.0, 5.0, 6.0, 8.0, 5.0),
-                paper_size=3, cross_axis=1, cross_height=None):
+                paper_size=3, cross_axis=1, cross_height=None,
+                fig_format='pdf'):
     """MIDAS mgt+応力txtから通り芯(鉛直構面)別の法定応力図PDFを作成する.
 
     Parameters
@@ -1878,7 +1930,11 @@ def plot_stress(mgt_path, beam_stress_path, out_dir,
              wall_stress_ID=wall_stress_ID, reaction=reaction,
              lci_beam=lci_beam, lci_truss=lci_truss, lci_plate=lci_plate,
              lci_wall=lci_wall, lci_reaction=lci_reaction,
+             load_case_no_beam=load_case_no_beam,
+             load_case_no_truss=load_case_no_truss,
+             load_case_no_plate=load_case_no_plate,
              load_case_no_wall=load_case_no_wall,
+             load_case_no_reaction=load_case_no_reaction,
              unit_element=unit_element, uniele_ID=uniele_ID,
              components=comp, select13=tuple(select13),
              select_unit=select_unit, mini_length=mini_length,
@@ -1896,6 +1952,8 @@ def plot_stress(mgt_path, beam_stress_path, out_dir,
              h_axis_plot=h_axis_plot)
 
     made = []
+    meta = []
+    tex_tmp = None
     fig_no = 100
     for case in sel_cases:
         i_load = int(find_index(load_case_no, case))
@@ -1917,13 +1975,32 @@ def plot_stress(mgt_path, beam_stress_path, out_dir,
                 print('WARNING: 構面 %s は通り芯を近似できないため'
                       'スキップします' % axis_name_sel[i_axis])
                 continue
-            out = os.path.join(
-                out_dir, 'stress_%d_%s_%s.pdf'
-                % (fig_no, _safe_name(case_name),
-                   _safe_name(axis_name_sel[i_axis])))
-            made.append(_figure_stress_axis(
-                C, i_axis, i_load, title_case_no, case_name, t_plot, out))
+            if str(fig_format) == 'tex':
+                # 個別図は一時フォルダに作る (出力先には一式のみ残す)
+                if tex_tmp is None:
+                    tex_tmp = tempfile.mkdtemp(prefix='mgtkit_pgf_')
+                out = os.path.join(tex_tmp, 'stressfig%d.tex' % fig_no)
+            else:
+                out = os.path.join(
+                    out_dir, 'stress_%d_%s_%s.pdf'
+                    % (fig_no, _safe_name(case_name),
+                       _safe_name(axis_name_sel[i_axis])))
+            out2, fw, fh = _figure_stress_axis(
+                C, i_axis, i_load, title_case_no, case_name, t_plot, out)
+            made.append(out2)
+            meta.append(('荷重ケース %s / 構面 %s'
+                         % (str(case_name).strip(),
+                            space_erace(axis_name_sel[i_axis])), fw, fh))
             fig_no += 1
+
+    # TeX出力時は全図をまとめた一式ファイル 09stressplot.tex のみ出力する
+    # (1図1ページ・自己完結。詳細は draw_model._write_pgf_bundle)
+    if str(fig_format) == 'tex' and made:
+        combined = os.path.join(out_dir, '09stressplot.tex')
+        _write_pgf_bundle(combined, made, meta, 'mgtkitstressbox')
+        made = [combined]
+    if tex_tmp is not None:
+        shutil.rmtree(tex_tmp, ignore_errors=True)
 
     return made
 

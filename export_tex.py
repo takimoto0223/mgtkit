@@ -655,13 +655,38 @@ _DETAIL_TEX_PREAMBLE = r"""\documentclass[a4j,9pt,twocolumn,oneside,notitlepage,
 """
 
 
+def _jbox_line(line):
+    """行内の項目 (全角スペース区切り) を \\mbox で括る.
+
+    pTeXは和文中の任意の文字間で改行できるため、長い行が項目の途中で
+    折り返されて読みにくい。項目単位を \\mbox で不可分にし、改行位置を
+    全角スペースの位置に限定する (原典PDFの見た目の踏襲)。
+    """
+    s = str(line)
+    parts = s.split('\u3000')
+    if len([q for q in parts if q.strip()]) <= 1:
+        return s
+    return '\u3000'.join((r'\mbox{%s}' % q) if q.strip() else q
+                         for q in parts)
+
+
+def _hd_escape(s):
+    """ヘッダ用の軽量TeXエスケープ (ケース名の _ % & # のみ)."""
+    out = str(s)
+    for ch in ('_', '%', '&', '#'):
+        out = out.replace(ch, '\\' + ch)
+    # '--' はリガチャでエンダッシュになるため分離 (例: G+P--KX)
+    out = out.replace('--', '-{}-')
+    return out
+
+
 def export_ratio_detail_tex(result, out_dir, mode='all', extra_rows=None):
     r"""ratio_detail_tex.m の移植 (検定詳細文のTeXソース出力).
 
-    各断面の最大検定値の検定詳細文 (maxratios_text) を、検定ケースごとの
-    10detail_matlabN.tex へ出力する (各行のあとに \par、断面ごとに
-    \newpage)。あわせて \rhead にケース名を入れた本体 10detail.tex も
-    生成する (ユーザーの既存文書 10detail.tex と同じプリアンブル)。
+    各断面の最大検定値の検定詳細文 (maxratios_text) を、本文へ
+    \input{10detail.tex} で組込める自己完結の1ファイルへ出力する
+    (各行のあとに \par、断面ごとに \newpage、ケースごとに見出し+改ページ。
+    ファイル内で \twocolumn と \tiny に切替え、終端で戻す)。
 
     mode='all' : 全検定ケース (原典「全荷重ケース」)
     mode='pick': 1=長期(ケース1) / 2=短期ケースのうち断面別最大検定値の
@@ -703,33 +728,66 @@ def export_ratio_detail_tex(result, out_dir, mode='all', extra_rows=None):
         columns = list(texts) + [row['texts'] for row in (extra_rows or [])]
         heads = case_names
 
-    made = []
     ncol = len(heads)
+    # 本文へ \input で組込む自己完結の1ファイル (単体コンパイル方式を廃止)
+    L = []
+    L.append('% mgtkit 検定詳細 (ratio_detail_tex.m 相当)')
+    L.append('% 本文へ \\input{10detail.tex} で組込む自己完結ファイル')
+    L.append('% (ファイル内で二段組+縮小文字に切替え、全ページ右上に')
+    L.append('%  検定ケース名を表示。終端でヘッダ/フッタとも元に戻します。')
+    L.append('%  数式に \\usepackage{amsmath,amssymb} が必要)')
+    L.append(r'\clearpage')
+    L.append(r'% 現在のヘッダ/フッタを退避し、右上にケース名 (\rightmark)')
+    L.append(r'\makeatletter')
+    L.append(r'\let\mgtkitDTLoh\@oddhead \let\mgtkitDTLeh\@evenhead')
+    L.append(r'\let\mgtkitDTLof\@oddfoot \let\mgtkitDTLef\@evenfoot')
+    L.append(r'\def\@oddhead{\hfil{\small\rightmark}}')
+    L.append(r'\def\@evenhead{\hfil{\small\rightmark}}')
+    L.append(r'\def\@oddfoot{}\def\@evenfoot{}')
+    L.append(r'\makeatother')
+    L.append(r'% 検定詳細の間だけ本文幅を50pt広げて項目の折返しを減らし、')
+    L.append(r'% 広げたブロックを紙面の左右中央に置く (文書の余白設定に')
+    L.append(r'% よらない。終端で元の幅・余白に復元)')
+    L.append(r'\ifdefined\mgtkitDTLtw\else\newdimen\mgtkitDTLtw\fi')
+    L.append(r'\ifdefined\mgtkitDTLom\else\newdimen\mgtkitDTLom\fi')
+    L.append(r'\ifdefined\mgtkitDTLem\else\newdimen\mgtkitDTLem\fi')
+    L.append(r'\mgtkitDTLtw=\textwidth')
+    L.append(r'\mgtkitDTLom=\oddsidemargin')
+    L.append(r'\mgtkitDTLem=\evensidemargin')
+    L.append(r'\advance\textwidth 50pt')
+    L.append(r'\oddsidemargin=\paperwidth')
+    L.append(r'\advance\oddsidemargin -\textwidth')
+    L.append(r'\divide\oddsidemargin 2')
+    L.append(r'\advance\oddsidemargin -1truein')
+    L.append(r'\advance\oddsidemargin -\hoffset')
+    L.append(r'\evensidemargin=\oddsidemargin')
+    L.append(r'\twocolumn')
+    # RC詳細 (最長101行+折返し) が1部材=1段 (半ページ) に収まる最大サイズ
+    # (実測: 段幅245pt×段高781ptで最長部材736pt。\scriptsizeでは800ptで溢れる)
+    L.append(r'\fontsize{6pt}{6.8pt}\selectfont')
     for i in range(ncol):
-        out_path = os.path.join(out_dir, '10detail_matlab%d.tex' % (i + 1))
-        with open(out_path, 'w', encoding='utf-8',
-                  newline='\n') as fid:
-            for j in range(len(columns)):
-                txt = columns[j][i] if i < len(columns[j]) else []
-                if txt is None or len(txt) == 0:
-                    continue
-                for line in txt:
-                    fid.write('%s\n' % str(line))
-                    fid.write('\\par\n')
-                fid.write('\\newpage\n')
-        made.append(out_path)
-
-    # 本体 (ラッパー) 10detail.tex
-    wrapper = os.path.join(out_dir, '10detail.tex')
-    with open(wrapper, 'w', encoding='utf-8',
-              newline='\n') as fid:
-        fid.write(_DETAIL_TEX_PREAMBLE)
-        for i in range(ncol):
-            fid.write('\n\\rhead{\\small{%s}}\n' % heads[i])
-            if i == 0:
-                fid.write('\\tiny\n')
-            fid.write('\\input{10detail_matlab%d}\n' % (i + 1))
-            fid.write('\n\\clearpage\n')
-        fid.write('\n\\end{document}\n')
-    made.append(wrapper)
-    return made
+        L.append('')
+        L.append(r'\markright{%s}' % _hd_escape(heads[i]))
+        for j in range(len(columns)):
+            txt = columns[j][i] if i < len(columns[j]) else []
+            if txt is None or len(txt) == 0:
+                continue
+            for line in txt:
+                L.append(_jbox_line(line))
+                L.append(r'\par')
+            L.append(r'\newpage')
+        L.append(r'\clearpage')
+    L.append(r'\textwidth=\mgtkitDTLtw')
+    L.append(r'\oddsidemargin=\mgtkitDTLom')
+    L.append(r'\evensidemargin=\mgtkitDTLem')
+    L.append(r'\onecolumn')
+    L.append(r'% 退避したヘッダ/フッタを復元')
+    L.append(r'\makeatletter')
+    L.append(r'\let\@oddhead\mgtkitDTLoh \let\@evenhead\mgtkitDTLeh')
+    L.append(r'\let\@oddfoot\mgtkitDTLof \let\@evenfoot\mgtkitDTLef')
+    L.append(r'\makeatother')
+    L.append(r'\normalsize')
+    out_path = os.path.join(out_dir, '10detail.tex')
+    with open(out_path, 'w', encoding='utf-8', newline='\n') as fid:
+        fid.write('\n'.join(L) + '\n')
+    return [out_path]

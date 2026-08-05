@@ -588,7 +588,8 @@ def api_plot_model():
                 mergins=(float(p.get('mg_l', 5.0)),
                          float(p.get('mg_r', 2.0)),
                          float(p.get('mg_t', 5.0)),
-                         float(p.get('mg_b', 5.0))))
+                         float(p.get('mg_b', 5.0))),
+                fig_format=str(p.get('fig_format') or 'pdf'))
         if not pdfs:
             return jsonify({'error': '出力対象の図がありません。図種(断面符号'
                             '図等)のチェックと構面選択を確認してください。',
@@ -638,6 +639,11 @@ def api_plot_stress():
         err = _check_input_file(truss_path, 'truss_stressファイル')
         if err:
             return jsonify({'error': err}), 400
+    plate_path = (p.get('plate_stress_path') or '').strip() or None
+    if plate_path:
+        err = _check_input_file(plate_path, 'plate_stressファイル')
+        if err:
+            return jsonify({'error': err}), 400
     axes = p.get('axes') or None
     cases = p.get('cases') or None
     comps = p.get('components') or ['N', 'M', 'Q']
@@ -656,6 +662,7 @@ def api_plot_stress():
             pdfs = plot_stress(
                 p['mgt_path'], p['beam_stress_path'], out_dir,
                 truss_stress_path=truss_path,
+                plate_stress_path=plate_path,
                 axes_select=axes,
                 heights_select=_parse_heights(p),
                 load_case_names=cnames,
@@ -678,7 +685,8 @@ def api_plot_stress():
                 mergins=(float(p.get('mg_l', 5.0)),
                          float(p.get('mg_r', 2.0)),
                          float(p.get('mg_t', 5.0)),
-                         float(p.get('mg_b', 5.0))))
+                         float(p.get('mg_b', 5.0))),
+                fig_format=str(p.get('fig_format') or 'pdf'))
         if not pdfs:
             return jsonify({'error': '出力対象の図がありません。構面・荷重'
                             'ケースの選択を確認してください。',
@@ -2074,10 +2082,6 @@ def api_ratio_table_tex():
             '検定結果がありません (または検定条件・入力ファイルが変更されて'
             'います)。先に「検定実行」を行ってから生成してください。'}), 400
     result = _CHECK_CACHE['result']
-    axes = p.get('axes') or []
-    if not axes:
-        return jsonify({'error': '構面(鉛直構面)を1つ以上選択して'
-                                 'ください。'}), 400
     try:
         from mgtkit.draw_ratio import export_ratio_tex
         notes = []
@@ -2091,7 +2095,7 @@ def api_ratio_table_tex():
                 p['mgt_path'], out_dir,
                 result.beam_ratio, result.truss_ratio,
                 [str(n) for n in result.LCNAME],
-                cases_select=cases, axes_select=axes,
+                cases_select=cases, axes_select=None,
                 select_unit=(0.0 if fig_unit else float('inf')),
                 limit_sec_no=float(p.get('limit_sec_no', 9000)))
         return jsonify({'files': [{'name': os.path.basename(f),

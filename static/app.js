@@ -16,7 +16,7 @@ document.querySelectorAll('nav button').forEach(b => {
 const SYNC_GROUPS = [
   ['beam_stress_path', 'c_beam_stress_path', 'q_beam_stress_path'],
   ['truss_stress_path', 'c_truss_stress_path', 'q_truss_stress_path'],
-  ['c_plate_stress_path', 'q_plate_stress_path'],
+  ['plate_stress_path', 'c_plate_stress_path', 'q_plate_stress_path'],
   ['c_wall_stress_path', 'q_wall_stress_path'],
 ];
 function syncPathGroup(srcId, val) {
@@ -34,6 +34,7 @@ function syncPathGroup(srcId, val) {
 }
 
 ['mgt_path', 'mgt_out_base', 'beam_stress_path', 'truss_stress_path',
+ 'plate_stress_path',
  'c_beam_stress_path', 'c_truss_stress_path', 'c_plate_stress_path',
  'c_wall_stress_path', 'c_pc_stress_path', 'c_pc_cable_path',
  'c_pc_slab_path', 'q_beam_stress_path', 'q_truss_stress_path',
@@ -71,6 +72,7 @@ async function api(url, body) {
     // アップロードmgt使用時の出力先自動推定用に、UIの全パス欄の値を添付
     if (body && typeof body === 'object' && !('path_hints' in body)) {
       body.path_hints = ['beam_stress_path', 'truss_stress_path',
+        'plate_stress_path',
         'c_beam_stress_path', 'c_truss_stress_path', 'c_plate_stress_path',
         'c_wall_stress_path', 'c_pc_stress_path', 'c_pc_cable_path',
         'c_pc_slab_path', 'q_beam_stress_path', 'q_truss_stress_path',
@@ -456,11 +458,24 @@ async function runPlotModel() {
       mg_l: +$('m_mg_l').value,
       mg_r: +$('m_mg_r').value,
       mg_t: +$('m_mg_t').value,
-      mg_b: +$('m_mg_b').value});
-    setMsg('model_msg', 'PDF ' + j.pdfs.length + ' 件を生成しました → ' +
-           esc(j.out_dir) + openFolderBtn(j.out_dir), 'msg-ok');
+      mg_b: +$('m_mg_b').value,
+      fig_format: $('m_format').value});
+    const mTex = $('m_format').value === 'tex';
+    setMsg('model_msg', (mTex ? 'TeX図 ' : 'PDF ') + j.pdfs.length +
+           ' 件を生成しました → ' + esc(j.out_dir) +
+           openFolderBtn(j.out_dir), 'msg-ok');
     $('model_msg').innerHTML += notesHtml(j.notes);
-    $('model_pdfs').innerHTML = pdfListHtml(j.pdfs, 'model');
+    if (mTex) {
+      $('model_pdfs').innerHTML = '<div class="pdfblock">' +
+        j.pdfs.map(f => '<div><b>' + esc(f.name) + '</b>' +
+          '<a class="dl" href="' + f.url + '&dl=1">ダウンロード</a></div>'
+        ).join('') +
+        '<div class="hint">09modelplot.tex は自己完結の1ファイルです。' +
+        '計算書フォルダへコピーして \\input{09modelplot.tex} で全図が' +
+        '入ります (要 \\usepackage{pgf})</div></div>';
+    } else {
+      $('model_pdfs').innerHTML = pdfListHtml(j.pdfs, 'model');
+    }
   } catch (e) { setMsg('model_msg', esc(e.message), 'msg-err'); }
 }
 
@@ -494,6 +509,7 @@ async function runPlotStress() {
       mgt_path: $('mgt_path').value,
       beam_stress_path: $('beam_stress_path').value,
       truss_stress_path: $('truss_stress_path').value,
+      plate_stress_path: $('plate_stress_path').value,
       case_names: caseNames,
       axes: checkedVals('stgroup'),
       heights: selectedHeights('shlevel'),
@@ -514,11 +530,25 @@ async function runPlotStress() {
       mg_l: +$('s_mg_l').value,
       mg_r: +$('s_mg_r').value,
       mg_t: +$('s_mg_t').value,
-      mg_b: +$('s_mg_b').value});
-    setMsg('stress_msg', 'PDF ' + j.pdfs.length + ' 件を生成しました → ' +
-           esc(j.out_dir) + openFolderBtn(j.out_dir), 'msg-ok');
+      mg_b: +$('s_mg_b').value,
+      fig_format: $('s_format').value});
+    const sTex = $('s_format').value === 'tex';
+    setMsg('stress_msg', (sTex ? 'TeX図 ' : 'PDF ') + j.pdfs.length +
+           ' 件を生成しました → ' + esc(j.out_dir) +
+           openFolderBtn(j.out_dir), 'msg-ok');
     $('stress_msg').innerHTML += notesHtml(j.notes);
-    $('stress_pdfs').innerHTML = pdfListHtml(j.pdfs, 'stress');
+    if (sTex) {
+      $('stress_pdfs').innerHTML = '<div class="pdfblock">' +
+        j.pdfs.map((f, i) => '<div>' + (i === 0 ? '<b>一式: ' : '') +
+          esc(f.name) + (i === 0 ? '</b>' : '') +
+          '<a class="dl" href="' + f.url + '&dl=1">ダウンロード</a></div>'
+        ).join('') +
+        '<div class="hint">09stressplot.tex は自己完結の1ファイルです。' +
+        '計算書フォルダへコピーして \\input{09stressplot.tex} で全図が' +
+        '入ります (要 \\usepackage{pgf})</div></div>';
+    } else {
+      $('stress_pdfs').innerHTML = pdfListHtml(j.pdfs, 'stress');
+    }
   } catch (e) { setMsg('stress_msg', esc(e.message), 'msg-err'); }
 }
 
@@ -1471,33 +1501,27 @@ async function runCheck() {
     const j = await api('/api/steel_check', req);
     CHECK = j;
     renderCheck(j);
-  } catch (e) { setMsg('check_msg', esc(e.message), 'msg-err'); }
+  } catch (e) { setMsg('check_msg', esc(e.message), 'msg-err'); return; }
+  // 検定値一覧表と検定詳細のTeXも続けて自動生成 (失敗しても検定結果は残す)
+  await runRatioTex();
+  await runDetailTex();
 }
 
 // ---------------- 検定詳細TeX (10detail) ----------------
 async function runDetailTex() {
-  setMsg('dtex_msg', '', ''); $('dtex_out').innerHTML = '';
+  if (!CHECK || !$('ctex_detail')) return;
+  $('ctex_detail').innerHTML = '検定詳細を生成中…';
   try {
-    if (!CHECK) {
-      await runCheck();
-      if (!CHECK) {
-        setMsg('dtex_msg',
-               '検定が完了していません (検定実行のエラーを確認してください)',
-               'msg-err');
-        return;
-      }
-    }
     const req = buildCheckReq();
-    req.mode = $('dtex_mode').value;
+    req.mode = $('dtex_mode') ? $('dtex_mode').value : 'all';
     const j = await api('/api/ratio_detail_tex', req);
-    setMsg('dtex_msg', 'TeX ' + j.files.length + ' 件を生成しました → ' +
-           esc(j.out_dir) + openFolderBtn(j.out_dir), 'msg-ok');
-    $('dtex_msg').innerHTML += notesHtml(j.notes);
-    $('dtex_out').innerHTML = j.files.map(f =>
-      '<div class="pdfblock"><b>' + esc(f.name) + '</b>' +
-      '<a class="dl" href="' + f.url + '&dl=1">ダウンロード</a></div>'
-      ).join('');
-  } catch (e) { setMsg('dtex_msg', esc(e.message), 'msg-err'); }
+    $('ctex_detail').innerHTML = '検定詳細 ' + j.files.map(f =>
+      '<a class="dl" href="' + f.url + '&dl=1">' + esc(f.name) + '</a>'
+      ).join(' ');
+  } catch (e) {
+    $('ctex_detail').innerHTML = '<span class="msg-err">検定詳細: ' +
+      esc(e.message) + '</span>';
+  }
 }
 
 // ---------------- 検定比図 ----------------
@@ -1545,10 +1569,10 @@ async function runPlotRatio() {
           esc(f.name) + (i === 0 ? '</b>' : '') +
           '<a class="dl" href="' + f.url + '&dl=1">ダウンロード</a></div>'
         ).join('') +
-        '<div class="hint">計算書には先頭の一式ファイルを' +
-        ' \\input{...} するだけで全図が入ります (1図1ページ。' +
-        'プリアンブルに \\usepackage{pgf} が必要)。個別の図だけ' +
-        '使いたい場合は2つ目以降のファイルを使ってください</div></div>';
+        '<div class="hint">10ratioplot.tex は自己完結の1ファイルです。' +
+        'これだけを計算書のフォルダへコピーし、本文で' +
+        ' \\input{10ratioplot.tex} すると全図が入ります (1図1ページ。' +
+        'プリアンブルに \\usepackage{pgf} が必要)</div></div>';
     } else {
       $('ratio_pdfs').innerHTML = pdfListHtml(j.pdfs, 'ratio');
     }
@@ -1556,33 +1580,20 @@ async function runPlotRatio() {
 }
 
 async function runRatioTex() {
-  setMsg('ratio_msg', '', ''); $('ratio_tex_out').innerHTML = '';
+  if (!CHECK || !$('ctex_rtable')) return;
   try {
-    if (!CHECK) {
-      await runCheck();
-      if (!CHECK) {
-        setMsg('ratio_msg',
-               '検定が完了していません (検定実行のエラーを確認してください)',
-               'msg-err');
-        return;
-      }
-    }
     const req = buildCheckReq();
-    req.axes = checkedVals('rgroup');
     const cs = checkedVals('rcase').map(Number);
     req.cases = cs.length ? cs : null;
     req.fig_unit = $('r_unit').checked;
     const j = await api('/api/ratio_table_tex', req);
-    setMsg('ratio_msg', '検定比TeX ' + j.files.map(f =>
-           '<a class="dl" href="' + f.url + '&dl=1">' + esc(f.name) +
-           '</a>').join(' ') + ' を生成しました → ' + esc(j.out_dir) +
-           openFolderBtn(j.out_dir), 'msg-ok');
-    $('ratio_msg').innerHTML += notesHtml(j.notes);
-    if (j.tex_lines && j.tex_lines.length) {
-      $('ratio_tex_out').innerHTML = '<h3>検定比表 TeXソース</h3>' +
-        '<pre class="detailtext">' + esc(j.tex_lines.join('\n')) + '</pre>';
-    }
-  } catch (e) { setMsg('ratio_msg', esc(e.message), 'msg-err'); }
+    $('ctex_rtable').innerHTML = '検定値一覧表 ' + j.files.map(f =>
+      '<a class="dl" href="' + f.url + '&dl=1">' + esc(f.name) + '</a>'
+      ).join(' ');
+  } catch (e) {
+    $('ctex_rtable').innerHTML = '<span class="msg-err">検定値一覧表: ' +
+      esc(e.message) + '</span>';
+  }
 }
 
 function renderCheck(j) {
@@ -1602,6 +1613,18 @@ function renderCheck(j) {
     (j.plywood_csv ? '　<a href="' + j.plywood_csv.url + '">木合板検定 (' +
      esc(j.plywood_csv.name) + ')</a>' : '') +
     (j.out_dir ? openFolderBtn(j.out_dir) : '') + '</div>';
+  // 計算書TeX (10ratiotable.tex / 10detail.tex) のダウンロード行
+  // (検定実行後に runRatioTex / runDetailTex が中身を埋める)
+  h += '<div id="ctex_slot" class="msg-ok" style="margin-top:2px">' +
+    '計算書TeX:　<span id="ctex_rtable">検定値一覧表を生成中…</span>　' +
+    '<span id="ctex_detail">検定詳細を生成中…</span>　' +
+    '<label class="inline">検定詳細の出力ケース ' +
+    '<select id="dtex_mode" onchange="runDetailTex()">' +
+    '<option value="all" selected>全検定ケース</option>' +
+    '<option value="pick">長期＋短期最大の2つ</option></select></label>' +
+    '　<span class="hint">本文へ \\input{10ratiotable.tex} /' +
+    ' \\input{10detail.tex} で組込み (要 longtable,multirow,booktabs,' +
+    'array / amsmath,amssymb)</span></div>';
   h += notesHtml(j.notes);
 
   h += '<table class="res"><thead><tr><th></th><th>断面番号</th>' +
