@@ -27,3 +27,15 @@ mgtkit_out/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# テスト・ビルド
+.pytest_cache/
+build/
+dist/
+
+# ローカル設定・秘密情報
+.env
+*.db
+
+# テスト用フィクスチャは業務ファイル除外の例外として追跡する
+!tests/fixtures/**
