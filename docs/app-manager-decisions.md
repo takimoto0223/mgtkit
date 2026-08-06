@@ -66,6 +66,28 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
   - `MGTKIT_CHANNEL=beta` で画面上部にβ版バナーを表示
 - β版フィードバック → PR コメント投稿は仕様どおり Phase 6 で対応(Phase 2 は読み取り系のみ)。
 
+## Phase 3 の決定 (提出タブ)
+
+- 提出フローは UI 非依存の `manager/submit.py` に実装し、
+  「準備 (`prepare_submission`) → ユーザー確認 → 確定 (`finalize_submission`)」
+  の 2 段階に分割。削除ファイルの意図確認と警告承諾をこの境界で行う。
+- 基点特定は ZIP 同梱の version.json の commit SHA のみを使う (spec 1.4)。
+  無い/壊れている/履歴に無い場合は平易な日本語でエラー中断。
+- 差分計算は隠し作業クローン (`<install_root>/workrepo`) 上で行い、
+  比較は git blob ハッシュ (改行変換の影響なし)。**配布 ZIP に含まれない
+  開発用ファイル (tests/ docs/ scripts/ manager/ .github/ 等) は差分対象外**
+  とし、提出で削除・変更されない (release.yml の除外リストと同期)。
+- 安全チェック: 実行ファイル (.exe .bat .ps1 .sh 等) は即ブロック、
+  拡張子ホワイトリスト (config `manager.allowed_extensions`)、
+  サイズ/件数上限、簡易秘密情報スキャン (正規表現) は警告→確認の上続行可。
+  gitleaks 等の本格スキャンは Phase 4 の CI 側で実施。
+- コミットメッセージ (未入力時) と PR 本文は Anthropic API
+  (`manager.claude_model`、既定 claude-opus-5、キーは環境変数
+  ANTHROPIC_API_KEY) で自動生成。キー未設定・失敗時は定型文へ
+  フォールバックし、提出自体は Claude なしでも完結する。
+- 衝突時 (基点より main が先行し同一箇所が変更) の解決フローは
+  仕様どおり Phase 5 で実装する。
+
 ## リリース手順 (Phase 4 自動化までの暫定運用)
 
 - `.github/workflows/release.yml`(手動実行)で安定版/β版を Releases に登録する。

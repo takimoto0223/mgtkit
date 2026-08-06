@@ -15,9 +15,13 @@
     "port_beta": 8766
   },
   "manager": {
-    "_comment": "Phase 3 以降で使用する予定値。",
+    "_comment": "提出時の安全チェック上限と、コミットメッセージ/PR本文の自動生成に使う Claude モデル。",
     "auto_fix_max_attempts": 3,
     "max_upload_mb": 50,
-    "max_upload_files": 500
+    "max_upload_files": 500,
+    "allowed_extensions": [".py", ".md", ".txt", ".json", ".html", ".css",
+                           ".js", ".yml", ".yaml", ".cfg", ".ini", ".csv",
+                           ".dxf", ".toml"],
+    "claude_model": "claude-opus-5"
   }
 }

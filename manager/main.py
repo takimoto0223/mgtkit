@@ -4,12 +4,14 @@
 起動方法 (リポジトリルートで): python -m manager.main
 Git / GitHub の用語はユーザーに見せず、平易な日本語のみ表示する。
 """
+import asyncio
 import logging
 import threading
 
 import flet as ft
 
-from . import ghcli, launcher, paths, updater
+from . import ghcli, launcher, paths, submit, updater
+from .gitcli import GitError
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -241,22 +243,150 @@ def main(page: ft.Page):
         t3_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 
+    # ---------------- タブ4: 提出 ----------------
+
+    file_picker = ft.FilePicker()
+    page.services.append(file_picker)
+
+    t4_status = status_text()
+    t4_result = ft.Text('', size=14, selectable=True)
+    t4_commit_msg = ft.TextField(
+        label='変更内容のメモ (空欄なら自動で作成されます)',
+        multiline=True, min_lines=2, max_lines=4)
+    t4_submit_btn = ft.FilledButton('ZIP を選んで提出', icon=ft.Icons.UPLOAD,
+                                    bgcolor=NAVY, color='#ffffff')
+
+    def _submit_progress(msg):
+        t4_status.value = msg
+        page.update()
+
+    def _do_finalize(prep, deletions):
+        def work():
+            try:
+                result = submit.finalize_submission(
+                    prep, deletions, t4_commit_msg.value or '',
+                    config, on_progress=_submit_progress)
+                t4_status.value = ''
+                t4_result.value = (
+                    '提出しました。検証と承認が済むと配布されます。\n'
+                    '提出内容: %s' % result['pr_url'])
+                t4_commit_msg.value = ''
+            except (submit.SubmitError, ghcli.GhError, GitError) as e:
+                t4_status.value = str(e)
+            except Exception as e:
+                log.exception('finalize_submission failed')
+                t4_status.value = '提出に失敗しました: %s' % e
+            t4_submit_btn.disabled = False
+            page.update()
+        run_bg(work)
+
+    def _confirm_and_finalize(prep):
+        """削除ファイルの確認・警告表示ダイアログ → 確定."""
+        ch = prep['changes']
+        warnings = prep['safety']['warnings']
+        del_checks = [ft.Checkbox(label=rel, value=False)
+                      for rel in ch['deleted']]
+        items = [ft.Text('追加 %d 件 / 変更 %d 件のファイルを提出します。'
+                         % (len(ch['added']), len(ch['modified'])))]
+        if del_checks:
+            items.append(ft.Text(
+                '基点にあったのに ZIP に無いファイルがあります。'
+                '意図的に削除したものにチェックを入れてください '
+                '(チェックなし = 入れ忘れとして元のまま維持):',
+                size=13))
+            items.extend(del_checks)
+        for w in warnings:
+            items.append(ft.Text('⚠ %s' % w, size=13, color=AMBER))
+        if warnings:
+            items.append(ft.Text('警告を確認のうえ続行できます。', size=12,
+                                 color='#555555'))
+
+        def close(_):
+            page.pop_dialog()
+            submit.cleanup(prep)
+            t4_submit_btn.disabled = False
+            t4_status.value = '提出を取り消しました。'
+            page.update()
+
+        def proceed(_):
+            page.pop_dialog()
+            deletions = [c.label for c in del_checks if c.value]
+            _do_finalize(prep, deletions)
+
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text('提出内容の確認'),
+            content=ft.Column(items, tight=True, width=560,
+                              scroll=ft.ScrollMode.AUTO),
+            actions=[ft.TextButton('キャンセル', on_click=close),
+                     ft.FilledButton('提出する', on_click=proceed,
+                                     bgcolor=NAVY, color='#ffffff')]))
+
+    async def on_submit(_):
+        files = await file_picker.pick_files(
+            dialog_title='提出する ZIP を選択',
+            allowed_extensions=['zip'])
+        if not files or not files[0].path:
+            return
+        zip_path = files[0].path
+        t4_submit_btn.disabled = True
+        t4_result.value = ''
+        page.update()
+        try:
+            prep = await asyncio.to_thread(
+                submit.prepare_submission, zip_path, config,
+                None, _submit_progress)
+        except (submit.SubmitError, ghcli.GhError, GitError) as e:
+            t4_status.value = str(e)
+            t4_submit_btn.disabled = False
+            page.update()
+            return
+        except Exception as e:
+            log.exception('prepare_submission failed')
+            t4_status.value = '提出の準備に失敗しました: %s' % e
+            t4_submit_btn.disabled = False
+            page.update()
+            return
+        blockers = prep['safety']['blockers']
+        if blockers:
+            submit.cleanup(prep)
+            t4_status.value = '提出できません:\n- ' + '\n- '.join(blockers)
+            t4_submit_btn.disabled = False
+            page.update()
+            return
+        t4_status.value = ''
+        page.update()
+        _confirm_and_finalize(prep)
+
+    t4_submit_btn.on_click = on_submit
+    tab_submit = ft.Container(padding=24, content=ft.Column([
+        ft.Text('作業した mgtkit のフォルダを ZIP にして提出すると、'
+                '検証と承認ののち正式版として配布されます。'
+                'マネージャーで取得した版 (version.json 入り) を基に'
+                '作業してください。', size=13, color='#555555'),
+        t4_commit_msg,
+        t4_submit_btn,
+        t4_status,
+        t4_result,
+    ], spacing=16, scroll=ft.ScrollMode.AUTO))
+
     # ---------------- 組み立て ----------------
 
     page.add(
         header(),
         ft.Tabs(
-            length=3, selected_index=0, animation_duration=150, expand=True,
+            length=4, selected_index=0, animation_duration=150, expand=True,
             content=ft.Column([
                 ft.TabBar(tabs=[
                     ft.Tab(label='起動'),
                     ft.Tab(label='更新'),
                     ft.Tab(label='β版'),
+                    ft.Tab(label='提出'),
                 ]),
                 ft.TabBarView(expand=True, controls=[
                     tab_launch,
                     tab_update,
                     tab_beta,
+                    tab_submit,
                 ]),
             ], spacing=0, expand=True),
         ),

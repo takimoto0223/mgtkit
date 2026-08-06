@@ -21,6 +21,7 @@ class _FakePage:
         self.title = ''
         self.padding = None
         self.window = _FakeWindow()
+        self.services = []
         self.added = []
 
     def add(self, *controls):
