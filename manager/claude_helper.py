@@ -161,7 +161,7 @@ def generate_fix(failure_log, files):
 
 
 def generate_failure_summary(failure_log):
-    """3回失敗後の「Git を知らない人向け」3行要約 (spec 3.2)."""
+    """3回失敗後の「Git を知らない人向け」3行要約."""
     text = _generate(
         'CI の検証が自動修正でも直りませんでした。以下の失敗ログから、\n'
         'Git や CI を知らない構造設計者向けに「何が起きたか・どうすれば\n'
@@ -172,7 +172,7 @@ def generate_failure_summary(failure_log):
 
 
 def generate_release_notes(pr_title, pr_body, version):
-    """正式リリース時のリリースノートを PR 情報から生成する (spec 3.3)."""
+    """正式リリース時のリリースノートを PR 情報から生成する."""
     return _generate(
         '構造設計ツール mgtkit の正式版 %s のリリースノートを作成して'
         'ください。以下の提出内容(PR)のタイトルと本文をもとに、利用者'
@@ -182,7 +182,7 @@ def generate_release_notes(pr_title, pr_body, version):
 
 
 def generate_conflict_explanation(conflict_files):
-    """衝突箇所を「機能レベルの説明」に翻訳する (spec 2.2 衝突フロー).
+    """衝突箇所を「機能レベルの説明」に翻訳する.
 
     conflict_files: {path: 衝突マーカー付きの内容}
     """

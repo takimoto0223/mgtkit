@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """config.json の読み込みとインストール先パスの解決.
 
-配置方針 (docs/app-manager-spec.md):
+配置方針 (docs/app-manager-decisions.md):
   安定版: <install_root>/stable/           (port: config app.port_stable)
   β版  : <install_root>/beta/<version>/   (port: config app.port_beta)
 install_root は Windows では %LOCALAPPDATA%/mgtkit、それ以外 (開発環境) では

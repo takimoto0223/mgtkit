@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""検証 (CI) 失敗時の自動修正ループ (spec 3.2 のマネージャー側実装).
+"""検証 (CI) 失敗時の自動修正ループ (マネージャー側で実行).
 
 管理者キーを GitHub に置かず「提出者本人の API キー」で修正を行うため、
 自動修正は GitHub Actions ではなくマネージャー上で実行する:
@@ -8,7 +8,7 @@
     → push → 再検証 ... (最大 config の auto_fix_max_attempts 回)
     → それでも失敗なら平易な3行要約を PR コメントに投稿
 
-ガード (spec 3.2 必須4点):
+ガード:
   1. tests/ 配下の変更・削除は禁止 (プロンプト + 適用時の二重チェック。
      さらに CI 側でも [auto-fix] commit の tests/ diff を検査)
   2. 修正 commit は [auto-fix] プレフィックス必須
@@ -252,7 +252,7 @@ def autofix_loop(pr_number, config=None, on_progress=None):
             return {'ok': True, 'attempts': attempt,
                     'message': '自動修正により検証を通過しました。'}
 
-    # 上限到達: 平易な要約を PR コメントに投稿 (spec 3.2)
+    # 上限到達: 平易な要約を PR コメントに投稿
     progress('自動修正の上限に達しました。要約を作成しています...')
     summary = claude_helper.generate_failure_summary(last_log)
     body = ('検証を通過できませんでした (自動修正 %d 回実施)。\n\n%s\n\n'

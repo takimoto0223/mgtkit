@@ -332,7 +332,7 @@ def main(page: ft.Page):
         items = [ft.Text('追加 %d 件 / 変更 %d 件のファイルを提出します。'
                          % (len(ch['added']), len(ch['modified'])))]
         if my_prs:
-            # 差し戻し後の修正版は同一の提出に積める (spec 2.2)
+            # 差し戻し後の修正版は同一の提出に積める
             options = [ft.DropdownOption(key='', text='新しい提出として出す')]
             options += [ft.DropdownOption(
                 key=p['branch'], text='#%d に修正版として積む (%s)'

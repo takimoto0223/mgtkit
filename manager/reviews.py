@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""承認タブの中核ロジック (spec 2.2 タブ5、UI 非依存).
+"""承認タブの中核ロジック (UI 非依存).
 
 - 承認待ち一覧 (open PR) と 承認 n/3 の集計
 - 承認 / 却下 (コメント必須) / 提出者本人の自己承認禁止
@@ -103,7 +103,7 @@ def _pr_detail(pr_number, config=None):
 
 
 def approve(pr_number, config=None):
-    """承認する。提出者本人の自己承認は禁止 (spec 2.2)."""
+    """承認する。提出者本人の自己承認は禁止."""
     detail = _pr_detail(pr_number, config)
     if ((detail.get('author') or {}).get('login')) == current_user():
         raise ReviewError('自分の提出は自分では承認できません。'
@@ -113,7 +113,7 @@ def approve(pr_number, config=None):
 
 
 def request_changes(pr_number, comment, config=None):
-    """却下する。理由コメントは必須 (spec 2.2)."""
+    """却下する。理由コメントは必須."""
     comment = (comment or '').strip()
     if not comment:
         raise ReviewError('却下には理由の入力が必要です。')
@@ -158,7 +158,7 @@ def classified_diff(pr_number, config=None):
 
 
 def can_release(pr, config=None, me=None):
-    """リリースボタンの有効条件 (spec 2.2): 必要数承認・却下なし・検証OK・管理者."""
+    """リリースボタンの有効条件: 必要数承認・却下なし・検証OK・管理者."""
     if me is None:
         me = current_user()
     return (len(pr['approved']) >= required_approvals(config)

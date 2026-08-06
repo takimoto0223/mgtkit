@@ -6,7 +6,7 @@
   2. 安全チェック (拡張子ホワイトリスト・サイズ/件数上限・秘密情報スキャン)
   3. 基点との差分計算 (追加/変更/削除)
   4. feature ブランチ作成 → 上書き → commit → push → PR 作成
-を行う (docs/app-manager-spec.md 2.2 タブ4 / 2.3)。
+を行う (docs/app-manager-decisions.md)。
 
 削除ファイルの確認や秘密情報警告など、ユーザー判断が要る箇所で
 処理を分割している: prepare_submission() → (UI で確認) → finalize_submission()
@@ -30,7 +30,7 @@ class SubmitError(Exception):
     """提出処理の中断。str() はユーザー向けの平易な日本語メッセージ."""
 
 
-# 実行ファイルは即ブロック (spec 2.3)
+# 実行ファイルは即ブロック
 BLOCKED_EXTENSIONS = {
     '.exe', '.dll', '.so', '.dylib', '.bat', '.cmd', '.ps1', '.sh',
     '.msi', '.scr', '.com', '.vbs', '.jar', '.pyd',
@@ -186,7 +186,7 @@ def _hash_bytes(data):
 # ---------------------------------------------------------------------------
 
 def safety_check(changes, extract_dir, config=None):
-    """提出内容の安全チェック (spec 2.3).
+    """提出内容の安全チェック.
 
     戻り値: dict(blockers=[中断理由], warnings=[確認の上続行可の警告])
     """
@@ -291,7 +291,7 @@ def cleanup(prep):
 # ---------------------------------------------------------------------------
 
 def _next_branch_name(workrepo, user):
-    """feature/{ユーザー名}-{YYYYMMDD}-{連番} (spec 1.1)."""
+    """feature/{ユーザー名}-{YYYYMMDD}-{連番}."""
     today = datetime.date.today().strftime('%Y%m%d')
     prefix = 'feature/%s-%s-' % (user, today)
     out = run_git(['ls-remote', '--heads', 'origin', prefix + '*'],
