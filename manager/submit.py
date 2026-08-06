@@ -47,15 +47,21 @@ DEFAULT_ALLOWED_EXTENSIONS = [
 DIST_EXCLUDE_DIRS = ('.github/', 'tests/', 'docs/', 'scripts/', 'manager/')
 DIST_EXCLUDE_FILES = ('.gitignore', 'pytest.ini', 'requirements-dev.txt')
 
-# version.json は配布時に生成されるものでリポジトリ管理外
-GENERATED_FILES = ('version.json',)
+# version.json は配布時に生成、settings.json はマネージャーの個人設定
+# (名前・API キー)。どちらも提出対象から常に除外する
+GENERATED_FILES = ('version.json', 'settings.json')
 
-_SECRET_PATTERNS = [
-    ('AWS アクセスキー', re.compile(r'AKIA[0-9A-Z]{16}')),
+# 明確な認証情報は即ブロック (誤提出による流出を防ぐ)
+_SECRET_BLOCKER_PATTERNS = [
     ('Anthropic API キー', re.compile(r'sk-ant-[A-Za-z0-9_\-]{16,}')),
+    ('AWS アクセスキー', re.compile(r'AKIA[0-9A-Z]{16}')),
     ('GitHub トークン',
      re.compile(r'(?:ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})')),
     ('秘密鍵', re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----')),
+]
+
+# 疑わしい記述は警告 (確認の上で続行可)
+_SECRET_WARNING_PATTERNS = [
     ('パスワード様の記述',
      re.compile(r'(?i)(?:password|passwd|secret|api_key|apikey)'
                 r'\s*[=:]\s*["\'][^"\'\s]{8,}["\']')),
@@ -212,7 +218,7 @@ def safety_check(changes, extract_dir, config=None):
     if len(target_files) > max_files:
         blockers.append('変更ファイル数が上限 (%d 件) を超えています' % max_files)
 
-    # 秘密情報スキャン (警告 → ユーザー確認の上で続行可)
+    # 秘密情報スキャン (明確な認証情報は即ブロック、疑わしい記述は警告)
     for rel in target_files:
         path = os.path.join(extract_dir, rel.replace('/', os.sep))
         try:
@@ -220,7 +226,11 @@ def safety_check(changes, extract_dir, config=None):
                 text = f.read()
         except OSError:
             continue
-        for label, pattern in _SECRET_PATTERNS:
+        for label, pattern in _SECRET_BLOCKER_PATTERNS:
+            if pattern.search(text):
+                blockers.append('%s が含まれているため提出できません: %s '
+                                '(該当箇所を削除してください)' % (label, rel))
+        for label, pattern in _SECRET_WARNING_PATTERNS:
             if pattern.search(text):
                 warnings.append('%s らしき記述があります: %s' % (label, rel))
 
@@ -307,11 +317,13 @@ def _diff_summary(changes, intentional_deletions):
 
 
 def finalize_submission(prep, intentional_deletions, commit_message='',
-                        config=None, on_progress=None):
+                        config=None, on_progress=None, existing_branch=None):
     """準備済みの提出を確定する.
 
     intentional_deletions: 「意図的な削除」とユーザーが確認したファイル。
     それ以外の削除候補 (入れ忘れ) は基点の内容を維持する。
+    existing_branch: 指定すると新規 PR を作らず、既存の提出 (同一 PR) に
+    修正版として積む (差し戻し後の再提出フロー)。
     戻り値: dict(pr_url, branch, commit_message)
     """
     def progress(msg):
@@ -326,9 +338,15 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
     try:
         progress('提出用の作業場所を準備しています...')
         user = ghcli.run_gh(['api', 'user', '--jq', '.login']).strip()
-        branch = _next_branch_name(workrepo, user)
-        run_git(['checkout', '-B', branch, prep['base_commit']],
-                cwd=workrepo)
+        if existing_branch:
+            branch = existing_branch
+            run_git(['fetch', 'origin', branch], cwd=workrepo, timeout=300)
+            run_git(['checkout', '-B', branch, 'origin/%s' % branch],
+                    cwd=workrepo)
+        else:
+            branch = _next_branch_name(workrepo, user)
+            run_git(['checkout', '-B', branch, prep['base_commit']],
+                    cwd=workrepo)
 
         progress('変更を取り込んでいます...')
         for rel in changes['added'] + changes['modified']:
@@ -379,11 +397,19 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
             body += '\n\n' + notes
         title = message.splitlines()[0][:70]
 
-        pr_url = ghcli.run_gh([
-            'pr', 'create', '--repo', paths.repo_slug(config),
-            '--base', (config or {}).get('base_branch', 'main'),
-            '--head', branch, '--title', title, '--body', body,
-        ]).strip().splitlines()[-1]
+        if existing_branch:
+            # 既存 PR に修正版として積む (新規 PR は作らない)
+            out = ghcli.run_gh([
+                'pr', 'list', '--repo', paths.repo_slug(config),
+                '--head', branch, '--state', 'open', '--json', 'url',
+                '--jq', '.[0].url'])
+            pr_url = out.strip() or '(既存の提出)'
+        else:
+            pr_url = ghcli.run_gh([
+                'pr', 'create', '--repo', paths.repo_slug(config),
+                '--base', (config or {}).get('base_branch', 'main'),
+                '--head', branch, '--title', title, '--body', body,
+            ]).strip().splitlines()[-1]
         return {'pr_url': pr_url, 'branch': branch,
                 'commit_message': message}
     finally:

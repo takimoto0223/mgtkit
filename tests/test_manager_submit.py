@@ -129,6 +129,22 @@ class TestComputeChanges:
         finally:
             submit.cleanup(prep)
 
+    def test_settings_json_is_always_excluded(self, repo_env, tmp_path):
+        # マネージャーの個人設定 (API キー入り) が ZIP に紛れても提出されない
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'],
+            **{'settings.json':
+               '{"name": "x", "anthropic_api_key": "sk-ant-xxxx"}'}))
+        prep = submit.inspect_zip(z)
+        try:
+            ch = submit.compute_changes(
+                repo_env['workrepo'], repo_env['base_sha'],
+                prep['extract_dir'])
+            assert 'settings.json' not in ch['added']
+            assert 'settings.json' not in ch['modified']
+        finally:
+            submit.cleanup(prep)
+
     def test_unknown_base_commit_rejected(self, repo_env, tmp_path):
         z = _make_zip(tmp_path, {
             'app.py': 'x',
@@ -174,6 +190,13 @@ class TestSafetyCheck:
             tmp_path, {'config.py': 'api_key = "abcdefghijklmnop"\n'})
         assert any('パスワード様' in w or 'キー' in w
                    for w in result['warnings'])
+
+    def test_api_key_is_blocked_not_warned(self, tmp_path):
+        # sk-ant- キーの誤提出は警告でなく即ブロック (流出防止)
+        result = self._check(
+            tmp_path,
+            {'helper.py': 'KEY = "sk-ant-api03-abcdefghijklmnop123"\n'})
+        assert any('Anthropic API キー' in b for b in result['blockers'])
 
     def test_requirements_change_warned(self, tmp_path):
         result = self._check(tmp_path,
