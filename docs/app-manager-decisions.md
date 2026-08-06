@@ -1,8 +1,9 @@
-# アプリマネージャー 決定事項の記録
+# アプリマネージャー 設計・運用の記録
 
-`docs/app-manager-spec.md` の「7. 未確定事項」に対する調査結果と決定を記録する。
+アプリマネージャー (起動 / 更新 / β版 / 提出 / 承認) の設計判断と運用ルールを
+フェーズごとに記録したドキュメント。使い方の概要は README を参照。
 
-## 7-1. スモークテスト対象ルート
+## スモークテスト対象ルート
 
 既存アプリ (`app.py`) は全 27 ルート。fixture(実 mgt ファイル)なしで決定的に検証できる範囲を
 Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
@@ -19,7 +20,7 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
 実出力(PDF/DXF/xlsx)を伴う経路は実 mgt が必要なため、合成テキストによる
 パーサ・計算ロジックの回帰テスト (Level 2) でカバーする。
 
-## 7-2. 承認者の範囲・承認必要数
+## 承認者の範囲・承認必要数
 
 - 全メンバー承認可(仕様どおり)。提出者本人の自己承認禁止は Phase 5 のマネージャー側で制御。
 - 承認必要数は `config.json` の `branch_protection.required_approvals`(既定 3)。
@@ -29,7 +30,7 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
   または public 化、または Organization への移管が必要。
   スクリプトは 403/422 応答時にこの旨を案内する。
 
-## 7-3. β版のデータ分離
+## β版のデータ分離
 
 アプリ実装を調査した結果、**DB・設定ファイル・レジストリは一切使用していない**。
 アプリが持つ状態は次の 3 つのみ:
@@ -71,7 +72,7 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
 - 提出フローは UI 非依存の `manager/submit.py` に実装し、
   「準備 (`prepare_submission`) → ユーザー確認 → 確定 (`finalize_submission`)」
   の 2 段階に分割。削除ファイルの意図確認と警告承諾をこの境界で行う。
-- 基点特定は ZIP 同梱の version.json の commit SHA のみを使う (spec 1.4)。
+- 基点特定は ZIP 同梱の version.json の commit SHA のみを使う。
   無い/壊れている/履歴に無い場合は平易な日本語でエラー中断。
 - 差分計算は隠し作業クローン (`<install_root>/workrepo`) 上で行い、
   比較は git blob ハッシュ (改行変換の影響なし)。**配布 ZIP に含まれない
@@ -102,7 +103,7 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
   Claude が原因分析・修正 (structured output) → `[auto-fix]` commit → push →
   再検証待ち。上限 `manager.auto_fix_max_attempts` (既定3) 回。
   上限到達時は平易な3行要約を PR コメントへ投稿。
-- **ガード (spec 3.2 の4点)**: tests/ ほか保護領域 (docs/ scripts/ manager/
+- **ガード**: tests/ ほか保護領域 (docs/ scripts/ manager/
   .github/) の変更禁止をマネージャー側で二重チェックし、さらに CI 側でも
   `[auto-fix]` コミットに tests/ の diff があれば fail。`[auto-fix]`
   プレフィックスと「原因・対応」のコミットメッセージを必須化。
@@ -145,8 +146,7 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
 ## Phase 6 の決定 (通知・フィードバック・セットアップ)
 
 - 更新通知: マネージャー起動時 + 30分ごとのポーリングで GitHub Releases を
-  確認し、新しい安定版があれば起動タブに通知バナーを表示 (spec 2.2 タブ5
-  「マージ完了後、次回起動時/ポーリングで通知」)。
+  確認し、新しい安定版があれば起動タブに通知バナーを表示する。
 - β版フィードバック (`manager/feedback.py`): β版タブの各リリースに
   フィードバック入力を用意し、リリースノート中の「提出 #N」から対応 PR を
   特定して `gh pr comment` で投稿。登録済みの名前を添えて承認判断の材料に

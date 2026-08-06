@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """gh CLI のサブプロセスラッパー.
 
-方針 (docs/app-manager-spec.md):
+方針 (docs/app-manager-decisions.md):
 - GitHub 操作は認証済み gh CLI に委ね、トークンをマネージャー内に保存しない
 - 失敗時は stderr をログに残し、ユーザーには平易な日本語メッセージを見せる
 """
