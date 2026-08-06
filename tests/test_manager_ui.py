@@ -23,12 +23,20 @@ class _FakePage:
         self.window = _FakeWindow()
         self.services = []
         self.added = []
+        self.dialogs = []
 
     def add(self, *controls):
         self.added.extend(controls)
 
     def update(self):
         pass
+
+    def show_dialog(self, dialog):
+        self.dialogs.append(dialog)
+
+    def pop_dialog(self):
+        if self.dialogs:
+            self.dialogs.pop()
 
 
 def test_main_builds_ui_without_errors():

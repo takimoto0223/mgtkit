@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """Claude API によるコミットメッセージ・PR 本文の自動生成.
 
-- API キーは環境変数 ANTHROPIC_API_KEY から読む (コードに埋め込まない)
+- API キーは「本人のキー」を使う: マネージャーの初回セットアップで登録した
+  settings.json を優先し、無ければ環境変数 ANTHROPIC_API_KEY
+  (管理者キーの共用はしない)
 - キー未設定・SDK 未導入・API エラー時は None を返し、呼び出し側が
   定型文へフォールバックする (提出処理は Claude なしでも完結する)
 """
 import logging
-import os
 
+from . import settings
 from .paths import load_config
 
 log = logging.getLogger(__name__)
@@ -21,14 +23,15 @@ def _model():
 
 
 def _client():
-    if not os.environ.get('ANTHROPIC_API_KEY'):
+    key = settings.api_key()
+    if not key:
         return None
     try:
         import anthropic
     except ImportError:
         log.warning('anthropic SDK が未導入のため自動生成をスキップします')
         return None
-    return anthropic.Anthropic()
+    return anthropic.Anthropic(api_key=key)
 
 
 def _generate(prompt, max_tokens=1500):
@@ -69,6 +72,103 @@ def generate_commit_message(diff_summary, diff_text):
         '# 変更ファイル一覧\n%s\n\n# 変更差分(抜粋)\n%s'
         % (diff_summary, diff_text[:_MAX_DIFF_CHARS]))
     return _generate(prompt, max_tokens=800)
+
+
+_FIX_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'cause': {'type': 'string',
+                  'description': 'なぜ検証が失敗していたか (日本語)'},
+        'summary': {'type': 'string',
+                    'description': '何を変えたか (日本語、簡潔に)'},
+        'files': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'path': {'type': 'string'},
+                    'content': {'type': 'string',
+                                'description': '修正後のファイル全文'},
+                },
+                'required': ['path', 'content'],
+                'additionalProperties': False,
+            },
+        },
+    },
+    'required': ['cause', 'summary', 'files'],
+    'additionalProperties': False,
+}
+
+_FIX_GUARDS = (
+    '守るべきルール (違反した修正は破棄されます):\n'
+    '- tests/ 配下のファイルは変更・削除してはならない\n'
+    '- bare except による例外の握りつぶしをしない\n'
+    '- テストの skip 追加やアサーションの緩和をしない\n'
+    '- 仕様の変更をしない (テストが期待する動作に実装を合わせる)\n'
+    '- 変更は失敗の修正に必要な最小限にとどめる\n')
+
+
+def generate_fix(failure_log, files):
+    """CI 失敗ログと関連ファイルから修正案を生成する.
+
+    files: {path: content}。戻り値: dict(cause, summary, files=[{path,content}])
+    または None (キー未設定・失敗時)。
+    """
+    import json as _json
+    client = _client()
+    if client is None:
+        return None
+    file_parts = []
+    total = 0
+    for path, content in files.items():
+        total += len(content)
+        if total > 120000:
+            file_parts.append('# %s\n(サイズ上限のため省略)' % path)
+            continue
+        file_parts.append('# %s\n```\n%s\n```' % (path, content))
+    prompt = (
+        'あなたは構造設計ツール mgtkit の CI 検証失敗を修正します。\n'
+        '以下の失敗ログと関連ファイルを読み、原因を分析して修正後の\n'
+        'ファイル全文を返してください。\n\n%s\n'
+        '# 失敗ログ (末尾抜粋)\n```\n%s\n```\n\n'
+        '# 関連ファイル\n%s'
+        % (_FIX_GUARDS, failure_log[-20000:], '\n\n'.join(file_parts)))
+    try:
+        import anthropic
+        with client.messages.stream(
+            model=_model(),
+            max_tokens=48000,
+            output_config={'format': {'type': 'json_schema',
+                                      'schema': _FIX_SCHEMA}},
+            messages=[{'role': 'user', 'content': prompt}],
+        ) as stream:
+            response = stream.get_final_message()
+        if response.stop_reason == 'refusal':
+            log.warning('Claude が修正生成を辞退しました')
+            return None
+        text = next((b.text for b in response.content if b.type == 'text'),
+                    None)
+        return _json.loads(text) if text else None
+    except anthropic.APIConnectionError:
+        log.warning('Claude API に接続できませんでした')
+        return None
+    except anthropic.APIStatusError as e:
+        log.warning('Claude API エラー: %s', e.status_code)
+        return None
+    except Exception:
+        log.exception('修正生成で予期しないエラー')
+        return None
+
+
+def generate_failure_summary(failure_log):
+    """3回失敗後の「Git を知らない人向け」3行要約 (spec 3.2)."""
+    text = _generate(
+        'CI の検証が自動修正でも直りませんでした。以下の失敗ログから、\n'
+        'Git や CI を知らない構造設計者向けに「何が起きたか・どうすれば\n'
+        'よいか」を日本語3行以内で平易にまとめてください。本文のみ出力。\n\n'
+        '```\n%s\n```' % failure_log[-15000:], max_tokens=500)
+    return text or ('自動修正では検証を通過できませんでした。'
+                    '提出内容に問題がある可能性があります。管理者に相談してください。')
 
 
 def generate_pr_body(diff_summary, diff_text, base_version, notes=''):

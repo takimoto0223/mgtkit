@@ -88,6 +88,34 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
 - 衝突時 (基点より main が先行し同一箇所が変更) の解決フローは
   仕様どおり Phase 5 で実装する。
 
+## Phase 4 の決定 (安全チェック CI・自動修正ループ・β版自動リリース)
+
+- **API キーの運用 (仕様からの変更点)**: 管理者キーを repo Secrets に置いて
+  `claude-code-action` を使う方式はやめ、**提出者本人の API キー**を使う。
+  - マネージャー初回起動時に「名前 + Anthropic API キー」の登録を必須化。
+    保存先は各自の PC の `<install_root>/settings.json` のみ
+    (GitHub には一切送らない。ANTHROPIC_API_KEY 環境変数はフォールバック)。
+  - コミットメッセージ/PR 本文生成・自動修正ループはすべて本人キーで実行。
+    費用も本人 (所属組織) のキーに紐づく。
+- **自動修正ループは Actions ではなくマネージャー側で実行** (`manager/autofix.py`)。
+  提出タブの「検証状況」から実行: 失敗ログ取得 (gh run view --log-failed) →
+  Claude が原因分析・修正 (structured output) → `[auto-fix]` commit → push →
+  再検証待ち。上限 `manager.auto_fix_max_attempts` (既定3) 回。
+  上限到達時は平易な3行要約を PR コメントへ投稿。
+- **ガード (spec 3.2 の4点)**: tests/ ほか保護領域 (docs/ scripts/ manager/
+  .github/) の変更禁止をマネージャー側で二重チェックし、さらに CI 側でも
+  `[auto-fix]` コミットに tests/ の diff があれば fail。`[auto-fix]`
+  プレフィックスと「原因・対応」のコミットメッセージを必須化。
+  禁止パターン (bare except / skip 追加 / アサーション緩和 / 仕様変更) は
+  プロンプトに明記。
+- **CI (`safety` ジョブ、PR のみ)**: gitleaks による秘密情報スキャン +
+  requirements.txt 変更時の pip-audit (検出は warning とし承認時の判断材料に)
+  + auto-fix ガード。
+- **β版自動リリース (`beta-release` ジョブ)**: `feature/*` からの PR で
+  test/safety が green になると、最新安定版 vX.Y の次 (vX.Y+1) に対する
+  `-beta.N` を自動採番し、version.json 入り配布 ZIP をプレリリース登録。
+  マネージャーのβ版タブに即座に現れる。
+
 ## リリース手順 (Phase 4 自動化までの暫定運用)
 
 - `.github/workflows/release.yml`(手動実行)で安定版/β版を Releases に登録する。

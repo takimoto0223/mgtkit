@@ -10,7 +10,7 @@ import threading
 
 import flet as ft
 
-from . import ghcli, launcher, paths, submit, updater
+from . import autofix, ghcli, launcher, paths, settings, submit, updater
 from .gitcli import GitError
 
 logging.basicConfig(level=logging.INFO)
@@ -358,6 +358,73 @@ def main(page: ft.Page):
         _confirm_and_finalize(prep)
 
     t4_submit_btn.on_click = on_submit
+
+    # --- 検証状況と自動修正 ---
+
+    t4_pr_list = ft.Column([], spacing=8)
+    t4_fix_status = status_text()
+
+    def on_autofix(pr):
+        def handler(_):
+            t4_fix_status.value = '自動修正を開始します...'
+            page.update()
+
+            def work():
+                def progress(msg):
+                    t4_fix_status.value = '#%d: %s' % (pr['number'], msg)
+                    page.update()
+                try:
+                    result = autofix.autofix_loop(pr['number'], config,
+                                                  on_progress=progress)
+                    t4_fix_status.value = '#%d: %s' % (pr['number'],
+                                                       result['message'])
+                except Exception as e:
+                    log.exception('autofix failed')
+                    t4_fix_status.value = '自動修正に失敗しました: %s' % e
+                page.update()
+            run_bg(work)
+        return handler
+
+    _STATUS_LABELS = {
+        'success': ('検証OK', '#15803d'),
+        'failure': ('検証で問題あり', '#b91c1c'),
+        'pending': ('検証中', '#b45309'),
+    }
+
+    def on_refresh_prs(_):
+        t4_fix_status.value = '取得中...'
+        page.update()
+
+        def work():
+            try:
+                prs = autofix.list_my_submissions(config)
+            except (autofix.AutofixError, ghcli.GhError) as e:
+                t4_fix_status.value = str(e)
+                page.update()
+                return
+            t4_pr_list.controls.clear()
+            if not prs:
+                t4_pr_list.controls.append(
+                    ft.Text('検証・承認待ちの提出はありません', size=13))
+            for pr in prs:
+                label, color = _STATUS_LABELS[pr['status']]
+                row = [ft.Column([
+                    ft.Text('#%d %s' % (pr['number'], pr['title']),
+                            weight=ft.FontWeight.BOLD, size=13),
+                    ft.Text(label, size=12, color=color),
+                ], spacing=2, expand=True)]
+                if pr['status'] == 'failure':
+                    row.append(ft.FilledButton(
+                        '自動修正を試す', icon=ft.Icons.BUILD,
+                        on_click=on_autofix(pr),
+                        bgcolor=AMBER, color='#ffffff'))
+                t4_pr_list.controls.append(ft.Container(
+                    bgcolor='#f5f7fa', border_radius=6, padding=12,
+                    content=ft.Row(row)))
+            t4_fix_status.value = ''
+            page.update()
+        run_bg(work)
+
     tab_submit = ft.Container(padding=24, content=ft.Column([
         ft.Text('作業した mgtkit のフォルダを ZIP にして提出すると、'
                 '検証と承認ののち正式版として配布されます。'
@@ -367,6 +434,15 @@ def main(page: ft.Page):
         t4_submit_btn,
         t4_status,
         t4_result,
+        ft.Divider(),
+        ft.Row([
+            ft.Text('提出済みの検証状況', size=14,
+                    weight=ft.FontWeight.BOLD),
+            ft.OutlinedButton('確認', icon=ft.Icons.REFRESH,
+                              on_click=on_refresh_prs),
+        ], spacing=12),
+        t4_pr_list,
+        t4_fix_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 
     # ---------------- 組み立て ----------------
@@ -392,6 +468,45 @@ def main(page: ft.Page):
         ),
     )
     refresh_local_version()
+
+    # ---------------- 初回セットアップ (名前と API キーの登録) ----------------
+
+    def show_first_run_dialog():
+        name_field = ft.TextField(label='名前 (例: 山田太郎)', autofocus=True)
+        key_field = ft.TextField(
+            label='Anthropic API キー (sk-ant- で始まる文字列)',
+            password=True, can_reveal_password=True)
+        err_text = ft.Text('', size=12, color='#b91c1c')
+
+        def on_save(_):
+            try:
+                settings.save_settings(name_field.value, key_field.value,
+                                       config)
+            except ValueError as e:
+                err_text.value = str(e)
+                page.update()
+                return
+            page.pop_dialog()
+            page.update()
+
+        page.show_dialog(ft.AlertDialog(
+            modal=True,
+            title=ft.Text('はじめに登録してください'),
+            content=ft.Column([
+                ft.Text('mgtkit マネージャーの利用には、名前と本人の '
+                        'Anthropic API キーの登録が必要です。', size=13),
+                ft.Text('キーはこの PC の中にだけ保存され、提出時の説明文の'
+                        '自動作成と、検証失敗時の自動修正に本人のキーとして'
+                        '使われます。', size=12, color='#555555'),
+                name_field,
+                key_field,
+                err_text,
+            ], tight=True, width=480),
+            actions=[ft.FilledButton('登録してはじめる', on_click=on_save,
+                                     bgcolor=NAVY, color='#ffffff')]))
+
+    if settings.load_settings(config) is None:
+        show_first_run_dialog()
 
 
 if __name__ == '__main__':

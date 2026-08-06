@@ -37,3 +37,130 @@ jobs:
       - name: テスト実行
         working-directory: mgtkit
         run: python -m pytest -v
+
+  # 安全チェック (spec 3.1 ジョブ2)。PR のみ実行。
+  safety:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 秘密情報スキャン (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 依存監査 (pip-audit、requirements.txt 変更時のみ)
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qx 'requirements.txt'; then
+            pip install --quiet pip-audit
+            # 検出は承認時の判断材料とする (ブロックはしない)
+            pip-audit -r requirements.txt \
+              || echo "::warning::pip-audit が既知の脆弱性を検出しました。承認時に確認してください。"
+          else
+            echo "requirements.txt に変更はありません"
+          fi
+
+      - name: 自動修正コミットの tests/ 変更ガード
+        run: |
+          python3 - <<'EOF'
+          # [auto-fix] コミットが tests/ を変更していたら fail (spec 3.2 ガード1)
+          import subprocess, sys
+          base = 'origin/${{ github.base_ref }}'
+          commits = subprocess.check_output(
+              ['git', 'rev-list', base + '..HEAD'], text=True).split()
+          bad = []
+          for c in commits:
+              subject = subprocess.check_output(
+                  ['git', 'log', '-1', '--format=%s', c], text=True).strip()
+              if not subject.startswith('[auto-fix]'):
+                  continue
+              files = subprocess.check_output(
+                  ['git', 'diff-tree', '--no-commit-id', '--name-only',
+                   '-r', c], text=True).split()
+              bad += ['%s: %s' % (c[:8], f) for f in files
+                      if f.startswith('tests/')]
+          if bad:
+              print('自動修正コミットが tests/ を変更しています:')
+              print('\n'.join(bad))
+              sys.exit(1)
+          print('ガード OK')
+          EOF
+
+  # 提出 (feature/*) の検証がすべて通ったらβ版を自動リリース (spec 3.1)
+  beta-release:
+    needs: [test, safety]
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'feature/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: mgtkit
+
+      - name: 次のβ版バージョンを決定
+        id: ver
+        working-directory: mgtkit
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          # 最新安定版 vX.Y の次 (vX.Y+1) に対する -beta.N を採番する
+          import re
+          import subprocess
+          tags = subprocess.check_output(['git', 'tag', '-l'],
+                                         text=True).split()
+          stable = []
+          for t in tags:
+              m = re.match(r'^v(\d+)\.(\d+)$', t)
+              if m:
+                  stable.append((int(m.group(1)), int(m.group(2))))
+          if stable:
+              major, minor = max(stable)
+              base = 'v%d.%d' % (major, minor + 1)
+          else:
+              base = 'v1.0'
+          n = 0
+          for t in tags:
+              m = re.match(re.escape(base) + r'-beta\.(\d+)$', t)
+              if m:
+                  n = max(n, int(m.group(1)))
+          print('version=%s-beta.%d' % (base, n + 1))
+          EOF
+
+      - name: version.json 生成と配布 ZIP 作成
+        working-directory: mgtkit
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          python3 - <<'EOF'
+          import datetime, json, os, subprocess
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
+                                        text=True).strip()
+          with open('version.json', 'w', encoding='utf-8') as f:
+              json.dump({'version': os.environ['VERSION'],
+                         'commit': sha,
+                         'distributed_at':
+                             datetime.date.today().isoformat()},
+                        f, ensure_ascii=False, indent=2)
+          EOF
+          zip -r "../mgtkit-${VERSION}.zip" . \
+            -x '.git/*' -x '.github/*' -x 'tests/*' -x 'docs/*' \
+            -x 'scripts/*' -x 'manager/*' -x '.pytest_cache/*' \
+            -x 'pytest.ini' -x 'requirements-dev.txt' -x '.gitignore'
+
+      - name: プレリリースとして登録
+        working-directory: mgtkit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh release create "$VERSION" "../mgtkit-${VERSION}.zip" \
+            --prerelease --title "$VERSION" --target "$HEAD_SHA" \
+            --notes "提出 #${PR_NUMBER} (${PR_TITLE}) の検証通過版です。マネージャーのβ版タブから試用できます。"
