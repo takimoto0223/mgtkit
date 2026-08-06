@@ -66,6 +66,16 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
   - `MGTKIT_CHANNEL=beta` で画面上部にβ版バナーを表示
 - β版フィードバック → PR コメント投稿は仕様どおり Phase 6 で対応(Phase 2 は読み取り系のみ)。
 
+## リリース手順 (Phase 4 自動化までの暫定運用)
+
+- `.github/workflows/release.yml`(手動実行)で安定版/β版を Releases に登録する。
+  GitHub の Actions タブ → release → Run workflow でバージョン(vX.Y または
+  vX.Y-beta.N)とリリースノートを入力する。
+- version.json の生成と配布 ZIP(開発用ファイル除外)の添付はワークフローが行う。
+  vX.Y-beta.N はプレリリースフラグ付きで登録される。
+- Phase 4 で「PR マージ → 自動タグ付け・自動リリース」に置き換える際も
+  この ZIP 作成手順を流用する。
+
 ## Phase 1 のその他の決定
 
 - 既知の不具合はテストで**現状動作を固定**し、修正しない(qr_* の 500、

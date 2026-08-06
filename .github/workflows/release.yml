@@ -1,0 +1,72 @@
+# リリース作成 (手動実行)
+# main の内容を配布 ZIP (version.json 同梱) にして GitHub Releases へ登録する。
+# バージョンが vX.Y-beta.N 形式ならプレリリースとして登録する。
+# Phase 4 では PR マージ時の自動タグ付けからも同じ手順を使う予定。
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'リリースするバージョン (例: v1.0 / v1.1-beta.1)'
+        required: true
+      notes:
+        description: 'リリースノート (更新内容。ユーザー向けの平易な日本語で)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mgtkit
+
+      - name: バージョン表記の検証
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
+            echo "エラー: バージョンは vX.Y または vX.Y-beta.N 形式で指定してください: $VERSION"
+            exit 1
+          fi
+
+      - name: version.json 生成と配布 ZIP 作成
+        working-directory: mgtkit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'EOF'
+          import datetime, json, os, subprocess
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
+                                        text=True).strip()
+          with open('version.json', 'w', encoding='utf-8') as f:
+              json.dump({'version': os.environ['VERSION'],
+                         'commit': sha,
+                         'distributed_at':
+                             datetime.date.today().isoformat()},
+                        f, ensure_ascii=False, indent=2)
+          EOF
+          # 配布物はアプリ実行に必要なもののみ (開発用ファイルは除外)
+          zip -r "../mgtkit-${VERSION}.zip" . \
+            -x '.git/*' -x '.github/*' -x 'tests/*' -x 'docs/*' \
+            -x 'scripts/*' -x 'manager/*' -x '.pytest_cache/*' \
+            -x 'pytest.ini' -x 'requirements-dev.txt' -x '.gitignore'
+
+      - name: Releases へ登録
+        working-directory: mgtkit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          args=(--title "$VERSION" --target "$GITHUB_SHA")
+          if [[ "$VERSION" == *-beta.* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$VERSION" "../mgtkit-${VERSION}.zip" \
+            --notes "${NOTES:-$VERSION リリース}" "${args[@]}"
