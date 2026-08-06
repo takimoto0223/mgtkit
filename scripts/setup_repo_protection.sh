@@ -17,12 +17,12 @@ if ! command -v gh >/dev/null 2>&1; then
     exit 1
 fi
 
-REPO=$(python3 -c "import json;print(json.load(open('$CFG'))['repo'])")
-BRANCH=$(python3 -c "import json;print(json.load(open('$CFG'))['base_branch'])")
-APPROVALS=$(python3 -c "import json;print(json.load(open('$CFG'))['branch_protection']['required_approvals'])")
-CHECKS=$(python3 -c "import json;print(json.dumps(json.load(open('$CFG'))['branch_protection']['required_status_checks']))")
-STRICT=$(python3 -c "import json;print(str(json.load(open('$CFG'))['branch_protection']['strict_status_checks']).lower())")
-ENFORCE=$(python3 -c "import json;print(str(json.load(open('$CFG'))['branch_protection']['enforce_admins']).lower())")
+REPO=$(python3 -c "import json;print(json.load(open('$CFG',encoding='utf-8'))['repo'])")
+BRANCH=$(python3 -c "import json;print(json.load(open('$CFG',encoding='utf-8'))['base_branch'])")
+APPROVALS=$(python3 -c "import json;print(json.load(open('$CFG',encoding='utf-8'))['branch_protection']['required_approvals'])")
+CHECKS=$(python3 -c "import json;print(json.dumps(json.load(open('$CFG',encoding='utf-8'))['branch_protection']['required_status_checks']))")
+STRICT=$(python3 -c "import json;print(str(json.load(open('$CFG',encoding='utf-8'))['branch_protection']['strict_status_checks']).lower())")
+ENFORCE=$(python3 -c "import json;print(str(json.load(open('$CFG',encoding='utf-8'))['branch_protection']['enforce_admins']).lower())")
 
 echo "ブランチ保護を適用します: ${REPO}@${BRANCH} (承認 ${APPROVALS} 名, checks=${CHECKS})"
 
