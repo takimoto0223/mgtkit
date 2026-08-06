@@ -46,6 +46,26 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
   環境変数対応の小改修が必要 → **Phase 2 で実施**(Phase 1 ではアプリ本体を変更しない)。
 - β版バナー表示用の環境変数(例 `MGTKIT_CHANNEL=beta`)も Phase 2 で追加する。
 
+## Phase 2 の決定 (マネージャー: 起動・更新・β版タブ)
+
+- マネージャーは `manager/` パッケージとしてリポジトリに同梱し、
+  `python -m manager.main`(または `manager/マネージャー起動.bat`)で起動する。
+  UI は Flet (`manager/requirements.txt` で固定)。ロジック(バージョン比較・
+  gh ラッパー・展開・起動)は UI 非依存のモジュールに分離し pytest で回帰する。
+- インストール配置: `<install_root>/stable/mgtkit/` と
+  `<install_root>/beta/<version>/mgtkit/`。**アプリ本体フォルダ名は mgtkit 固定**
+  (app.py が親ディレクトリを sys.path に入れて `from mgtkit.x import y` する構造のため)。
+  install_root は Windows で `%LOCALAPPDATA%\mgtkit`(config.json の
+  `manager.install_root` で変更可)。
+- リリース取得は `gh api repos/<repo>/releases` + `gh release download`。
+  CI 添付の配布 ZIP(version.json 同梱)を優先し、無い場合(Phase 4 整備前)は
+  ソースアーカイブを取得してマネージャーが version.json を補完する。
+- アプリ側の小改修(Phase 1 で予告済み):
+  - `MGTKIT_UPLOAD_DIR` でアップロード一時フォルダを分離(マネージャーが
+    インスタンスごとの `uploads_tmp/` を指定)
+  - `MGTKIT_CHANNEL=beta` で画面上部にβ版バナーを表示
+- β版フィードバック → PR コメント投稿は仕様どおり Phase 6 で対応(Phase 2 は読み取り系のみ)。
+
 ## Phase 1 のその他の決定
 
 - 既知の不具合はテストで**現状動作を固定**し、修正しない(qr_* の 500、

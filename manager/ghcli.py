@@ -1,0 +1,129 @@
+# -*- coding: utf-8 -*-
+"""gh CLI のサブプロセスラッパー.
+
+方針 (docs/app-manager-spec.md):
+- GitHub 操作は認証済み gh CLI に委ね、トークンをマネージャー内に保存しない
+- 失敗時は stderr をログに残し、ユーザーには平易な日本語メッセージを見せる
+"""
+import json
+import logging
+import subprocess
+
+log = logging.getLogger(__name__)
+
+_CREATE_NO_WINDOW = 0x08000000  # Windows でコンソール窓を出さない
+
+
+class GhError(Exception):
+    """gh 実行失敗。str() はユーザー向けの平易な日本語メッセージ."""
+
+
+def _popen_kwargs():
+    kw = {}
+    import sys
+    if sys.platform == 'win32':
+        kw['creationflags'] = _CREATE_NO_WINDOW
+    return kw
+
+
+def run_gh(args, timeout=60):
+    """gh を実行し stdout を返す。失敗は GhError (詳細はログへ)."""
+    cmd = ['gh'] + list(args)
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding='utf-8',
+            errors='replace', timeout=timeout, **_popen_kwargs())
+    except FileNotFoundError:
+        raise GhError('gh コマンドが見つかりません。セットアップ (setup.bat) を'
+                      '実行するか、https://cli.github.com/ から導入してください。')
+    except subprocess.TimeoutExpired:
+        raise GhError('GitHub への接続がタイムアウトしました。'
+                      'ネットワーク接続を確認してください。')
+    if proc.returncode != 0:
+        log.error('gh %s failed (%d): %s', args, proc.returncode, proc.stderr)
+        raise GhError(_friendly_message(proc.stderr))
+    return proc.stdout
+
+
+def _friendly_message(stderr):
+    s = (stderr or '').lower()
+    if 'auth login' in s or 'authentication' in s or 'not logged' in s:
+        return ('GitHub へのログインが必要です。コマンドプロンプトで '
+                '「gh auth login」を実行してください。')
+    if 'could not resolve' in s or 'connect' in s or 'network' in s:
+        return 'ネットワークに接続できません。接続環境を確認してください。'
+    if 'not found' in s or '404' in s:
+        return '対象が見つかりませんでした。リポジトリの設定を確認してください。'
+    if 'rate limit' in s:
+        return 'GitHub の利用制限に達しました。しばらく待って再試行してください。'
+    return ('GitHub との通信でエラーが発生しました。'
+            '時間をおいて再試行してください。')
+
+
+def fetch_releases(repo, limit=30):
+    """リリース一覧 (新しい順)。各要素: dict(tag, name, prerelease, notes,
+    published_at, assets=[{name, url}])."""
+    out = run_gh(['api', 'repos/%s/releases?per_page=%d' % (repo, limit)])
+    try:
+        raw = json.loads(out)
+    except ValueError:
+        raise GhError('GitHub からの応答を解釈できませんでした。')
+    releases = []
+    for r in raw:
+        if r.get('draft'):
+            continue
+        releases.append({
+            'tag': r.get('tag_name') or '',
+            'name': r.get('name') or r.get('tag_name') or '',
+            'prerelease': bool(r.get('prerelease')),
+            'notes': r.get('body') or '',
+            'published_at': (r.get('published_at') or '')[:10],
+            'assets': [{'name': a.get('name'), 'url': a.get('url')}
+                       for a in (r.get('assets') or [])],
+        })
+    return releases
+
+
+def latest_stable(releases):
+    """リリース一覧から最新の正式版を返す (無ければ None)."""
+    for r in releases:
+        if not r['prerelease']:
+            return r
+    return None
+
+
+def prereleases(releases):
+    return [r for r in releases if r['prerelease']]
+
+
+def tag_commit_sha(repo, tag):
+    """タグの指すコミット SHA (version.json 補完用)."""
+    out = run_gh(['api', 'repos/%s/commits/%s' % (repo, tag),
+                  '--jq', '.sha'])
+    return out.strip()
+
+
+def download_release(repo, tag, dest_dir, has_assets):
+    """リリースの ZIP を dest_dir へダウンロードする.
+
+    CI 添付の配布 ZIP があればそれを、無ければソースアーカイブを取得する
+    (Phase 4 の CI 整備前でも動作させるためのフォールバック)。
+    戻り値: (zip のパス, is_source_archive)
+    """
+    import glob
+    import os
+    if has_assets:
+        run_gh(['release', 'download', tag, '--repo', repo,
+                '--pattern', '*.zip', '--dir', dest_dir, '--clobber'],
+               timeout=300)
+        is_source = False
+    else:
+        run_gh(['release', 'download', tag, '--repo', repo,
+                '--archive=zip', '--dir', dest_dir, '--clobber'],
+               timeout=300)
+        is_source = True
+    zips = sorted(glob.glob(os.path.join(dest_dir, '*.zip')),
+                  key=os.path.getmtime)
+    if not zips:
+        raise GhError('リリースの ZIP を取得できませんでした。')
+    return zips[-1], is_source
