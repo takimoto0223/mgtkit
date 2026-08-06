@@ -69,8 +69,17 @@ class TestReleaseRules:
         assert not reviews.can_release(self._pr(conflicting=True),
                                        self.CFG, me='boss')
 
-    def test_admins_default_is_repo_owner(self):
-        assert reviews.admins({'repo': 'owner1/mgtkit'}) == ['owner1']
+    def test_empty_admins_means_everyone_can_release(self):
+        # 管理者リストが空 (既定) = 必要数の承認がそろえば誰でもリリース可
+        cfg = {'repo': 'o/r',
+               'branch_protection': {'required_approvals': 3},
+               'manager': {'admins': []}}
+        assert reviews.admins(cfg) == []
+        assert reviews.can_operate_release('anyone', cfg)
+        assert reviews.can_release(self._pr(), cfg, me='member')
+
+    def test_admins_unset_means_everyone(self):
+        assert reviews.can_operate_release('anyone', {'repo': 'o/r'})
 
 
 class TestNextStableVersion:

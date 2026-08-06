@@ -35,11 +35,15 @@ def required_approvals(config=None):
 
 
 def admins(config=None):
-    """リリース操作を許可するユーザー。未設定ならリポジトリ owner."""
-    lst = ((config or {}).get('manager') or {}).get('admins')
-    if lst:
-        return [str(a) for a in lst]
-    return [paths.repo_slug(config).split('/')[0]]
+    """リリース操作を許可するユーザーの一覧。空 = 制限なし (全員可)."""
+    lst = ((config or {}).get('manager') or {}).get('admins') or []
+    return [str(a) for a in lst]
+
+
+def can_operate_release(me, config=None):
+    """リリース操作の権限判定。admins が空なら必要数の承認だけで全員可."""
+    a = admins(config)
+    return not a or me in a
 
 
 def approval_summary(reviews):
@@ -89,6 +93,17 @@ def list_pending(config=None):
                            == 'CONFLICTING',
         })
     return result
+
+
+def count_pending(config=None):
+    """承認待ち (open PR) の件数のみを軽量に取得する (タブバッジ用)."""
+    out = ghcli.run_gh([
+        'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
+        '--json', 'number', '--jq', 'length'])
+    try:
+        return int(out.strip() or 0)
+    except ValueError:
+        return 0
 
 
 def _pr_detail(pr_number, config=None):
@@ -165,7 +180,7 @@ def can_release(pr, config=None, me=None):
             and not pr['rejected']
             and pr['checks'] == 'success'
             and not pr['conflicting']
-            and me in admins(config))
+            and can_operate_release(me, config))
 
 
 def next_stable_version(config=None):
@@ -201,8 +216,9 @@ def release(pr_number, config=None, on_progress=None):
     if summary['rejected']:
         raise ReviewError('却下したメンバーがいるためリリースできません。'
                           '修正版の再提出を待ってください。')
-    if current_user() not in admins(config):
-        raise ReviewError('リリース操作は管理者のみ実行できます。')
+    if not can_operate_release(current_user(), config):
+        raise ReviewError('リリース操作は管理者のみ実行できます '
+                          '(config.json の manager.admins で設定)。')
 
     progress('正式版として取り込んでいます...')
     ghcli.run_gh(['pr', 'merge', str(pr_number), '--repo',
