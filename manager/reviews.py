@@ -46,9 +46,30 @@ def can_operate_release(me, config=None):
     return not a or me in a
 
 
-def approval_summary(reviews):
+def collaborators(config=None):
+    """push 権限を持つ collaborator の GitHub ユーザー名一覧 (set).
+
+    public リポジトリでは誰でも PR にレビューを付けられるため、
+    承認・却下のカウントはこの一覧のメンバーに限定する。
+    取得できない場合は None を返し、呼び出し側はフィルタなし
+    (従来どおり全レビューを数える) にフォールバックする。
+    """
+    try:
+        out = ghcli.run_gh([
+            'api', 'repos/%s/collaborators?per_page=100'
+            % paths.repo_slug(config),
+            '--jq', '[.[] | select(.permissions.push) | .login]'])
+        names = json.loads(out)
+    except (ghcli.GhError, ValueError):
+        return None
+    return set(names) if names else None
+
+
+def approval_summary(reviews, members=None):
     """レビュー一覧から各メンバーの最新状態を集計する.
 
+    members: 承認・却下をカウントする GitHub ユーザー名の集合。
+    None ならフィルタしない (全レビューを数える)。
     戻り値: dict(approved=[名前], rejected=[{name, comment}])
     """
     latest = {}
@@ -57,6 +78,8 @@ def approval_summary(reviews):
         if state not in ('APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'):
             continue  # COMMENTED 等は承認状態に影響しない
         name = ((r.get('author') or {}).get('login')) or '?'
+        if members is not None and name not in members:
+            continue  # メンバー外 (public リポジトリの第三者等) は数えない
         latest[name] = {'state': state, 'comment': r.get('body') or ''}
     approved = sorted(n for n, v in latest.items()
                       if v['state'] == 'APPROVED')
@@ -94,10 +117,11 @@ def list_pending(config=None):
         prs = json.loads(out)
     except ValueError:
         raise ReviewError('承認待ち一覧を取得できませんでした。')
+    members = collaborators(config)
     result = []
     for pr in prs:
         detail = _pr_detail(pr['number'], config)
-        summary = approval_summary(detail.get('reviews'))
+        summary = approval_summary(detail.get('reviews'), members)
         result.append({
             'number': pr['number'],
             'title': pr['title'],
@@ -228,7 +252,8 @@ def release(pr_number, config=None, on_progress=None):
             on_progress(msg)
 
     detail = _pr_detail(pr_number, config)
-    summary = approval_summary(detail.get('reviews'))
+    summary = approval_summary(detail.get('reviews'),
+                               collaborators(config))
     if len(summary['approved']) < required_approvals(config):
         raise ReviewError('承認数が足りません (%d/%d)。'
                           % (len(summary['approved']),
