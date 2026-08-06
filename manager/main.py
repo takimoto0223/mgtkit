@@ -10,9 +10,11 @@ import threading
 
 import flet as ft
 
-from . import (autofix, conflicts, ghcli, launcher, paths, reviews,
-               settings, submit, updater)
+from . import (autofix, conflicts, feedback, ghcli, launcher, paths,
+               reviews, settings, submit, updater)
 from .gitcli import GitError
+
+UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ def main(page: ft.Page):
 
     t1_version = ft.Text('', size=16, weight=ft.FontWeight.BOLD)
     t1_status = status_text()
+    t1_notice = ft.Text('', size=13, weight=ft.FontWeight.BOLD, color=AMBER)
 
     def refresh_local_version():
         info = updater.local_version_info(stable)
@@ -83,6 +86,7 @@ def main(page: ft.Page):
         run_bg(work)
 
     tab_launch = ft.Container(padding=24, content=ft.Column([
+        t1_notice,
         t1_version,
         ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
                         on_click=on_launch_stable,
@@ -200,6 +204,40 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
+    def on_feedback(release):
+        """β版の感想・不具合報告を対応する提出 (PR) へコメント投稿する."""
+        def handler(_):
+            field = ft.TextField(
+                label='気づいたこと・不具合・感想 (承認の判断材料になります)',
+                multiline=True, min_lines=3, max_lines=6)
+            err = ft.Text('', size=12, color='#b91c1c')
+
+            def send(_):
+                def work():
+                    try:
+                        pr = feedback.post_feedback(release, field.value,
+                                                    config)
+                        page.pop_dialog()
+                        t3_status.value = ('フィードバックを送信しました '
+                                           '(提出 #%d に届きます)。' % pr)
+                        page.update()
+                    except (feedback.FeedbackError, ghcli.GhError) as e:
+                        err.value = str(e)
+                        page.update()
+                run_bg(work)
+
+            page.show_dialog(ft.AlertDialog(
+                modal=True,
+                title=ft.Text('%s のフィードバック' % release['tag']),
+                content=ft.Column([field, err], tight=True, width=520),
+                actions=[
+                    ft.TextButton('キャンセル',
+                                  on_click=lambda _: page.pop_dialog()),
+                    ft.FilledButton('送信', on_click=send,
+                                    bgcolor=NAVY, color='#ffffff'),
+                ]))
+        return handler
+
     def on_refresh_betas(_):
         t3_status.value = '取得中...'
         page.update()
@@ -226,6 +264,8 @@ def main(page: ft.Page):
                                     weight=ft.FontWeight.BOLD),
                             ft.Text(r['name'], size=12, color='#555555'),
                         ], spacing=2, expand=True),
+                        ft.OutlinedButton('フィードバック',
+                                          on_click=on_feedback(r)),
                         ft.FilledButton(
                             '試す', icon=ft.Icons.SCIENCE,
                             on_click=try_beta(r),
@@ -761,6 +801,30 @@ def main(page: ft.Page):
         ),
     )
     refresh_local_version()
+
+    # ---------------- 新しい安定版の通知 (起動時 + 定期ポーリング) ----------------
+
+    def check_update_notice(reschedule=True):
+        def work():
+            try:
+                result = updater.check_update(repo, stable)
+            except Exception:
+                log.info('更新チェックをスキップしました (オフライン等)')
+                return
+            if result['has_update'] and result['latest'] is not None:
+                t1_notice.value = ('新しい安定版 %s があります。「更新」タブ'
+                                   'から更新してください。'
+                                   % result['latest']['tag'])
+            else:
+                t1_notice.value = ''
+            page.update()
+        run_bg(work)
+        if reschedule:
+            timer = threading.Timer(UPDATE_POLL_SECONDS, check_update_notice)
+            timer.daemon = True
+            timer.start()
+
+    check_update_notice()
 
     # ---------------- 初回セットアップ (名前と API キーの登録) ----------------
 
