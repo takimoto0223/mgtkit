@@ -1,6 +1,6 @@
 @echo off
-rem mgtkit アプリマネージャーの起動 (必要ライブラリの確認込み)
 chcp 65001 >nul
+rem mgtkit アプリマネージャーの起動 (必要ライブラリの確認込み)
 title mgtkit アプリマネージャー
 cd /d "%~dp0.."
 

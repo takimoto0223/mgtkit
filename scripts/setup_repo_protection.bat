@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 rem main ブランチ保護のセットアップ (管理者が一度だけ実行する / Windows 用)
 rem
 rem 前提: gh CLI がインストール済みで `gh auth login` 済みであること。
@@ -8,7 +9,6 @@ rem
 rem 注意: 個人アカウントの private リポジトリではブランチ保護に GitHub Pro 等の
 rem       有料プランが必要 (public リポジトリなら無料)。403/422 が返る場合は
 rem       プラン・リポジトリの公開設定を確認すること。
-chcp 65001 >nul
 setlocal
 cd /d "%~dp0.."
 

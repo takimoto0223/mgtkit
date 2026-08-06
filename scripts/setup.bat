@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 rem ============================================================
 rem  mgtkit セットアップ (メンバー配布用)
 rem  このファイルだけを新しいメンバーに渡してダブルクリックしてもらう。
@@ -7,7 +8,6 @@ rem  2. GitHub へログイン (ブラウザが開きます)
 rem  3. mgtkit を取得 (%USERPROFILE%\mgtkit)
 rem  4. アプリマネージャーを起動
 rem ============================================================
-chcp 65001 >nul
 setlocal
 title mgtkit セットアップ
 set "REPO=takimoto0223/mgtkit"
