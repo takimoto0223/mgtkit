@@ -782,7 +782,7 @@ def main(page: ft.Page):
 
     tab_review = ft.Container(padding=24, content=ft.Column([
         ft.Text('提出された機能追加の確認と承認を行います。%d 人の承認が'
-                'そろうと管理者がリリースできます。自分の提出は自分では'
+                'そろうとリリースできます。自分の提出は自分では'
                 '承認できません。' % reviews.required_approvals(config),
                 size=13, color='#555555'),
         ft.OutlinedButton('承認待ち一覧を取得', icon=ft.Icons.REFRESH,
