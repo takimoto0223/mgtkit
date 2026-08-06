@@ -186,119 +186,7 @@ def main(page: ft.Page):
         t2_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 
-    # ---------------- タブ3: β版 ----------------
-
-    t3_list = ft.Column([], spacing=8)
-    t3_status = status_text()
-
-    def try_beta(release):
-        def handler(_):
-            t3_status.value = '%s を準備しています...' % release['tag']
-            page.update()
-
-            def work():
-                def progress(msg):
-                    t3_status.value = '%s: %s' % (release['tag'], msg)
-                    page.update()
-                beta = paths.beta_dir(release['tag'], config)
-                try:
-                    if updater.local_version_info(beta) is None:
-                        updater.install_release(repo, release, beta,
-                                                on_progress=progress)
-                    _, url = launcher.launch_app(
-                        beta, paths.beta_port(config), channel='beta')
-                    t3_status.value = ('β版 %s を起動しました (安定版とは'
-                                       '別画面・別データ): %s'
-                                       % (release['tag'], url))
-                except (ghcli.GhError, launcher.LaunchError,
-                        Exception) as e:
-                    t3_status.value = str(e) or 'β版の起動に失敗しました。'
-                page.update()
-            run_bg(work)
-        return handler
-
-    def on_feedback(release):
-        """β版の感想・不具合報告を対応する提出 (PR) へコメント投稿する."""
-        def handler(_):
-            field = ft.TextField(
-                label='気づいたこと・不具合・感想 (承認の判断材料になります)',
-                multiline=True, min_lines=3, max_lines=6)
-            err = ft.Text('', size=12, color='#b91c1c')
-
-            def send(_):
-                def work():
-                    try:
-                        pr = feedback.post_feedback(release, field.value,
-                                                    config)
-                        page.pop_dialog()
-                        t3_status.value = ('フィードバックを送信しました '
-                                           '(提出 #%d に届きます)。' % pr)
-                        page.update()
-                    except (feedback.FeedbackError, ghcli.GhError) as e:
-                        err.value = str(e)
-                        page.update()
-                run_bg(work)
-
-            page.show_dialog(ft.AlertDialog(
-                modal=True,
-                title=ft.Text('%s のフィードバック' % release['tag']),
-                content=ft.Column([field, err], tight=True, width=520),
-                actions=[
-                    ft.TextButton('キャンセル',
-                                  on_click=lambda _: page.pop_dialog()),
-                    ft.FilledButton('送信', on_click=send,
-                                    bgcolor=NAVY, color='#ffffff'),
-                ]))
-        return handler
-
-    def on_refresh_betas(_):
-        t3_status.value = '取得中...'
-        page.update()
-
-        def work():
-            try:
-                releases = ghcli.fetch_releases(repo)
-            except ghcli.GhError as e:
-                t3_status.value = str(e)
-                page.update()
-                return
-            betas = ghcli.prereleases(releases)
-            set_badge(beta_badge, len(betas))
-            t3_list.controls.clear()
-            if not betas:
-                t3_list.controls.append(
-                    ft.Text('試用できるβ版はいまありません', size=14))
-            for r in betas:
-                t3_list.controls.append(ft.Container(
-                    bgcolor='#f5f7fa', border_radius=6, padding=12,
-                    content=ft.Row([
-                        ft.Column([
-                            ft.Text('%s (%s)' % (r['tag'],
-                                                 r['published_at']),
-                                    weight=ft.FontWeight.BOLD),
-                            ft.Text(r['name'], size=12, color='#555555'),
-                        ], spacing=2, expand=True),
-                        ft.OutlinedButton('フィードバック',
-                                          on_click=on_feedback(r)),
-                        ft.FilledButton(
-                            '試す', icon=ft.Icons.SCIENCE,
-                            on_click=try_beta(r),
-                            bgcolor=AMBER, color='#ffffff'),
-                    ])))
-            t3_status.value = ''
-            page.update()
-        run_bg(work)
-
-    tab_beta = ft.Container(padding=24, content=ft.Column([
-        ft.Text('β版は安定版とは別フォルダ・別データ・別ポートで起動する'
-                'ため、通常の作業に影響しません。', size=13, color='#555555'),
-        ft.OutlinedButton('β版一覧を取得', icon=ft.Icons.REFRESH,
-                          on_click=on_refresh_betas),
-        t3_list,
-        t3_status,
-    ], spacing=16, scroll=ft.ScrollMode.AUTO))
-
-    # ---------------- タブ4: 提出 ----------------
+    # ---------------- タブ3: 更新版を提出 ----------------
 
     file_picker = ft.FilePicker()
     page.services.append(file_picker)
@@ -324,7 +212,8 @@ def main(page: ft.Page):
                     existing_branch=existing_branch)
                 t4_status.value = ''
                 t4_result.value = (
-                    '提出しました。検証と承認が済むと配布されます。\n'
+                    '提出しました。検証を通過するとβ版として発行され、'
+                    '「β版の確認と承認」タブに表示されます。\n'
                     '提出内容: %s' % result['pr_url'])
                 t4_commit_msg.value = ''
             except (submit.SubmitError, ghcli.GhError, GitError) as e:
@@ -498,9 +387,11 @@ def main(page: ft.Page):
 
     tab_submit = ft.Container(padding=24, content=ft.Column([
         ft.Text('作業した mgtkit のフォルダを ZIP にして提出すると、'
-                '検証と承認ののち正式版として配布されます。'
-                'マネージャーで取得した版 (version.json 入り) を基に'
-                '作業してください。', size=13, color='#555555'),
+                '自動で検証されます。エラーなく本体に組み込める状態に'
+                'なるとβ版として発行され、メンバーの確認と承認を経て'
+                '正式版になります。マネージャーで取得した版 '
+                '(version.json 入り) を基に作業してください。',
+                size=13, color='#555555'),
         t4_commit_msg,
         t4_submit_btn,
         t4_status,
@@ -516,14 +407,95 @@ def main(page: ft.Page):
         t4_fix_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 
-    # ---------------- タブ5: 承認 ----------------
+    # ------------- タブ4: β版の確認と承認 (β版の試用 + 承認を 1 画面に) -------------
 
     t5_list = ft.Column([], spacing=8)
+    t5_beta_extra = ft.Column([], spacing=8)
     t5_status = status_text()
 
     def _t5_progress(msg):
         t5_status.value = msg
         page.update()
+
+    def try_beta(release):
+        def handler(_):
+            t5_status.value = '%s を準備しています...' % release['tag']
+            page.update()
+
+            def work():
+                def progress(msg):
+                    t5_status.value = '%s: %s' % (release['tag'], msg)
+                    page.update()
+                beta = paths.beta_dir(release['tag'], config)
+                try:
+                    if updater.local_version_info(beta) is None:
+                        updater.install_release(repo, release, beta,
+                                                on_progress=progress)
+                    _, url = launcher.launch_app(
+                        beta, paths.beta_port(config), channel='beta')
+                    t5_status.value = ('β版 %s を起動しました (安定版とは'
+                                       '別画面・別データ): %s'
+                                       % (release['tag'], url))
+                except (ghcli.GhError, launcher.LaunchError,
+                        Exception) as e:
+                    t5_status.value = str(e) or 'β版の起動に失敗しました。'
+                page.update()
+            run_bg(work)
+        return handler
+
+    def on_feedback_dialog(pr, beta):
+        """フィードバック一覧 (誰が・いつ・内容) + β版があれば投稿欄."""
+        def handler(_):
+            items = []
+            for fb in pr.get('feedback') or []:
+                items.append(ft.Container(
+                    bgcolor='#f5f7fa', border_radius=6, padding=10,
+                    content=ft.Column([
+                        ft.Text('%s さん (%s / %s)'
+                                % (fb['name'], fb['tag'], fb['date']),
+                                size=12, weight=ft.FontWeight.BOLD,
+                                color='#555555'),
+                        ft.Text(fb['text'], size=13, selectable=True),
+                    ], spacing=4)))
+            if not items:
+                items.append(ft.Text('フィードバックはまだありません。',
+                                     size=13))
+            actions = [ft.TextButton(
+                '閉じる', on_click=lambda _: page.pop_dialog())]
+            if beta is not None:
+                field = ft.TextField(
+                    label='気づいたこと・不具合・感想 '
+                          '(承認の判断材料になります)',
+                    multiline=True, min_lines=3, max_lines=6)
+                err = ft.Text('', size=12, color='#b91c1c')
+                items += [ft.Divider(), field, err]
+
+                def send(_):
+                    def work():
+                        try:
+                            n = feedback.post_feedback(beta, field.value,
+                                                       config)
+                            page.pop_dialog()
+                            t5_status.value = ('フィードバックを送信しました '
+                                               '(提出 #%d に届きます)。' % n)
+                            page.update()
+                            on_refresh_reviews(None)
+                        except (feedback.FeedbackError,
+                                ghcli.GhError) as e:
+                            err.value = str(e)
+                            page.update()
+                    run_bg(work)
+
+                actions.append(ft.FilledButton('送信', on_click=send,
+                                               bgcolor=NAVY,
+                                               color='#ffffff'))
+            page.show_dialog(ft.AlertDialog(
+                modal=True,
+                title=ft.Text('#%d のフィードバック' % pr['number']),
+                content=ft.Column(items, tight=True, width=560,
+                                  scroll=ft.ScrollMode.AUTO),
+                actions=actions))
+        return handler
 
     def on_approve(pr):
         def handler(_):
@@ -693,7 +665,7 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
-    def _review_row(pr, me):
+    def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
         badges = [ft.Container(
             bgcolor='#fef08a', border_radius=4,
@@ -735,7 +707,18 @@ def main(page: ft.Page):
                                            rej['comment'] or '(理由なし)'),
                 size=12, color='#b91c1c'))
 
-        buttons = [ft.OutlinedButton('差分', on_click=on_show_diff(pr))]
+        buttons = []
+        if beta is not None:
+            buttons.append(ft.FilledButton(
+                'β版 %s を試す' % beta['tag'], icon=ft.Icons.SCIENCE,
+                on_click=try_beta(beta), bgcolor=AMBER, color='#ffffff'))
+        fb = pr.get('feedback') or []
+        buttons.append(ft.OutlinedButton(
+            'フィードバック %d 件' % len(fb),
+            disabled=(beta is None and not fb),
+            on_click=on_feedback_dialog(pr, beta)))
+        buttons.append(ft.OutlinedButton('差分',
+                                         on_click=on_show_diff(pr)))
         if pr['author'] == me:
             if pr['conflicting']:
                 buttons.append(ft.FilledButton(
@@ -757,6 +740,13 @@ def main(page: ft.Page):
         return ft.Container(bgcolor='#f5f7fa', border_radius=6, padding=12,
                             content=ft.Column(lines, spacing=6))
 
+    def _beta_for(pr_number, betas):
+        """提出番号に対応するβ版 (リリースノートの #N で対応付け)."""
+        for r in betas:
+            if feedback.pr_number_from_release(r) == pr_number:
+                return r
+        return None
+
     def on_refresh_reviews(_):
         t5_status.value = '取得中...'
         page.update()
@@ -765,56 +755,87 @@ def main(page: ft.Page):
             try:
                 pending = reviews.list_pending(config)
                 me = reviews.current_user()
+                releases = ghcli.fetch_releases(repo)
             except (reviews.ReviewError, ghcli.GhError) as e:
                 t5_status.value = str(e)
                 page.update()
                 return
+            betas = ghcli.prereleases(releases)
             set_badge(review_badge, len(pending))
             t5_list.controls.clear()
             if not pending:
                 t5_list.controls.append(
-                    ft.Text('承認待ちの提出はありません', size=14))
+                    ft.Text('確認・承認待ちの提出はありません', size=14))
+            used = set()
             for pr in pending:
-                t5_list.controls.append(_review_row(pr, me))
+                beta = _beta_for(pr['number'], betas)
+                if beta is not None:
+                    used.add(beta['tag'])
+                t5_list.controls.append(_review_row(pr, me, beta))
+            others = [b for b in betas if b['tag'] not in used]
+            t5_beta_extra.controls.clear()
+            if others:
+                t5_beta_extra.controls.append(ft.Text(
+                    'その他のβ版 (承認待ちの提出とは対応しません)',
+                    size=13, weight=ft.FontWeight.BOLD))
+                for r in others:
+                    t5_beta_extra.controls.append(ft.Container(
+                        bgcolor='#f5f7fa', border_radius=6, padding=12,
+                        content=ft.Row([
+                            ft.Column([
+                                ft.Text('%s (%s)' % (r['tag'],
+                                                     r['published_at']),
+                                        weight=ft.FontWeight.BOLD),
+                                ft.Text(r['name'], size=12,
+                                        color='#555555'),
+                            ], spacing=2, expand=True),
+                            ft.FilledButton(
+                                '試す', icon=ft.Icons.SCIENCE,
+                                on_click=try_beta(r),
+                                bgcolor=AMBER, color='#ffffff'),
+                        ])))
             t5_status.value = ''
             page.update()
         run_bg(work)
 
-    tab_review = ft.Container(padding=24, content=ft.Column([
-        ft.Text('提出された機能追加の確認と承認を行います。%d 人の承認が'
-                'そろうとリリースできます。自分の提出は自分では'
-                '承認できません。' % reviews.required_approvals(config),
+    tab_beta_review = ft.Container(padding=24, content=ft.Column([
+        ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
+                'ます。β版を試して問題なければ承認してください。%d 人の'
+                '承認がそろうと正式版としてリリースできます。自分の提出は'
+                '自分では承認できません。'
+                % reviews.required_approvals(config),
                 size=13, color='#555555'),
-        ft.OutlinedButton('承認待ち一覧を取得', icon=ft.Icons.REFRESH,
+        ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
+                'ため、通常の作業には影響しません。', size=12,
+                color='#555555'),
+        ft.OutlinedButton('一覧を取得', icon=ft.Icons.REFRESH,
                           on_click=on_refresh_reviews),
         t5_list,
+        t5_beta_extra,
         t5_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 
     # ---------------- 組み立て ----------------
 
     update_label, update_badge = tab_label('更新')
-    beta_label, beta_badge = tab_label('β版')
-    review_label, review_badge = tab_label('承認')
+    review_label, review_badge = tab_label('β版の確認と承認')
 
     page.add(
         header(),
         ft.Tabs(
-            length=5, selected_index=0, animation_duration=150, expand=True,
+            length=4, selected_index=0, animation_duration=150, expand=True,
             content=ft.Column([
                 ft.TabBar(tabs=[
                     ft.Tab(label='起動'),
                     ft.Tab(label=update_label),
-                    ft.Tab(label=beta_label),
-                    ft.Tab(label='提出'),
+                    ft.Tab(label='更新版を提出'),
                     ft.Tab(label=review_label),
                 ]),
                 ft.TabBarView(expand=True, controls=[
                     tab_launch,
                     tab_update,
-                    tab_beta,
                     tab_submit,
-                    tab_review,
+                    tab_beta_review,
                 ]),
             ], spacing=0, expand=True),
         ),
@@ -838,8 +859,6 @@ def main(page: ft.Page):
             else:
                 t1_notice.value = ''
                 set_badge(update_badge, 0)
-            set_badge(beta_badge,
-                      len(ghcli.prereleases(result['releases'])))
             try:
                 set_badge(review_badge, reviews.count_pending(config))
             except Exception:

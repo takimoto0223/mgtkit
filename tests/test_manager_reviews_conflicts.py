@@ -36,6 +36,37 @@ class TestApprovalSummary:
         assert s == {'approved': [], 'rejected': []}
 
 
+class TestParseFeedback:
+    def test_extracts_feedback_comments_only(self):
+        comments = [
+            {'body': 'β版 v1.1-beta.2 のフィードバック (山田太郎):\n\n'
+                     '検定比の表示が見やすくなった',
+             'createdAt': '2026-08-05T12:34:56Z'},
+            {'body': '検証に失敗したため自動修正を行いました。',
+             'createdAt': '2026-08-05T13:00:00Z'},
+        ]
+        assert reviews.parse_feedback(comments) == [
+            {'tag': 'v1.1-beta.2', 'name': '山田太郎',
+             'date': '2026-08-05', 'text': '検定比の表示が見やすくなった'}]
+
+    def test_roundtrip_with_post_feedback_format(self):
+        # feedback.post_feedback が組み立てる本文と同一形式を確実に拾う
+        from manager import feedback as fb_mod
+        rel = {'tag': 'v2.0-beta.1', 'notes': '提出 #34 の検証通過版です。'}
+        body = 'β版 %s のフィードバック (%s):\n\n%s' % (
+            rel['tag'], '佐藤次郎', '複数行の\n感想も保持される')
+        assert fb_mod.pr_number_from_release(rel) == 34
+        fb = reviews.parse_feedback(
+            [{'body': body, 'createdAt': '2026-08-06T00:00:00Z'}])
+        assert fb == [{'tag': 'v2.0-beta.1', 'name': '佐藤次郎',
+                       'date': '2026-08-06',
+                       'text': '複数行の\n感想も保持される'}]
+
+    def test_empty(self):
+        assert reviews.parse_feedback(None) == []
+        assert reviews.parse_feedback([]) == []
+
+
 class TestReleaseRules:
     def _pr(self, **kw):
         pr = {'approved': ['a', 'b', 'c'], 'rejected': [],
