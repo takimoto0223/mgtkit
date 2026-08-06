@@ -63,7 +63,14 @@ _ALLOWED_LOCK = threading.Lock()
 # matplotlib (pyplot) はスレッドセーフでないため描画系は直列化する
 _PLOT_LOCK = threading.Lock()
 
-_UPLOAD_DIR = os.path.join(tempfile.gettempdir(), 'mgtkit_uploads')
+# アップロード一時フォルダ。β版など複数インスタンス起動時は
+# MGTKIT_UPLOAD_DIR で分離できる (アプリマネージャーが設定する)
+_UPLOAD_DIR = (os.environ.get('MGTKIT_UPLOAD_DIR', '').strip()
+               or os.path.join(tempfile.gettempdir(), 'mgtkit_uploads'))
+
+# 配布チャネル (stable / beta)。β版はマネージャーが MGTKIT_CHANNEL=beta で
+# 起動し、画面上部にβ版バナーを表示する
+_CHANNEL = os.environ.get('MGTKIT_CHANNEL', 'stable').strip() or 'stable'
 
 # 直近の検定結果キャッシュ (検定比図の生成用。検定条件が一致する場合のみ再利用)
 _CHECK_CACHE = {'key': None, 'result': None}
@@ -395,7 +402,7 @@ def index():
         ver = int(os.path.getmtime(os.path.join(_HERE, 'static', 'app.js')))
     except OSError:
         ver = 0
-    return render_template('index.html', app_ver=ver)
+    return render_template('index.html', app_ver=ver, channel=_CHANNEL)
 
 
 @app.route('/api/file')

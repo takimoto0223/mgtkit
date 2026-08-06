@@ -1,0 +1,2 @@
+# アプリマネージャー用依存 (mgtkit 本体の requirements.txt とは独立)
+flet==0.86.5

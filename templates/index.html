@@ -123,6 +123,12 @@
 </head>
 <body>
 <header><h1>mgtkit<span>MIDAS mgt モデル図・応力図・断面検定・TeX・DXF ツール</span></h1></header>
+{% if channel == 'beta' %}
+<div style="background:#b45309;color:#fff;text-align:center;padding:6px 10px;
+            font-size:13px;font-weight:600;">
+  これはβ版です — 試用中の機能が含まれます。問題があればフィードバックをお願いします。
+</div>
+{% endif %}
 <nav>
   <button data-tab="model" class="active">モデル</button>
   <button data-tab="stress">応力図</button>
