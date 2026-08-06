@@ -44,16 +44,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write  # gitleaks-action が PR 情報取得と検出時のコメントに使用
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # gitleaks はアクション (gitleaks-action) ではなくバイナリを直接実行する。
+      # アクションの取得解決が GitHub 側の障害で失敗し CI が止まった実績があるため、
+      # 外部アクションへの依存を減らしている。検出時はこのステップが fail する。
       - name: 秘密情報スキャン (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: 8.18.4
+        run: |
+          curl -sSfL --retry 3 -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --redact --no-banner
 
       - name: 依存監査 (pip-audit、requirements.txt 変更時のみ)
         run: |
