@@ -51,7 +51,11 @@ def _start_merge(workrepo, branch, base):
     """
     run_git(['fetch', 'origin', branch, base], cwd=workrepo, timeout=300)
     run_git(['checkout', '-B', branch, 'origin/%s' % branch], cwd=workrepo)
-    proc = _git_raw(['merge', '--no-commit', '--no-ff',
+    # git 個人設定が無い環境でも動くよう merge 時の識別情報を明示する
+    # (統合コミット自体は resolve() が gh のログイン名で記録する)
+    proc = _git_raw(['-c', 'user.name=mgtkit-manager',
+                     '-c', 'user.email=manager@users.noreply.github.com',
+                     'merge', '--no-commit', '--no-ff',
                      'origin/%s' % base], cwd=workrepo)
     conflicted = [p for p in run_git(
         ['diff', '--name-only', '--diff-filter=U'],
