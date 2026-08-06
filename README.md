@@ -25,6 +25,17 @@ pip install flask numpy matplotlib openpyxl pypdf ezdxf
 
 `readme/mgtkit操作マニュアル_v1.5.pdf` を参照してください。
 
+## アプリマネージャー
+
+バージョン管理・機能追加の提出・承認を Git / GitHub を意識せずに行うための
+デスクトップアプリを同梱しています。
+
+- 新しいメンバー: `scripts/setup.bat` を実行するだけで環境構築からマネージャー起動まで完了します
+- 既にリポジトリがある場合: `manager\マネージャー起動.bat` で起動します
+- 初回起動時に名前と本人の Anthropic API キーを登録します (この PC 内にのみ保存)
+- タブ構成: 起動 / 更新 / β版 / 提出 / 承認。詳細は `docs/app-manager-spec.md` (仕様) と
+  `docs/app-manager-decisions.md` (運用の決定記録) を参照してください
+
 ## 構成
 
 | パス | 内容 |
@@ -39,6 +50,10 @@ pip install flask numpy matplotlib openpyxl pypdf ezdxf
 | `data/` | 基準データ（材料・鉄筋・PC 情報など JSON） |
 | `templates/` / `static/` | フロントエンド（index.html / app.js） |
 | `readme/` | 操作マニュアル |
+| `manager/` | アプリマネージャー（Flet 製。起動・更新・β版・提出・承認） |
+| `tests/` | 回帰テスト（pytest。CI で自動実行） |
+| `docs/` | アプリマネージャーの仕様書・決定記録 |
+| `scripts/` | セットアップ用スクリプト（setup.bat / ブランチ保護） |
 
 出力は入力 mgt ファイルと同じ階層の `mgtkit_out/` に生成されます（git 管理対象外）。
 
