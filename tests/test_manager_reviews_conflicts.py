@@ -35,6 +35,45 @@ class TestApprovalSummary:
         s = reviews.approval_summary([])
         assert s == {'approved': [], 'rejected': []}
 
+    def test_members_filter_excludes_outsiders(self):
+        # public リポジトリでは第三者もレビューできるため、
+        # collaborator 以外の承認・却下はカウントしない
+        s = reviews.approval_summary([
+            {'author': {'login': 'member-a'}, 'state': 'APPROVED',
+             'body': ''},
+            {'author': {'login': 'stranger'}, 'state': 'APPROVED',
+             'body': ''},
+            {'author': {'login': 'troll'}, 'state': 'CHANGES_REQUESTED',
+             'body': 'いたずら却下'},
+        ], members={'member-a', 'member-b'})
+        assert s['approved'] == ['member-a']
+        assert s['rejected'] == []
+
+    def test_members_none_counts_everyone(self):
+        s = reviews.approval_summary(
+            [{'author': {'login': 'anyone'}, 'state': 'APPROVED',
+              'body': ''}], members=None)
+        assert s['approved'] == ['anyone']
+
+
+class TestCollaborators:
+    def test_returns_push_members(self, monkeypatch):
+        monkeypatch.setattr(
+            reviews.ghcli, 'run_gh',
+            lambda args, timeout=60: '["yamada", "sato"]')
+        assert reviews.collaborators({'repo': 'o/r'}) == {'yamada', 'sato'}
+
+    def test_none_on_gh_error(self, monkeypatch):
+        def boom(args, timeout=60):
+            raise reviews.ghcli.GhError('通信エラー')
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', boom)
+        assert reviews.collaborators({'repo': 'o/r'}) is None
+
+    def test_none_on_empty(self, monkeypatch):
+        monkeypatch.setattr(reviews.ghcli, 'run_gh',
+                            lambda args, timeout=60: '[]')
+        assert reviews.collaborators({'repo': 'o/r'}) is None
+
 
 class TestParseFeedback:
     def test_extracts_feedback_comments_only(self):

@@ -41,7 +41,9 @@ pip install flask numpy matplotlib openpyxl pypdf ezdxf
   - **β版の確認と承認**: β版の試用・フィードバック・承認を 1 画面で行います。
     各提出の「フィードバック n 件」からメンバーの感想・不具合報告を一覧でき、
     3人の承認がそろえば正式版としてリリースできます（特定メンバーに
-    限定したい場合は `config.json` の `manager.admins` に名前を設定）
+    限定したい場合は `config.json` の `manager.admins` に名前を設定）。
+    承認・却下は push 権限を持つ collaborator のものだけがカウントされます
+    (public リポジトリで第三者がレビューしても影響しません)
   - 更新 / β版の確認と承認タブには未対応の件数が黄色バッジで表示されます
 - 設計判断・運用ルールの詳細は `docs/app-manager-decisions.md` を参照してください
 
