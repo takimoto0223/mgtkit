@@ -51,6 +51,11 @@ DIST_EXCLUDE_FILES = ('.gitignore', 'pytest.ini', 'requirements-dev.txt')
 # (名前・API キー)。どちらも提出対象から常に除外する
 GENERATED_FILES = ('version.json', 'settings.json')
 
+# 作業フォルダに混ざりがちな生成物・環境フォルダ。ZIP に入っていても
+# 差分対象にしない (「フォルダ丸ごと ZIP で OK」を成立させるため)
+JUNK_DIRS = {'.git', '__pycache__', '.pytest_cache', 'mgtkit_out',
+             '.venv', 'venv', '.idea', '.vscode'}
+
 # 明確な認証情報は即ブロック (誤提出による流出を防ぐ)
 _SECRET_BLOCKER_PATTERNS = [
     ('Anthropic API キー', re.compile(r'sk-ant-[A-Za-z0-9_\-]{16,}')),
@@ -73,6 +78,8 @@ def _is_dist_scope(relpath):
     p = relpath.replace(os.sep, '/')
     if p in GENERATED_FILES or p in DIST_EXCLUDE_FILES:
         return False
+    if any(seg in JUNK_DIRS for seg in p.split('/')[:-1]):
+        return False
     return not any(p.startswith(d) for d in DIST_EXCLUDE_DIRS)
 
 
@@ -80,7 +87,7 @@ def _walk_files(root):
     """root 以下の全ファイルの相対パス (/ 区切り) を返す."""
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in ('__pycache__',)]
+        dirnames[:] = [d for d in dirnames if d not in JUNK_DIRS]
         for name in filenames:
             full = os.path.join(dirpath, name)
             rel = os.path.relpath(full, root).replace(os.sep, '/')
