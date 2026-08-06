@@ -66,6 +66,25 @@ def approval_summary(reviews):
     return {'approved': approved, 'rejected': rejected}
 
 
+def parse_feedback(comments):
+    """PR コメントからβ版フィードバックを抽出する.
+
+    feedback.post_feedback が投稿する
+    「β版 <tag> のフィードバック (<名前>):\\n\\n<本文>」形式のみ拾う。
+    戻り値: [{'tag', 'name', 'date', 'text'}] (投稿順)
+    """
+    result = []
+    for c in comments or []:
+        body = c.get('body') or ''
+        m = re.match(r'β版 (\S+) のフィードバック \((.+?)\):\s*', body)
+        if not m:
+            continue
+        result.append({'tag': m.group(1), 'name': m.group(2),
+                       'date': (c.get('createdAt') or '')[:10],
+                       'text': body[m.end():].strip()})
+    return result
+
+
 def list_pending(config=None):
     """承認待ちの提出一覧 (open PR + 承認状況 + 検証状況 + 競合有無)."""
     out = ghcli.run_gh([
@@ -87,6 +106,7 @@ def list_pending(config=None):
             'author': (pr.get('author') or {}).get('login', '?'),
             'approved': summary['approved'],
             'rejected': summary['rejected'],
+            'feedback': parse_feedback(detail.get('comments')),
             'checks': _summarize_checks(detail.get('statusCheckRollup')
                                         or []),
             'conflicting': (detail.get('mergeable') or '').upper()
@@ -110,7 +130,7 @@ def _pr_detail(pr_number, config=None):
     out = ghcli.run_gh([
         'pr', 'view', str(pr_number), '--repo', paths.repo_slug(config),
         '--json', 'reviews,statusCheckRollup,mergeable,headRefName,'
-                  'title,body,author'])
+                  'title,body,author,comments'])
     try:
         return json.loads(out)
     except ValueError:
