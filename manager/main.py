@@ -78,7 +78,8 @@ def main(page: ft.Page):
         info = updater.local_version_info(stable)
         if info is None:
             t1_version.value = '安定版は未取得です'
-            t1_status.value = '「更新」タブから最新の安定版を取得してください。'
+            t1_status.value = ('「起動」を押すと最新の安定版を自動で取得して'
+                               '開きます。')
         else:
             t1_version.value = '安定版 %s' % info.get('version', '?')
             t1_status.value = '配布日: %s' % info.get('distributed_at', '-')
@@ -89,12 +90,28 @@ def main(page: ft.Page):
         page.update()
 
         def work():
+            def progress(msg):
+                t1_status.value = msg
+                page.update()
             try:
+                if updater.local_version_info(stable) is None:
+                    # 初回: 最新の安定版を自動で取得してから起動する
+                    progress('最新の安定版を確認しています...')
+                    latest = ghcli.latest_stable(
+                        ghcli.fetch_releases(repo))
+                    if latest is None:
+                        t1_status.value = ('配布された安定版がまだありません。'
+                                           '管理者に確認してください。')
+                        page.update()
+                        return
+                    updater.install_release(repo, latest, stable,
+                                            on_progress=progress)
+                    refresh_local_version()
                 _, url = launcher.launch_app(
                     stable, paths.stable_port(config), channel='stable')
                 t1_status.value = 'ブラウザで開きます: %s' % url
-            except launcher.LaunchError as e:
-                t1_status.value = str(e)
+            except (ghcli.GhError, launcher.LaunchError, Exception) as e:
+                t1_status.value = str(e) or '起動に失敗しました。'
             page.update()
         run_bg(work)
 
