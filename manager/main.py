@@ -41,7 +41,8 @@ def main(page: ft.Page):
 
     def header():
         return ft.Container(
-            bgcolor=NAVY, padding=ft.padding.symmetric(10, 18),
+            bgcolor=NAVY,
+            padding=ft.Padding.symmetric(vertical=10, horizontal=18),
             content=ft.Row([
                 ft.Text('mgtkit', size=20, weight=ft.FontWeight.BOLD,
                         color='#ffffff'),
@@ -82,7 +83,7 @@ def main(page: ft.Page):
         t1_version,
         ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
                         on_click=on_launch_stable,
-                        style=ft.ButtonStyle(bgcolor=NAVY, color='#ffffff')),
+                        bgcolor=NAVY, color='#ffffff'),
         t1_status,
     ], spacing=16))
 
@@ -93,7 +94,7 @@ def main(page: ft.Page):
     t2_status = status_text()
     t2_update_btn = ft.FilledButton(
         '更新して起動', icon=ft.Icons.DOWNLOAD, disabled=True,
-        style=ft.ButtonStyle(bgcolor=NAVY, color='#ffffff'))
+        bgcolor=NAVY, color='#ffffff')
     _latest = {'release': None}
 
     def on_check_update(_):
@@ -225,8 +226,7 @@ def main(page: ft.Page):
                         ft.FilledButton(
                             '試す', icon=ft.Icons.SCIENCE,
                             on_click=try_beta(r),
-                            style=ft.ButtonStyle(bgcolor=AMBER,
-                                                 color='#ffffff')),
+                            bgcolor=AMBER, color='#ffffff'),
                     ])))
             t3_status.value = ''
             page.update()
@@ -245,12 +245,21 @@ def main(page: ft.Page):
 
     page.add(
         header(),
-        ft.Tabs(selected_index=0, animation_duration=150, expand=True,
-                tabs=[
-                    ft.Tab(text='起動', content=tab_launch),
-                    ft.Tab(text='更新', content=tab_update),
-                    ft.Tab(text='β版', content=tab_beta),
+        ft.Tabs(
+            length=3, selected_index=0, animation_duration=150, expand=True,
+            content=ft.Column([
+                ft.TabBar(tabs=[
+                    ft.Tab(label='起動'),
+                    ft.Tab(label='更新'),
+                    ft.Tab(label='β版'),
                 ]),
+                ft.TabBarView(expand=True, controls=[
+                    tab_launch,
+                    tab_update,
+                    tab_beta,
+                ]),
+            ], spacing=0, expand=True),
+        ),
     )
     refresh_local_version()
 
