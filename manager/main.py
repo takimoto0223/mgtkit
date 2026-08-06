@@ -10,7 +10,8 @@ import threading
 
 import flet as ft
 
-from . import autofix, ghcli, launcher, paths, settings, submit, updater
+from . import (autofix, conflicts, ghcli, launcher, paths, reviews,
+               settings, submit, updater)
 from .gitcli import GitError
 
 logging.basicConfig(level=logging.INFO)
@@ -260,12 +261,13 @@ def main(page: ft.Page):
         t4_status.value = msg
         page.update()
 
-    def _do_finalize(prep, deletions):
+    def _do_finalize(prep, deletions, existing_branch=None):
         def work():
             try:
                 result = submit.finalize_submission(
                     prep, deletions, t4_commit_msg.value or '',
-                    config, on_progress=_submit_progress)
+                    config, on_progress=_submit_progress,
+                    existing_branch=existing_branch)
                 t4_status.value = ''
                 t4_result.value = (
                     '提出しました。検証と承認が済むと配布されます。\n'
@@ -280,14 +282,23 @@ def main(page: ft.Page):
             page.update()
         run_bg(work)
 
-    def _confirm_and_finalize(prep):
+    def _confirm_and_finalize(prep, my_prs=()):
         """削除ファイルの確認・警告表示ダイアログ → 確定."""
         ch = prep['changes']
         warnings = prep['safety']['warnings']
         del_checks = [ft.Checkbox(label=rel, value=False)
                       for rel in ch['deleted']]
+        dest_dd = None
         items = [ft.Text('追加 %d 件 / 変更 %d 件のファイルを提出します。'
                          % (len(ch['added']), len(ch['modified'])))]
+        if my_prs:
+            # 差し戻し後の修正版は同一の提出に積める (spec 2.2)
+            options = [ft.DropdownOption(key='', text='新しい提出として出す')]
+            options += [ft.DropdownOption(
+                key=p['branch'], text='#%d に修正版として積む (%s)'
+                % (p['number'], p['title'][:30])) for p in my_prs]
+            dest_dd = ft.Dropdown(label='提出先', options=options, value='')
+            items.append(dest_dd)
         if del_checks:
             items.append(ft.Text(
                 '基点にあったのに ZIP に無いファイルがあります。'
@@ -311,7 +322,8 @@ def main(page: ft.Page):
         def proceed(_):
             page.pop_dialog()
             deletions = [c.label for c in del_checks if c.value]
-            _do_finalize(prep, deletions)
+            existing = (dest_dd.value or None) if dest_dd else None
+            _do_finalize(prep, deletions, existing)
 
         page.show_dialog(ft.AlertDialog(
             modal=True, title=ft.Text('提出内容の確認'),
@@ -353,9 +365,14 @@ def main(page: ft.Page):
             t4_submit_btn.disabled = False
             page.update()
             return
+        try:
+            my_prs = await asyncio.to_thread(
+                autofix.list_my_submissions, config)
+        except Exception:
+            my_prs = []
         t4_status.value = ''
         page.update()
-        _confirm_and_finalize(prep)
+        _confirm_and_finalize(prep, my_prs)
 
     t4_submit_btn.on_click = on_submit
 
@@ -445,24 +462,300 @@ def main(page: ft.Page):
         t4_fix_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 
+    # ---------------- タブ5: 承認 ----------------
+
+    t5_list = ft.Column([], spacing=8)
+    t5_status = status_text()
+
+    def _t5_progress(msg):
+        t5_status.value = msg
+        page.update()
+
+    def on_approve(pr):
+        def handler(_):
+            def work():
+                try:
+                    reviews.approve(pr['number'], config)
+                    t5_status.value = '#%d を承認しました。' % pr['number']
+                except (reviews.ReviewError, ghcli.GhError) as e:
+                    t5_status.value = str(e)
+                page.update()
+                on_refresh_reviews(None)
+            run_bg(work)
+        return handler
+
+    def on_reject(pr):
+        def handler(_):
+            reason = ft.TextField(label='却下の理由 (必須。提出者に伝わります)',
+                                  multiline=True, min_lines=2, max_lines=4)
+            err = ft.Text('', size=12, color='#b91c1c')
+
+            def do_reject(_):
+                def work():
+                    try:
+                        reviews.request_changes(pr['number'], reason.value,
+                                                config)
+                        page.pop_dialog()
+                        t5_status.value = ('#%d を差し戻しました。'
+                                           % pr['number'])
+                        page.update()
+                        on_refresh_reviews(None)
+                    except (reviews.ReviewError, ghcli.GhError) as e:
+                        err.value = str(e)
+                        page.update()
+                run_bg(work)
+
+            page.show_dialog(ft.AlertDialog(
+                modal=True, title=ft.Text('#%d を却下' % pr['number']),
+                content=ft.Column([reason, err], tight=True, width=480),
+                actions=[
+                    ft.TextButton('キャンセル',
+                                  on_click=lambda _: page.pop_dialog()),
+                    ft.FilledButton('却下する', on_click=do_reject,
+                                    bgcolor='#b91c1c', color='#ffffff'),
+                ]))
+        return handler
+
+    def on_show_diff(pr):
+        def handler(_):
+            _t5_progress('差分を取得しています...')
+
+            def work():
+                try:
+                    d = reviews.classified_diff(pr['number'], config)
+                except Exception as e:
+                    log.exception('classified_diff failed')
+                    t5_status.value = '差分を取得できませんでした: %s' % e
+                    page.update()
+                    return
+                items = []
+                if d['user_files']:
+                    items.append(ft.Text('提出者の変更:', size=13,
+                                         weight=ft.FontWeight.BOLD,
+                                         color=NAVY))
+                    items += [ft.Text('  ' + f, size=12, color=NAVY)
+                              for f in d['user_files']]
+                if d['autofix_files']:
+                    items.append(ft.Text('自動修正 [auto-fix] による変更:',
+                                         size=13,
+                                         weight=ft.FontWeight.BOLD,
+                                         color=AMBER))
+                    items += [ft.Text('  ' + f, size=12, color=AMBER)
+                              for f in d['autofix_files']]
+                diff = d['diff_text']
+                if len(diff) > 20000:
+                    diff = diff[:20000] + '\n... (以降は GitHub で確認)'
+                items.append(ft.Container(
+                    bgcolor='#1e293b', border_radius=6, padding=10,
+                    content=ft.Text(diff, size=11, color='#e2e8f0',
+                                    font_family='monospace',
+                                    selectable=True)))
+                t5_status.value = ''
+                page.show_dialog(ft.AlertDialog(
+                    title=ft.Text('#%d の差分' % pr['number']),
+                    content=ft.Column(items, width=640, height=420,
+                                      scroll=ft.ScrollMode.AUTO),
+                    actions=[ft.TextButton(
+                        '閉じる', on_click=lambda _: page.pop_dialog())]))
+                page.update()
+            run_bg(work)
+        return handler
+
+    def on_release(pr):
+        def handler(_):
+            def work():
+                try:
+                    result = reviews.release(pr['number'], config,
+                                             on_progress=_t5_progress)
+                    t5_status.value = result['message']
+                except (reviews.ReviewError, ghcli.GhError) as e:
+                    t5_status.value = str(e)
+                page.update()
+                on_refresh_reviews(None)
+            run_bg(work)
+        return handler
+
+    def on_resolve_conflict(pr):
+        def handler(_):
+            _t5_progress('最新版との衝突を調べています...')
+
+            def work():
+                try:
+                    analysis = conflicts.analyze(pr['branch'], config,
+                                                 on_progress=_t5_progress)
+                except (conflicts.ConflictError, GitError,
+                        ghcli.GhError) as e:
+                    t5_status.value = str(e)
+                    page.update()
+                    return
+
+                policy = ft.RadioGroup(value='both', content=ft.Column([
+                    ft.Radio(value='both',
+                             label='両方の機能を残す (推奨)'),
+                    ft.Radio(value='ours',
+                             label='自分の機能を優先 (最新版側の該当部分を破棄)'),
+                    ft.Radio(value='theirs',
+                             label='最新版を優先 (自分の該当部分を破棄)'),
+                ]))
+
+                def cancel(_):
+                    conflicts.abort(analysis)
+                    page.pop_dialog()
+                    t5_status.value = '統合を取り消しました。'
+                    page.update()
+
+                def execute(_):
+                    page.pop_dialog()
+                    page.update()
+
+                    def run_resolve():
+                        try:
+                            summary = conflicts.resolve(
+                                analysis, policy.value, config,
+                                on_progress=_t5_progress)
+                            t5_status.value = '統合しました: %s' % summary
+                        except (conflicts.ConflictError, GitError,
+                                ghcli.GhError) as e:
+                            t5_status.value = str(e)
+                        page.update()
+                        on_refresh_reviews(None)
+                    run_bg(run_resolve)
+
+                body = [ft.Text(analysis['explanation'], size=13)]
+                if not analysis['merged_clean']:
+                    body.append(policy)
+                t5_status.value = ''
+                page.show_dialog(ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text('最新版との統合'),
+                    content=ft.Column(body, tight=True, width=560,
+                                      scroll=ft.ScrollMode.AUTO),
+                    actions=[
+                        ft.TextButton('キャンセル', on_click=cancel),
+                        ft.FilledButton('統合を実行', on_click=execute,
+                                        bgcolor=NAVY, color='#ffffff'),
+                    ]))
+                page.update()
+            run_bg(work)
+        return handler
+
+    def _review_row(pr, me):
+        n_req = reviews.required_approvals(config)
+        badges = [ft.Container(
+            bgcolor='#fef08a', border_radius=4,
+            padding=ft.Padding.symmetric(vertical=2, horizontal=8),
+            content=ft.Text('承認 %d/%d' % (len(pr['approved']), n_req),
+                            size=12, weight=ft.FontWeight.BOLD,
+                            color='#713f12'))]
+        if pr['rejected']:
+            badges.append(ft.Container(
+                bgcolor='#fecaca', border_radius=4,
+                padding=ft.Padding.symmetric(vertical=2, horizontal=8),
+                content=ft.Text('却下あり', size=12, color='#7f1d1d')))
+        if pr['conflicting']:
+            badges.append(ft.Container(
+                bgcolor='#fde68a', border_radius=4,
+                padding=ft.Padding.symmetric(vertical=2, horizontal=8),
+                content=ft.Text('最新版と衝突', size=12, color='#78350f')))
+        checks_label, checks_color = {
+            'success': ('検証OK', '#15803d'),
+            'failure': ('検証で問題あり', '#b91c1c'),
+            'pending': ('検証中', '#b45309'),
+        }[pr['checks']]
+
+        lines = [
+            ft.Row([ft.Text('#%d %s' % (pr['number'], pr['title']),
+                            weight=ft.FontWeight.BOLD, size=13,
+                            expand=True)]),
+            ft.Row(badges + [ft.Text(checks_label, size=12,
+                                     color=checks_color),
+                             ft.Text('提出者: %s' % pr['author'], size=12,
+                                     color='#555555')], spacing=8),
+        ]
+        if pr['approved']:
+            lines.append(ft.Text('承認済み: %s' % '、'.join(pr['approved']),
+                                 size=12, color='#15803d'))
+        for rej in pr['rejected']:
+            lines.append(ft.Text(
+                '%s さんが差し戻し: %s' % (rej['name'],
+                                           rej['comment'] or '(理由なし)'),
+                size=12, color='#b91c1c'))
+
+        buttons = [ft.OutlinedButton('差分', on_click=on_show_diff(pr))]
+        if pr['author'] == me:
+            if pr['conflicting']:
+                buttons.append(ft.FilledButton(
+                    '最新版と統合', on_click=on_resolve_conflict(pr),
+                    bgcolor=AMBER, color='#ffffff'))
+        else:
+            already = me in pr['approved']
+            buttons.append(ft.FilledButton(
+                '承認済み' if already else '承認',
+                disabled=already, on_click=on_approve(pr),
+                bgcolor='#15803d', color='#ffffff'))
+            buttons.append(ft.OutlinedButton('却下',
+                                             on_click=on_reject(pr)))
+        if reviews.can_release(pr, config, me):
+            buttons.append(ft.FilledButton(
+                'リリース', icon=ft.Icons.ROCKET_LAUNCH,
+                on_click=on_release(pr), bgcolor=NAVY, color='#ffffff'))
+        lines.append(ft.Row(buttons, spacing=8))
+        return ft.Container(bgcolor='#f5f7fa', border_radius=6, padding=12,
+                            content=ft.Column(lines, spacing=6))
+
+    def on_refresh_reviews(_):
+        t5_status.value = '取得中...'
+        page.update()
+
+        def work():
+            try:
+                pending = reviews.list_pending(config)
+                me = reviews.current_user()
+            except (reviews.ReviewError, ghcli.GhError) as e:
+                t5_status.value = str(e)
+                page.update()
+                return
+            t5_list.controls.clear()
+            if not pending:
+                t5_list.controls.append(
+                    ft.Text('承認待ちの提出はありません', size=14))
+            for pr in pending:
+                t5_list.controls.append(_review_row(pr, me))
+            t5_status.value = ''
+            page.update()
+        run_bg(work)
+
+    tab_review = ft.Container(padding=24, content=ft.Column([
+        ft.Text('提出された機能追加の確認と承認を行います。%d 人の承認が'
+                'そろうと管理者がリリースできます。自分の提出は自分では'
+                '承認できません。' % reviews.required_approvals(config),
+                size=13, color='#555555'),
+        ft.OutlinedButton('承認待ち一覧を取得', icon=ft.Icons.REFRESH,
+                          on_click=on_refresh_reviews),
+        t5_list,
+        t5_status,
+    ], spacing=16, scroll=ft.ScrollMode.AUTO))
+
     # ---------------- 組み立て ----------------
 
     page.add(
         header(),
         ft.Tabs(
-            length=4, selected_index=0, animation_duration=150, expand=True,
+            length=5, selected_index=0, animation_duration=150, expand=True,
             content=ft.Column([
                 ft.TabBar(tabs=[
                     ft.Tab(label='起動'),
                     ft.Tab(label='更新'),
                     ft.Tab(label='β版'),
                     ft.Tab(label='提出'),
+                    ft.Tab(label='承認'),
                 ]),
                 ft.TabBarView(expand=True, controls=[
                     tab_launch,
                     tab_update,
                     tab_beta,
                     tab_submit,
+                    tab_review,
                 ]),
             ], spacing=0, expand=True),
         ),

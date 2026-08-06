@@ -171,6 +171,111 @@ def generate_failure_summary(failure_log):
                     '提出内容に問題がある可能性があります。管理者に相談してください。')
 
 
+def generate_release_notes(pr_title, pr_body, version):
+    """正式リリース時のリリースノートを PR 情報から生成する (spec 3.3)."""
+    return _generate(
+        '構造設計ツール mgtkit の正式版 %s のリリースノートを作成して'
+        'ください。以下の提出内容(PR)のタイトルと本文をもとに、利用者'
+        '(構造設計者) 向けに更新内容を日本語の箇条書きでまとめてください。'
+        '本文のみ出力。\n\n# タイトル\n%s\n\n# 本文\n%s'
+        % (version, pr_title, pr_body or '(本文なし)'), max_tokens=1000)
+
+
+def generate_conflict_explanation(conflict_files):
+    """衝突箇所を「機能レベルの説明」に翻訳する (spec 2.2 衝突フロー).
+
+    conflict_files: {path: 衝突マーカー付きの内容}
+    """
+    parts = []
+    total = 0
+    for path, text in conflict_files.items():
+        total += len(text)
+        if total > 60000:
+            parts.append('# %s\n(省略)' % path)
+            continue
+        parts.append('# %s\n```\n%s\n```' % (path, text))
+    return _generate(
+        'あなたは構造設計ツール mgtkit のリポジトリ管理を手伝っています。\n'
+        '提出された変更と最新版の間で、同じ箇所への変更の衝突が起きました。\n'
+        '以下の衝突マーカー付きファイル (<<<<<<< が提出者の変更、>>>>>>> が'
+        '最新版の変更) を読み、Git を知らない構造設計者向けに「どのファイルの'
+        'どの機能同士がぶつかっているか」を日本語で平易に説明してください。\n'
+        '例:「main.py で、あなたの機能a(CSV出力)と、最新版の機能b(ログ強化)が'
+        '同じ関数を変更しています」。説明のみ出力。\n\n%s'
+        % '\n\n'.join(parts), max_tokens=1000) or \
+        '提出された変更と最新版が同じ箇所を変更しています: ' + \
+        '、'.join(conflict_files)
+
+
+def generate_merge(conflict_files, policy_instruction):
+    """選択された方針に従い、衝突ファイルの統合結果を生成する.
+
+    戻り値: dict(summary, files=[{path, content}]) または None。
+    """
+    import json as _json
+    client = _client()
+    if client is None:
+        return None
+    parts = []
+    for path, text in conflict_files.items():
+        parts.append('# %s\n```\n%s\n```' % (path, text))
+    schema = {
+        'type': 'object',
+        'properties': {
+            'summary': {'type': 'string',
+                        'description': '統合内容の説明 (日本語)'},
+            'files': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'path': {'type': 'string'},
+                        'content': {'type': 'string',
+                                    'description': '統合後のファイル全文 '
+                                                   '(衝突マーカーなし)'},
+                    },
+                    'required': ['path', 'content'],
+                    'additionalProperties': False,
+                },
+            },
+        },
+        'required': ['summary', 'files'],
+        'additionalProperties': False,
+    }
+    prompt = (
+        'あなたは構造設計ツール mgtkit のコード統合を行います。\n'
+        '以下の衝突マーカー付きファイル (<<<<<<< HEAD 側が提出者の変更、'
+        '>>>>>>> 側が最新版の変更) を、次の方針で統合してください。\n\n'
+        '方針: %s\n\n'
+        'ルール: 衝突マーカーを残さない / 方針にない変更を加えない / '
+        '両方の機能を残す場合は矛盾なく共存させる。\n\n%s'
+        % (policy_instruction, '\n\n'.join(parts)))
+    try:
+        import anthropic
+        with client.messages.stream(
+            model=_model(),
+            max_tokens=48000,
+            output_config={'format': {'type': 'json_schema',
+                                      'schema': schema}},
+            messages=[{'role': 'user', 'content': prompt}],
+        ) as stream:
+            response = stream.get_final_message()
+        if response.stop_reason == 'refusal':
+            return None
+        text = next((b.text for b in response.content if b.type == 'text'),
+                    None)
+        return _json.loads(text) if text else None
+    except anthropic.APIConnectionError:
+        log.warning('Claude API に接続できませんでした')
+        return None
+    except anthropic.APIStatusError as e:
+        log.warning('Claude API エラー: %s', e.status_code)
+        return None
+    except Exception:
+        log.exception('統合生成で予期しないエラー')
+        return None
+
+
 def generate_pr_body(diff_summary, diff_text, base_version, notes=''):
     """diff から PR 本文 (更新点のまとめ) を生成する."""
     prompt = (
