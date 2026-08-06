@@ -233,7 +233,10 @@ def main(page: ft.Page):
                       for rel in ch['deleted']]
         dest_dd = None
         items = [ft.Text('追加 %d 件 / 変更 %d 件のファイルを提出します。'
-                         % (len(ch['added']), len(ch['modified'])))]
+                         % (len(ch['added']), len(ch['modified']))),
+                 ft.Text('変更のないファイルは送られません。個人設定 '
+                         '(API キーなど) や計算結果は自動で除外済みです。',
+                         size=12, color='#555555')]
         if my_prs:
             # 差し戻し後の修正版は同一の提出に積める
             options = [ft.DropdownOption(key='', text='新しい提出として出す')]
@@ -392,6 +395,10 @@ def main(page: ft.Page):
                 '正式版になります。マネージャーで取得した版 '
                 '(version.json 入り) を基に作業してください。',
                 size=13, color='#555555'),
+        ft.Text('フォルダは丸ごと ZIP にして構いません。取得した版から'
+                '変更したファイルだけが提出され、個人設定 (API キーなど)・'
+                '計算結果 (mgtkit_out) は自動で除外されます。',
+                size=12, color='#555555'),
         t4_commit_msg,
         t4_submit_btn,
         t4_status,

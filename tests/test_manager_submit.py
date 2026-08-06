@@ -145,6 +145,24 @@ class TestComputeChanges:
         finally:
             submit.cleanup(prep)
 
+    def test_junk_dirs_are_excluded(self, repo_env, tmp_path):
+        # 計算結果 (mgtkit_out) や .git 等が丸ごと ZIP に入っても差分にしない
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'],
+            **{'mgtkit_out/result.csv': 'a,b\n',
+               'sub/mgtkit_out/fig.dxf': '0\n',
+               '.git/config': '[core]\n',
+               '__pycache__/app.cpython-311.pyc': 'xx'}))
+        prep = submit.inspect_zip(z)
+        try:
+            ch = submit.compute_changes(
+                repo_env['workrepo'], repo_env['base_sha'],
+                prep['extract_dir'])
+            assert ch['added'] == []
+            assert ch['modified'] == []
+        finally:
+            submit.cleanup(prep)
+
     def test_unknown_base_commit_rejected(self, repo_env, tmp_path):
         z = _make_zip(tmp_path, {
             'app.py': 'x',
