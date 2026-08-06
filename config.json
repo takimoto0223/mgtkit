@@ -23,6 +23,7 @@
                            ".js", ".yml", ".yaml", ".cfg", ".ini", ".csv",
                            ".dxf", ".toml"],
     "claude_model": "claude-opus-5",
-    "admins": ["takimoto0223"]
+    "_admins_comment": "リリース操作を特定メンバーに限定する場合のみ名前を並べる。空 = 必要数の承認がそろえば誰でもリリース可。",
+    "admins": []
   }
 }

@@ -44,6 +44,19 @@ def main(page: ft.Page):
     def run_bg(fn):
         threading.Thread(target=fn, daemon=True).start()
 
+    def tab_label(text):
+        """タブ名 + 件数バッジ (黄色い丸に数字)。バッジ Container を返す."""
+        badge = ft.Container(
+            width=20, height=20, border_radius=10, bgcolor='#facc15',
+            visible=False, alignment=ft.Alignment(0, 0),
+            content=ft.Text('', size=11, weight=ft.FontWeight.BOLD,
+                            color='#713f12'))
+        return ft.Row([ft.Text(text), badge], spacing=6), badge
+
+    def set_badge(badge, count):
+        badge.content.value = '99+' if count > 99 else str(count)
+        badge.visible = count > 0
+
     def header():
         return ft.Container(
             bgcolor=NAVY,
@@ -250,6 +263,7 @@ def main(page: ft.Page):
                 page.update()
                 return
             betas = ghcli.prereleases(releases)
+            set_badge(beta_badge, len(betas))
             t3_list.controls.clear()
             if not betas:
                 t3_list.controls.append(
@@ -755,6 +769,7 @@ def main(page: ft.Page):
                 t5_status.value = str(e)
                 page.update()
                 return
+            set_badge(review_badge, len(pending))
             t5_list.controls.clear()
             if not pending:
                 t5_list.controls.append(
@@ -778,6 +793,10 @@ def main(page: ft.Page):
 
     # ---------------- 組み立て ----------------
 
+    update_label, update_badge = tab_label('更新')
+    beta_label, beta_badge = tab_label('β版')
+    review_label, review_badge = tab_label('承認')
+
     page.add(
         header(),
         ft.Tabs(
@@ -785,10 +804,10 @@ def main(page: ft.Page):
             content=ft.Column([
                 ft.TabBar(tabs=[
                     ft.Tab(label='起動'),
-                    ft.Tab(label='更新'),
-                    ft.Tab(label='β版'),
+                    ft.Tab(label=update_label),
+                    ft.Tab(label=beta_label),
                     ft.Tab(label='提出'),
-                    ft.Tab(label='承認'),
+                    ft.Tab(label=review_label),
                 ]),
                 ft.TabBarView(expand=True, controls=[
                     tab_launch,
@@ -802,7 +821,7 @@ def main(page: ft.Page):
     )
     refresh_local_version()
 
-    # ---------------- 新しい安定版の通知 (起動時 + 定期ポーリング) ----------------
+    # ------- 通知の更新 (起動時 + 定期ポーリング): 更新バナーとタブバッジ -------
 
     def check_update_notice(reschedule=True):
         def work():
@@ -815,8 +834,16 @@ def main(page: ft.Page):
                 t1_notice.value = ('新しい安定版 %s があります。「更新」タブ'
                                    'から更新してください。'
                                    % result['latest']['tag'])
+                set_badge(update_badge, 1)
             else:
                 t1_notice.value = ''
+                set_badge(update_badge, 0)
+            set_badge(beta_badge,
+                      len(ghcli.prereleases(result['releases'])))
+            try:
+                set_badge(review_badge, reviews.count_pending(config))
+            except Exception:
+                log.info('承認待ち件数の取得をスキップしました')
             page.update()
         run_bg(work)
         if reschedule:
