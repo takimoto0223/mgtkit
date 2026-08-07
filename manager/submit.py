@@ -3,9 +3,11 @@
 
 ユーザー操作は「ZIP を選んでアップロード」だけ。裏側で
   1. ZIP 展開 → version.json から基点コミットを特定
-  2. 安全チェック (拡張子ホワイトリスト・サイズ/件数上限・秘密情報スキャン)
-  3. 基点との差分計算 (追加/変更/削除)
-  4. feature ブランチ作成 → 上書き → commit → push → PR 作成
+  2. 基点との差分計算 (追加/変更/削除)
+  3. 提出対象外ファイルの除外 (実行ファイル・PDF などは受け取っても
+     差分に含めず、基点の内容を維持する)
+  4. 安全チェック (サイズ/件数上限・秘密情報スキャン)
+  5. feature ブランチ作成 → 上書き → commit → push → PR 作成
 を行う (docs/app-manager-decisions.md)。
 
 削除ファイルの確認や秘密情報警告など、ユーザー判断が要る箇所で
@@ -30,13 +32,14 @@ class SubmitError(Exception):
     """提出処理の中断。str() はユーザー向けの平易な日本語メッセージ."""
 
 
-# 実行ファイルは即ブロック
+# 実行ファイルは差分対象にしない (ZIP に入っていてもエラーにせず除外)
 BLOCKED_EXTENSIONS = {
     '.exe', '.dll', '.so', '.dylib', '.bat', '.cmd', '.ps1', '.sh',
     '.msi', '.scr', '.com', '.vbs', '.jar', '.pyd',
 }
 
-# 想定される提出ファイルのホワイトリスト (config で上書き可)
+# 提出対象となるファイル種類のホワイトリスト (config で上書き可)。
+# これ以外 (.pdf など) は受け取っても差分に含めない
 DEFAULT_ALLOWED_EXTENSIONS = [
     '.py', '.md', '.txt', '.json', '.html', '.css', '.js',
     '.yml', '.yaml', '.cfg', '.ini', '.csv', '.dxf', '.toml',
@@ -81,6 +84,32 @@ def _is_dist_scope(relpath):
     if any(seg in JUNK_DIRS for seg in p.split('/')[:-1]):
         return False
     return not any(p.startswith(d) for d in DIST_EXCLUDE_DIRS)
+
+
+def _is_submittable(relpath, allowed):
+    """提出対象となるファイル種類か (拡張子なしは対象)."""
+    ext = os.path.splitext(relpath)[1].lower()
+    if ext in BLOCKED_EXTENSIONS:
+        return False
+    return not ext or ext in allowed
+
+
+def filter_unsupported(changes, config=None):
+    """更新情報として扱わない種類のファイル (.bat・.pdf など) を差分から外す.
+
+    ZIP に入っていても提出をエラーにせず、リポジトリ側は基点の内容を
+    維持する (「フォルダ丸ごと ZIP で OK」を種類の面でも成立させる)。
+    changes を書き換え、除外した相対パスのリストを返す。
+    """
+    mgr = (config or {}).get('manager') or {}
+    allowed = set(mgr.get('allowed_extensions') or DEFAULT_ALLOWED_EXTENSIONS)
+    skipped = []
+    for key in ('added', 'modified', 'deleted'):
+        kept = []
+        for rel in changes[key]:
+            (kept if _is_submittable(rel, allowed) else skipped).append(rel)
+        changes[key] = kept
+    return sorted(skipped)
 
 
 def _walk_files(root):
@@ -198,21 +227,14 @@ def safety_check(changes, extract_dir, config=None):
     戻り値: dict(blockers=[中断理由], warnings=[確認の上続行可の警告])
     """
     mgr = (config or {}).get('manager') or {}
-    allowed = set(mgr.get('allowed_extensions') or DEFAULT_ALLOWED_EXTENSIONS)
     max_mb = float(mgr.get('max_upload_mb', 50))
     max_files = int(mgr.get('max_upload_files', 500))
 
     blockers, warnings = [], []
     target_files = changes['added'] + changes['modified']
 
-    # 拡張子チェック (追加・変更されたファイルのみ。基点から変わらない
-    # ファイルは差分に含まれないため対象外)
-    for rel in target_files:
-        ext = os.path.splitext(rel)[1].lower()
-        if ext in BLOCKED_EXTENSIONS:
-            blockers.append('実行ファイルは提出できません: %s' % rel)
-        elif ext and ext not in allowed:
-            blockers.append('想定外の種類のファイルが含まれています: %s' % rel)
+    # 対象外の種類 (実行ファイル・PDF など) は filter_unsupported() で
+    # 差分から除外済みのため、ここでの拡張子チェックは不要
 
     # サイズ・件数上限
     total = 0
@@ -277,8 +299,14 @@ def prepare_submission(zip_path, config=None, workrepo=None,
                  % prep['base_version'])
         prep['changes'] = compute_changes(workrepo, prep['base_commit'],
                                           prep['extract_dir'])
+        prep['skipped'] = filter_unsupported(prep['changes'], config)
         ch = prep['changes']
         if not (ch['added'] or ch['modified'] or ch['deleted']):
+            if prep['skipped']:
+                raise SubmitError(
+                    '変更が見つかったのは提出対象外の種類のファイルだけ'
+                    'でした (%s)。コードやデータの変更を含めて提出して'
+                    'ください。' % '、'.join(prep['skipped'][:5]))
             raise SubmitError('基点の版から変更されたファイルがありません。')
 
         progress('安全チェックを実行しています...')

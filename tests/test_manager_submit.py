@@ -177,6 +177,40 @@ class TestComputeChanges:
             submit.cleanup(prep)
 
 
+class TestFilterUnsupported:
+    """実行ファイル・PDF などはエラーにせず差分から除外する."""
+
+    def test_blocked_and_unexpected_are_skipped(self):
+        changes = {'added': ['tool.exe', 'feature.py'],
+                   'modified': ['readme/manual.pdf', 'app.py'],
+                   'deleted': ['起動.bat'], 'unchanged': []}
+        skipped = submit.filter_unsupported(changes, {})
+        assert skipped == sorted(['tool.exe', 'readme/manual.pdf',
+                                  '起動.bat'])
+        assert changes['added'] == ['feature.py']
+        assert changes['modified'] == ['app.py']
+        assert changes['deleted'] == []
+
+    def test_no_extension_is_kept(self):
+        changes = {'added': ['LICENSE'], 'modified': [], 'deleted': [],
+                   'unchanged': []}
+        assert submit.filter_unsupported(changes, {}) == []
+        assert changes['added'] == ['LICENSE']
+
+    def test_only_skipped_changes_is_friendly_error(self, tmp_path,
+                                                    monkeypatch):
+        # 変更が対象外の種類だけなら、その旨を伝えるエラーになる
+        monkeypatch.setattr(submit, 'inspect_zip', lambda p: {
+            'tmp': str(tmp_path), 'extract_dir': str(tmp_path),
+            'base_version': 'v1', 'base_commit': 'abc'})
+        monkeypatch.setattr(submit, 'compute_changes',
+                            lambda w, c, e: {'added': [], 'deleted': [],
+                                             'modified': ['manual.pdf'],
+                                             'unchanged': []})
+        with pytest.raises(submit.SubmitError, match='提出対象外の種類'):
+            submit.prepare_submission('x.zip', {}, workrepo='wr')
+
+
 class TestSafetyCheck:
     def _check(self, tmp_path, files, changes=None):
         d = tmp_path / 'extract'
@@ -189,14 +223,6 @@ class TestSafetyCheck:
         changes = changes or {'added': list(files), 'modified': [],
                               'deleted': [], 'unchanged': []}
         return submit.safety_check(changes, str(d), {})
-
-    def test_blocked_executable(self, tmp_path):
-        result = self._check(tmp_path, {'tool.exe': b'MZ'})
-        assert any('実行ファイル' in b for b in result['blockers'])
-
-    def test_unexpected_extension(self, tmp_path):
-        result = self._check(tmp_path, {'data.xlsx': b'PK'})
-        assert any('想定外' in b for b in result['blockers'])
 
     def test_clean_python_file_passes(self, tmp_path):
         result = self._check(tmp_path, {'feature.py': 'def g():\n    pass\n'})
