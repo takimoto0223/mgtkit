@@ -371,6 +371,16 @@ def section_table_tex(section_no_in, text, section_no, sections,
             etc = '-'
             plot_size = ('L-' + n(ss[1]) + '$\\times$' + n(ss[2])
                          + '$\\times$' + n(ss[3]) + '$\\times$' + n(ss[4]))
+        elif stype == 18000:  # 二丁溝形鋼2C (mgtkit拡張)
+            plot_type = '2C'
+            etc = '背中合わせ(すきま0)'
+            plot_size = ('2C-' + n(ss[1]) + '$\\times$' + n(ss[2])
+                         + '$\\times$' + n(ss[3]) + '$\\times$' + n(ss[4]))
+        elif stype == 19000:  # 二丁山形鋼2L (mgtkit拡張、等辺のみ)
+            plot_type = '2L'
+            etc = '背中合わせ(すきま0・等辺のみ)'
+            plot_size = ('2L-' + n(ss[1]) + '$\\times$' + n(ss[2])
+                         + '$\\times$' + n(ss[3]))
         elif stype == 10000:  # SRC
             plot_type = '■/H'
             etc = 'SRC（H内蔵）'
