@@ -258,6 +258,11 @@ def main(page: ft.Page):
                  ft.Text('変更のないファイルは送られません。個人設定 '
                          '(API キーなど) や計算結果は自動で除外済みです。',
                          size=12, color='#555555')]
+        skipped = prep.get('skipped') or []
+        if skipped:
+            items.append(ft.Text(
+                '提出対象外のため除外しました (エラーではありません): %s'
+                % '、'.join(skipped), size=12, color='#555555'))
         if my_prs:
             # 差し戻し後の修正版は同一の提出に積める
             options = [ft.DropdownOption(key='', text='新しい提出として出す')]
@@ -418,7 +423,8 @@ def main(page: ft.Page):
                 size=13, color='#555555'),
         ft.Text('フォルダは丸ごと ZIP にして構いません。取得した版から'
                 '変更したファイルだけが提出され、個人設定 (API キーなど)・'
-                '計算結果 (mgtkit_out) は自動で除外されます。',
+                '計算結果 (mgtkit_out)・PDF や実行ファイル (.bat など) '
+                'コード以外のファイルは自動で除外されます。',
                 size=12, color='#555555'),
         t4_commit_msg,
         t4_submit_btn,

@@ -188,6 +188,8 @@ class TestJoinRequest:
         assert title == '参加申請: 山田太郎 (@yamada)'
         body = create[create.index('--body') + 1]
         assert '@yamada' in body and '承認' in body
+        # オーナーへの @メンション (Watch 設定によらず通知を届ける)
+        assert '@o さんへ' in body
 
 
 class TestCollaboratorInvitation:

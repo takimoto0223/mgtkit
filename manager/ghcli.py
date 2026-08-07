@@ -133,15 +133,17 @@ def create_join_request(repo, display_name):
     .github/workflows/join-request.yml が自動で collaborator 招待を送る。
     """
     login = run_gh(['api', 'user', '--jq', '.login']).strip()
+    owner = repo.split('/')[0]
     title = '%s: %s (@%s)' % (JOIN_REQUEST_TITLE, display_name or login,
                               login)
+    # オーナーを @メンション する (Watch 設定によらず通知メールを確実に届ける)
     body = ('mgtkit アプリマネージャーからの参加申請です。\n\n'
             '- GitHub: @%s\n'
             '- 名前: %s\n\n'
-            '管理者へ: この Issue に「承認」とコメントすると (通知メールへ'
+            '@%s さんへ: この Issue に「承認」とコメントすると (通知メールへ'
             'の返信でも可)、自動で collaborator 招待が送られます。'
             '承認しない場合はコメントせずにクローズしてください。'
-            % (login, display_name or '(未登録)'))
+            % (login, display_name or '(未登録)', owner))
     run_gh(['issue', 'create', '--repo', repo,
             '--title', title, '--body', body])
 
