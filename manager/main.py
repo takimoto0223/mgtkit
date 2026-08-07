@@ -25,6 +25,8 @@ AMBER = '#b45309'
 
 def main(page: ft.Page):
     page.title = 'mgtkit アプリマネージャー'
+    # OS のダークモード設定に追従させず、ガイドと同じ見た目に固定する
+    page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 0
     try:
         page.window.width = 760
