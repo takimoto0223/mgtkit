@@ -37,6 +37,12 @@
     承認・却下は push 権限を持つ collaborator のものだけがカウントされます
     (public リポジトリで第三者がレビューしても影響しません)
   - 更新 / β版の確認と承認タブには未対応の件数が黄色バッジで表示されます
+  - 提出・承認への参加は自動申請制です: 新メンバーがマネージャーを起動すると
+    参加申請 (Issue) が自動作成され、オーナーに通知メールが届きます。
+    オーナーがメールに「承認」と返信 (Issue へのコメント) すると自動で
+    collaborator 招待が送られ、メンバーは次回起動時に自動承諾されます
+    (.github/workflows/join-request.yml。Secrets に COLLAB_INVITE_TOKEN の
+    登録が必要)
 - メンバーへの配布は `setup.bat` と `readme/アプリマネージャー使い方ガイド.pdf` の
   2 ファイルだけで完結します
 - 設計判断・運用ルールの詳細は `docs/app-manager-decisions.md` を参照してください

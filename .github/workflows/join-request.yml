@@ -1,0 +1,63 @@
+# 参加申請の承認ワークフロー
+#
+# マネージャーが自動作成する「参加申請: ...」Issue に、リポジトリのオーナーが
+# 「承認」とコメントする (通知メールへの返信でも可) と、申請者を collaborator
+# (push 権限) として自動招待し、Issue をクローズする。
+#
+# 前提: リポジトリの Secrets に COLLAB_INVITE_TOKEN を登録すること。
+#   - オーナーの Fine-grained PAT (対象: このリポジトリのみ、
+#     Repository permissions → Administration: Read and write)
+#   - Actions の既定トークンでは collaborator 招待ができないため必須。
+#
+# 安全設計:
+#   - 反応するのはリポジトリのオーナー本人のコメントのみ
+#   - 招待されるのは申請 Issue を立てた本人のみ (なりすまし不可)
+name: join-request
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  invite:
+    if: >
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.issue.title, '参加申請')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      APPLICANT: ${{ github.event.issue.user.login }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+    steps:
+      - name: 承認コメントなら招待して Issue をクローズ
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INVITE_TOKEN: ${{ secrets.COLLAB_INVITE_TOKEN }}
+        run: |
+          case "$COMMENT_BODY" in
+            承認*|approve*|Approve*|APPROVE*|OK*|ok*|Ok*)
+              echo "承認コメントを検出: @$APPLICANT を招待します"
+              ;;
+            *)
+              echo "承認コメントではないためスキップ"
+              exit 0
+              ;;
+          esac
+          if [ -z "$INVITE_TOKEN" ]; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body \
+              "自動招待に失敗しました: リポジトリの Secrets に COLLAB_INVITE_TOKEN が未設定です。設定後にもう一度「承認」とコメントしてください。"
+            exit 1
+          fi
+          if GH_TOKEN="$INVITE_TOKEN" gh api -X PUT \
+               "repos/$REPO/collaborators/$APPLICANT" -f permission=push; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body \
+              "@$APPLICANT さんを招待しました。マネージャーを起動すると自動で参加が完了します。"
+            gh issue close "$ISSUE_NUMBER" --repo "$REPO"
+          else
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body \
+              "自動招待に失敗しました。COLLAB_INVITE_TOKEN の有効期限・権限 (Administration: Read and write) を確認して、もう一度「承認」とコメントしてください。"
+            exit 1
+          fi

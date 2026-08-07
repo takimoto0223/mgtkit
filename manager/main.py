@@ -75,6 +75,7 @@ def main(page: ft.Page):
     t1_version = ft.Text('', size=16, weight=ft.FontWeight.BOLD)
     t1_status = status_text()
     t1_notice = ft.Text('', size=13, weight=ft.FontWeight.BOLD, color=AMBER)
+    join_notice = ft.Text('', size=12, color='#555555')
 
     def refresh_local_version():
         info = updater.local_version_info(stable)
@@ -119,6 +120,7 @@ def main(page: ft.Page):
 
     tab_launch = ft.Container(padding=24, content=ft.Column([
         t1_notice,
+        join_notice,
         t1_version,
         ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
                         on_click=on_launch_stable,
@@ -897,6 +899,37 @@ def main(page: ft.Page):
             timer.start()
 
     check_update_notice()
+
+    # ---- メンバー参加の自動処理 ----
+    # 1. 招待が届いていれば自動承諾 (起動するだけで参加完了)
+    # 2. まだ collaborator でなければ参加申請 Issue を自動作成
+    #    (オーナーに通知メールが届き、「承認」の返信で自動招待される)
+
+    def check_membership():
+        def work():
+            try:
+                if ghcli.accept_repo_invitation(repo):
+                    log.info('リポジトリへの招待を承諾しました')
+                    return
+                if ghcli.has_push_access(repo):
+                    return
+                if ghcli.find_my_join_request(repo) is None:
+                    name = settings.user_name(config) or ''
+                    ghcli.create_join_request(repo, name)
+                    join_notice.value = ('参加申請を送信しました。管理者の'
+                                         '承認後に提出・承認へ参加できます '
+                                         '(起動・更新・β版の試用は承認前でも'
+                                         '使えます)。')
+                else:
+                    join_notice.value = ('参加申請は送信済みです。管理者の'
+                                         '承認をお待ちください (起動・更新・'
+                                         'β版の試用はそのまま使えます)。')
+                page.update()
+            except Exception:
+                log.info('参加状態の確認をスキップしました (オフライン等)')
+        run_bg(work)
+
+    check_membership()
 
     # ---------------- 初回セットアップ (名前と API キーの登録) ----------------
 
