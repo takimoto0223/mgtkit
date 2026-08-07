@@ -99,14 +99,51 @@ def prereleases(releases):
     return [r for r in releases if r['prerelease']]
 
 
-def invite_collaborator(repo, username):
-    """username を collaborator (push 権限) として招待する。管理者のみ実行可.
+JOIN_REQUEST_TITLE = '参加申請'
 
-    既に collaborator の場合も成功扱い (GitHub API が 204 を返す)。
+
+def has_push_access(repo):
+    """自分がこのリポジトリへの push 権限 (collaborator) を持つか."""
+    out = run_gh(['api', 'repos/%s' % repo, '--jq', '.permissions.push'])
+    return out.strip() == 'true'
+
+
+def find_my_join_request(repo):
+    """自分が出した参加申請 Issue (open/closed 問わず) を返す。無ければ None.
+
+    close 済みでも再申請しない (却下された申請の連投を防ぐ)。
     """
-    run_gh(['api', '-X', 'PUT',
-            'repos/%s/collaborators/%s' % (repo, username),
-            '-f', 'permission=push'])
+    out = run_gh(['issue', 'list', '--repo', repo, '--author', '@me',
+                  '--state', 'all', '--search', JOIN_REQUEST_TITLE,
+                  '--json', 'number,title,state'])
+    try:
+        issues = json.loads(out)
+    except ValueError:
+        return None
+    for issue in issues:
+        if (issue.get('title') or '').startswith(JOIN_REQUEST_TITLE):
+            return issue
+    return None
+
+
+def create_join_request(repo, display_name):
+    """参加申請 Issue を作成する (collaborator でない新メンバーの初回起動時).
+
+    オーナーには GitHub から通知メールが届き、「承認」と返信 (コメント) すると
+    .github/workflows/join-request.yml が自動で collaborator 招待を送る。
+    """
+    login = run_gh(['api', 'user', '--jq', '.login']).strip()
+    title = '%s: %s (@%s)' % (JOIN_REQUEST_TITLE, display_name or login,
+                              login)
+    body = ('mgtkit アプリマネージャーからの参加申請です。\n\n'
+            '- GitHub: @%s\n'
+            '- 名前: %s\n\n'
+            '管理者へ: この Issue に「承認」とコメントすると (通知メールへ'
+            'の返信でも可)、自動で collaborator 招待が送られます。'
+            '承認しない場合はコメントせずにクローズしてください。'
+            % (login, display_name or '(未登録)'))
+    run_gh(['issue', 'create', '--repo', repo,
+            '--title', title, '--body', body])
 
 
 def accept_repo_invitation(repo):

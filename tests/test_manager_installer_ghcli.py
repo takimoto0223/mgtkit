@@ -147,15 +147,50 @@ def test_manager_main_compiles():
         compile(f.read(), src_path, 'exec')
 
 
-class TestCollaboratorInvitation:
-    def test_invite_collaborator_calls_api(self, monkeypatch):
-        calls = []
+class TestJoinRequest:
+    def test_has_push_access(self, monkeypatch):
         monkeypatch.setattr(ghcli, 'run_gh',
-                            lambda args, timeout=60: calls.append(args) or '')
-        ghcli.invite_collaborator('o/r', 'yamada')
-        assert calls == [['api', '-X', 'PUT', 'repos/o/r/collaborators/yamada',
-                          '-f', 'permission=push']]
+                            lambda args, timeout=60: 'true\n')
+        assert ghcli.has_push_access('o/r') is True
+        monkeypatch.setattr(ghcli, 'run_gh',
+                            lambda args, timeout=60: 'false\n')
+        assert ghcli.has_push_access('o/r') is False
 
+    def test_find_my_join_request(self, monkeypatch):
+        monkeypatch.setattr(
+            ghcli, 'run_gh',
+            lambda args, timeout=60: json.dumps([
+                {'number': 3, 'title': '別の質問', 'state': 'OPEN'},
+                {'number': 5, 'title': '参加申請: 山田太郎 (@yamada)',
+                 'state': 'OPEN'},
+            ]))
+        found = ghcli.find_my_join_request('o/r')
+        assert found['number'] == 5
+
+    def test_find_my_join_request_none(self, monkeypatch):
+        monkeypatch.setattr(ghcli, 'run_gh', lambda args, timeout=60: '[]')
+        assert ghcli.find_my_join_request('o/r') is None
+
+    def test_create_join_request(self, monkeypatch):
+        calls = []
+
+        def fake_run_gh(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'user']:
+                return 'yamada\n'
+            return ''
+
+        monkeypatch.setattr(ghcli, 'run_gh', fake_run_gh)
+        ghcli.create_join_request('o/r', '山田太郎')
+        create = calls[-1]
+        assert create[:4] == ['issue', 'create', '--repo', 'o/r']
+        title = create[create.index('--title') + 1]
+        assert title == '参加申請: 山田太郎 (@yamada)'
+        body = create[create.index('--body') + 1]
+        assert '@yamada' in body and '承認' in body
+
+
+class TestCollaboratorInvitation:
     def test_accept_matching_invitation(self, monkeypatch):
         calls = []
 
