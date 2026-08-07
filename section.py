@@ -34,6 +34,13 @@ sections はMATLABのcell相当の list 長17 (index 0 は未使用、1..16 を�
   15: SRC RH2T    'SRC' 'RH2T'       11列 [secno, v1, v2, v4..v11]
   16: CFT         'SRC' 'EPC'         3列 [secno, v3, v4]
       CFT         'SRC' 'EBC'         5列 [secno, v4..v7]
+  18: 二丁溝形鋼   'DBUSER' ', 2C ,'  5列 [secno, H, B, tw, tf] (単材Cと同一列構成。
+                  mgtkit独自拡張。ウェブ同士を隙間0で背中合わせに組み合わせた
+                  組立断面として secprops.BC2 で断面性能を算定する)
+  19: 二丁山形鋼   'DBUSER' ', 2L ,'  5列 [secno, H, B, t, t] (単材Lと同一列構成。
+                  mgtkit独自拡張。脚同士を隙間0で背中合わせに組み合わせた
+                  組立断面として secprops.BL2 で断面性能を算定する
+                  (等辺山形鋼H=Bのみ対応、BL2内でチェック))
 
 注意 (MATLAB版との対応):
 - MATLAB版と同じく EPC を sections[16]、EBC を sections[17] に分けて返す
@@ -56,6 +63,18 @@ sections はMATLABのcell相当の list 長17 (index 0 は未使用、1..16 を�
   復元した断面は mgtopen_section.derived_sections (dictのlist、キー
   secno/name/shape/db_name/dims) で参照できる (呼び出しごとにリセット)。
   寸法が復元できないDB名の場合は日本語メッセージの ValueError を送出する。
+
+拡張2 (mgtkit独自、2026-08対応):
+- 組立断面 '2C' (二丁合わせ溝形鋼、ブレース等) を sections[18] として対応。
+  secprops.BC2 が単材C(BC)の断面性能とC_data.mat(CB)の図心距離(Cx)から、
+  ウェブ同士を隙間0で背中合わせに組み合わせた断面性能を算定する。
+  検定側 (ratio_pipeline.S_truss_ratio_analysis) では断面形式コード18000
+  として TC2_analysis (s_check.py) に振り分けられる (トラス要素のみ対応)。
+- 組立断面 '2L' (二丁合わせ山形鋼) を sections[19] として対応。
+  secprops.BL2 が単材L(BL)の断面性能とL_data.mat(L)の図心距離(Cx)から
+  同様に算定する。ただし山形鋼JISテーブルには不等辺山形鋼のCyに相当する
+  列が無いため、等辺山形鋼(H=B)のみ対応 (BL2内でH!=Bならエラー)。
+  検定側では断面形式コード19000として TL2_analysis に振り分けられる。
 """
 
 import math
@@ -361,7 +380,7 @@ def mgtopen_section(filename):
     CT_rows = []
     L_rows = []
     RHB_rows = []
-    cut = [0] * 18  # MATLAB: cut=zeros(10) を線形index 1..17 で使用
+    cut = [0] * 20  # MATLAB: cut=zeros(10) を線形index 1..17 で使用 (mgtkit拡張で18まで)
     H_TAPERED_rows = []
     SB_TAPERED_rows = []
     CPO_rows = []
@@ -369,6 +388,8 @@ def mgtopen_section(filename):
     RH2T_rows = []
     EPC_rows = []
     EBC_rows = []
+    C2_rows = []  # mgtkit拡張: 二丁溝形鋼(2C)
+    L2_rows = []  # mgtkit拡張: 二丁山形鋼(2L)
 
     # %%%%%%%%%% 断面情報取得 %%%%%%%%%%
     with open(filename, 'r', encoding='cp932', errors='replace') as fid:
@@ -392,6 +413,8 @@ def mgtopen_section(filename):
             f_BOX2 = ', CB ,' in tline
             f_CT = ', T  ,' in tline
             f_L = ', L  ,' in tline
+            f_C2 = ', 2C ,' in tline
+            f_L2 = ', 2L ,' in tline
             f_RHB = 'RHB' in tline
             f_CPO = 'CPO' in tline
             f_CHB = 'CHB' in tline
@@ -450,6 +473,18 @@ def mgtopen_section(filename):
             if f_DBUSER and f_L:  # L形鋼断面の情報取得
                 cut[9] += 1
                 L_rows.append(_parse_dbuser_line(
+                    tline, section_no, section_name, h_branch=False,
+                    shape='L', derived=derived))
+
+            if f_DBUSER and f_C2:  # 二丁溝形鋼(2C)断面の情報取得 (mgtkit拡張)
+                cut[18] += 1
+                C2_rows.append(_parse_dbuser_line(
+                    tline, section_no, section_name, h_branch=False,
+                    shape='C', derived=derived))
+
+            if f_DBUSER and f_L2:  # 二丁山形鋼(2L)断面の情報取得 (mgtkit拡張)
+                cut[19] += 1
+                L2_rows.append(_parse_dbuser_line(
                     tline, section_no, section_name, h_branch=False,
                     shape='L', derived=derived))
 
@@ -558,6 +593,12 @@ def mgtopen_section(filename):
     L_section = _vertcat(L_rows)
     if cut[9] > 0:
         L_section = _cols(L_section, [1, 3, 4, 5, 6])
+    C2_section = _vertcat(C2_rows)  # mgtkit拡張: 二丁溝形鋼(2C)
+    if cut[18] > 0:
+        C2_section = _cols(C2_section, [1, 3, 4, 5, 6])
+    L2_section = _vertcat(L2_rows)  # mgtkit拡張: 二丁山形鋼(2L)
+    if cut[19] > 0:
+        L2_section = _cols(L2_section, [1, 3, 4, 5, 6])
     RHB_section = _vertcat(RHB_rows)
     if cut[10] > 0:
         RHB_section = _cols(RHB_section, [1, 2, 3, 5, 6, 7, 8, 9, 10])
@@ -584,8 +625,8 @@ def mgtopen_section(filename):
     if cut[17] > 0:
         EBC_section = _cols(EBC_section, [1, 5, 6, 7, 8])
 
-    # sections cell の構築 (index 0 未使用、1..16)
-    sections = [None] * 18
+    # sections cell の構築 (index 0 未使用、1..16。mgtkit拡張で18=2C,19=2Lを追加)
+    sections = [None] * 20
     sections[1] = H_section
     sections[2] = SB_section
     sections[3] = SR_section
@@ -606,6 +647,8 @@ def mgtopen_section(filename):
     #  CFT_ratio_analysisの分岐と不整合になるため2026-07-12に分離)
     sections[16] = EPC_section
     sections[17] = EBC_section
+    sections[18] = C2_section  # mgtkit拡張: 二丁溝形鋼(2C)
+    sections[19] = L2_section  # mgtkit拡張: 二丁山形鋼(2L)
 
     section_no = np.array(section_no, dtype=float)
     if derived:

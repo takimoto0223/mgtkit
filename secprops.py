@@ -673,6 +673,85 @@ def BCC(sectionsize, index):
 
 
 # ---------------------------------------------------------------------------
+# BC2 (mgtkit独自拡張。MATLAB原典なし)
+# ---------------------------------------------------------------------------
+
+def _BC_Cx(sectionsize):
+    """単材溝形鋼のウェブ背面から図心までの距離Cx[cm] (C_data.mat CB列9参照).
+
+    BC.m と同じ検索ロジックで CB テーブルから該当行を引き当てる
+    (BC本体は改変しない: MATLAB逐語移植としての整合性を保つため、
+    Cx取得専用の小関数として分離)。
+    """
+    sectionsize = np.asarray(sectionsize, dtype=float).ravel()
+    H, B, tw, tf = sectionsize[0], sectionsize[1], sectionsize[2], sectionsize[3]
+    if C_DATA is None:
+        raise RuntimeError('C_data.mat のデータ(CB)が未設定です。'
+                           'mgtkit.secprops.set_C_data(CB) で設定してください。')
+    pickup_ability = None
+    CB = C_DATA
+    for i in range(CB.shape[0]):
+        sub_CB = CB[i, :]
+        if H == sub_CB[0] and B == sub_CB[1] and tw == sub_CB[2] and tf == sub_CB[3]:
+            pickup_ability = sub_CB
+    if pickup_ability is None:
+        print('ERROR:溝形断面入力数値エラー')
+        _stop('溝形断面入力数値エラー')
+    return pickup_ability[9]
+
+
+def BC2(sectionsize, index):
+    """二丁溝形鋼(背中合わせ2C)断面性能算定 - mgtkit独自拡張 (MATLAB原典なし).
+
+    MIDAS/Genの組立断面 '2C' (二丁合わせ溝形鋼、ブレース等の圧縮引張材で
+    使用) は、単材の溝形鋼(C)を隙間なく(すきま0)ウェブ同士を背中合わせに
+    2枚組み合わせた断面として算定する。MIDASのmgtデータにはこの組合せの
+    離隔寸法が別途出力されないため、最も一般的な「すきま0で密着」を前提
+    とする。実際の詳細でウェブ間に隙間(ガセットプレート厚等)がある場合は
+    本関数の ex 算定式を要修正 (ex = 単材Cx + 隙間/2 とする)。
+
+    入力はmm単位系 出力はcm系
+    入力例 BC2([H B tw tf],型)
+    型は 1:a, 2:Ix, 3:Iy, 4:ixs, 5:iys, 6:Zx, 7:Zy
+      (Ix/ixs: 背中合わせ面に直交する軸=単材Cと同一の強軸。
+       Iy/iys: 背中合わせ面を通る軸=新たな図心軸(合成弱軸)。)
+    """
+    sectionsize = np.asarray(sectionsize, dtype=float).ravel()
+    H = sectionsize[0] / 10.0  # cm
+    B = sectionsize[1] / 10.0  # cm
+
+    a1 = BC(sectionsize, 1)
+    Ix1 = BC(sectionsize, 2)
+    Iy1 = BC(sectionsize, 3)
+    ex = _BC_Cx(sectionsize)  # 単材の背面(合成断面の図心面)から単材図心までの距離 cm
+
+    a = 2 * a1
+    Ix = 2 * Ix1
+    Iy = 2 * (Iy1 + a1 * ex ** 2)
+    ixs = math.sqrt(Ix / a)
+    iys = math.sqrt(Iy / a)
+    Zx = Ix / (H / 2)
+    Zy = Iy / B
+
+    if index == 1:
+        return a
+    elif index == 2:
+        return Ix
+    elif index == 3:
+        return Iy
+    elif index == 4:
+        return ixs
+    elif index == 5:
+        return iys
+    elif index == 6:
+        return Zx
+    elif index == 7:
+        return Zy
+    else:
+        _stop('二丁溝形鋼断面性能データ型指定エラー')
+
+
+# ---------------------------------------------------------------------------
 # BCT.m
 # ---------------------------------------------------------------------------
 
@@ -897,6 +976,75 @@ def BL(sectionsize, index):
         _stop('山形鋼断面性能データ型指定エラー')
     else:
         _stop('山形鋼断面性能データ型指定エラー')
+
+
+# ---------------------------------------------------------------------------
+# BL2 (mgtkit独自拡張。MATLAB原典なし)
+# ---------------------------------------------------------------------------
+
+def _BL_pickup(sectionsize):
+    """単材山形鋼のL_data.mat(L)該当行を引き当てる (BL.mと同じ検索ロジック)."""
+    sectionsize = np.asarray(sectionsize, dtype=float).ravel()
+    H, B, t = sectionsize[0], sectionsize[1], sectionsize[2]
+    if L_DATA is None:
+        raise RuntimeError('L_data.mat のデータ(L)が未設定です。'
+                           'mgtkit.secprops.set_L_data(L) で設定してください。')
+    pickup_ability = None
+    L = L_DATA
+    for i in range(L.shape[0]):
+        sub_L = L[i, :]
+        if H == sub_L[0] and B == sub_L[1] and t == sub_L[2]:
+            pickup_ability = sub_L
+    if pickup_ability is None:
+        print('ERROR:溝形断面入力数値エラー')  # 元コードのメッセージのまま
+        _stop('溝形断面入力数値エラー')
+    return pickup_ability
+
+
+def BL2(sectionsize, index):
+    """二丁山形鋼(背中合わせ2L)断面性能算定 - mgtkit独自拡張 (MATLAB原典なし).
+
+    等辺山形鋼(H==B)のみ対応。JIS山形鋼テーブル(L_data.mat)には図心距離が
+    Cx相当の1列(等辺の場合はCx=Cyと一致)しか含まれず、不等辺山形鋼のCyを
+    復元できないため、H!=Bの場合はエラーとする。
+
+    背中合わせの向き: 一方の脚同士を隙間0で密着させる、最も一般的な構成
+    (BC2の背中合わせ溝形鋼と同じ考え方)。
+
+    入力はmm単位系 出力はcm系
+    型は 1:a, 2:Ix, 3:Iy, 4:ixs, 5:iys
+    (Zx/Zy(6,7)は山形鋼の図心が非対称なため未対応。トラス材の引張圧縮検定
+    はa/ixs/iysのみで足りるため実用上は問題ない)
+    """
+    sectionsize = np.asarray(sectionsize, dtype=float).ravel()
+    H, B = sectionsize[0], sectionsize[1]
+    if H != B:
+        _stop('二丁山形鋼(2L)は等辺山形鋼(H=B)のみ対応です。'
+             '不等辺山形鋼はJISテーブルの図心データ不足のため算定できません')
+
+    pickup_ability = _BL_pickup(sectionsize)
+    a1 = pickup_ability[5]
+    Ix1 = pickup_ability[8]
+    ex = pickup_ability[7]  # 等辺のため Cx=Cy
+
+    a = 2 * a1
+    Ix = 2 * Ix1
+    Iy = 2 * (Ix1 + a1 * ex ** 2)  # 等辺のため Iy1=Ix1
+    ixs = math.sqrt(Ix / a)
+    iys = math.sqrt(Iy / a)
+
+    if index == 1:
+        return a
+    elif index == 2:
+        return Ix
+    elif index == 3:
+        return Iy
+    elif index == 4:
+        return ixs
+    elif index == 5:
+        return iys
+    else:
+        _stop('二丁山形鋼断面性能データ型指定エラー(Zx/Zyは未対応)')
 
 
 # ---------------------------------------------------------------------------
@@ -1304,7 +1452,8 @@ def section_ability(sectionsize, index):
 
     sectionsize の後ろから2番目の要素が種別コード (×1000後):
       1000:H, 2000:中実角, 3000:中実丸, 4000:○鋼管, 5000:溝形,
-      6000:HwCP, 7000:角鋼管, 8000:CT, 9000:L形, 11000:テーパーH
+      6000:HwCP, 7000:角鋼管, 8000:CT, 9000:L形, 11000:テーパーH,
+      18000:二丁溝形鋼2C (mgtkit拡張), 19000:二丁山形鋼2L (mgtkit拡張)
     元コード同様、先頭要素と末尾2要素は断面情報に含めない
     (section_one = sectionsize(2:end-2))。
     """
@@ -1333,5 +1482,9 @@ def section_ability(sectionsize, index):
         return BL(section_one, index)
     elif code == 11000:  # テーパーH断面の検定
         return BHT(section_one, index)  # noqa: F821  BHT.mは元ソースに存在しない (MATLAB同様、未定義エラーになる)
+    elif code == 18000:  # 二丁溝形鋼(2C)断面の検定 (mgtkit拡張)
+        return BC2(section_one, index)
+    elif code == 19000:  # 二丁山形鋼(2L)断面の検定 (mgtkit拡張)
+        return BL2(section_one, index)
     # 該当なしの場合 MATLAB では pick_ability 未割当エラー
     raise RuntimeError('section_ability: 断面種別コード不明 (MATLAB: pick_ability未割当エラー)')
