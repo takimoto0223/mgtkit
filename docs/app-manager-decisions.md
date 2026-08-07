@@ -23,12 +23,14 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
 ## 承認者の範囲・承認必要数
 
 - 全メンバー承認可(仕様どおり)。提出者本人の自己承認禁止は Phase 5 のマネージャー側で制御。
-- 承認必要数は `config.json` の `branch_protection.required_approvals`(既定 3)。
-  2 に変更して `scripts/setup_repo_protection.sh|bat` を再実行すれば反映される。
-- **注意**: 本リポジトリは現在 個人アカウントの private リポジトリのため、
-  ブランチ保護(required reviews の強制)には GitHub Pro 等の有料プラン、
-  または public 化、または Organization への移管が必要。
-  スクリプトは 403/422 応答時にこの旨を案内する。
+  public 化後は push 権限を持つ collaborator の承認のみカウントする
+  (`reviews.collaborators()`。第三者レビュー対策)。
+- 承認必要数は `config.json` の `branch_protection.required_approvals`。
+  当初 3 で運用開始し、回転を優先して 2026-08 に **2 へ変更** (現行)。
+  変更時は `scripts/setup_repo_protection.sh|bat` を再実行して
+  GitHub 側のブランチ保護にも反映する。
+- 本リポジトリは 2026-08 に public 化済みで、ブランチ保護は無料で有効。
+  (private 個人リポジトリに戻す場合は有料プランが必要になる点に注意。)
 
 ## β版のデータ分離
 
@@ -120,7 +122,7 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
 ## Phase 5 の決定 (承認タブ・衝突解決)
 
 - 承認タブ (`manager/reviews.py` + UI): open PR を承認待ち一覧として表示。
-  承認 n/3 (黄色マーカー)・承認済みメンバー・却下理由 (平易表示)・
+  承認 n/必要数 (黄色マーカー)・承認済みメンバー・却下理由 (平易表示)・
   検証状況・衝突有無を1行に集約。
   - 承認 = `gh pr review --approve`。**自己承認はマネージャー側で禁止**。
   - 却下 = 理由コメント必須 → `--request-changes`。1人でも却下があれば

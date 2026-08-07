@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """承認タブの中核ロジック (UI 非依存).
 
-- 承認待ち一覧 (open PR) と 承認 n/3 の集計
+- 承認待ち一覧 (open PR) と 承認 n/必要数 の集計
 - 承認 / 却下 (コメント必須) / 提出者本人の自己承認禁止
 - 提出者の変更と [auto-fix] 修正の色分け用コミット分類
 - 必要数の承認が揃ったらリリース (squash merge → 正式版タグ → Releases)
@@ -31,7 +31,7 @@ def current_user():
 
 def required_approvals(config=None):
     return int(((config or {}).get('branch_protection') or {})
-               .get('required_approvals', 3))
+               .get('required_approvals', 2))
 
 
 def admins(config=None):

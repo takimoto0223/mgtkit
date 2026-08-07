@@ -3,8 +3,8 @@
   "repo": "takimoto0223/mgtkit",
   "base_branch": "main",
   "branch_protection": {
-    "_comment": "required_approvals はチーム人数に応じて 3 → 2 に変更可。scripts/setup_repo_protection.* が読み取る。",
-    "required_approvals": 3,
+    "_comment": "required_approvals はチーム人数に応じて変更可 (現行 2)。scripts/setup_repo_protection.* が読み取るため、変更後は同スクリプトを再実行して GitHub 側にも反映する。",
+    "required_approvals": 2,
     "required_status_checks": ["test"],
     "strict_status_checks": true,
     "enforce_admins": false
