@@ -51,12 +51,22 @@ jobs:
               "自動招待に失敗しました: リポジトリの Secrets に COLLAB_INVITE_TOKEN が未設定です。設定後にもう一度「承認」とコメントしてください。"
             exit 1
           fi
-          if GH_TOKEN="$INVITE_TOKEN" gh api -X PUT \
-               "repos/$REPO/collaborators/$APPLICANT" -f permission=push; then
+          set +e
+          RESULT=$(GH_TOKEN="$INVITE_TOKEN" gh api -X PUT \
+            "repos/$REPO/collaborators/$APPLICANT" -f permission=push 2>&1)
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ]; then
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body \
               "@$APPLICANT さんを招待しました。マネージャーを起動すると自動で参加が完了します。"
             gh issue close "$ISSUE_NUMBER" --repo "$REPO"
+          elif echo "$RESULT" | grep -q "cannot be a collaborator"; then
+            # オーナー本人の申請 (動作テストなど)。招待は不要でトークンは有効
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body \
+              "@$APPLICANT さんはリポジトリのオーナー本人のため、招待は不要です (COLLAB_INVITE_TOKEN の動作確認としては成功です)。"
+            gh issue close "$ISSUE_NUMBER" --repo "$REPO"
           else
+            echo "$RESULT"
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body \
               "自動招待に失敗しました。COLLAB_INVITE_TOKEN の有効期限・権限 (Administration: Read and write) を確認して、もう一度「承認」とコメントしてください。"
             exit 1
