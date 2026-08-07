@@ -145,3 +145,35 @@ def test_manager_main_compiles():
     src_path = os.path.join(os.path.dirname(updater.__file__), 'main.py')
     with io.open(src_path, encoding='utf-8') as f:
         compile(f.read(), src_path, 'exec')
+
+
+class TestCollaboratorInvitation:
+    def test_invite_collaborator_calls_api(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(ghcli, 'run_gh',
+                            lambda args, timeout=60: calls.append(args) or '')
+        ghcli.invite_collaborator('o/r', 'yamada')
+        assert calls == [['api', '-X', 'PUT', 'repos/o/r/collaborators/yamada',
+                          '-f', 'permission=push']]
+
+    def test_accept_matching_invitation(self, monkeypatch):
+        calls = []
+
+        def fake_run_gh(args, timeout=60):
+            calls.append(args)
+            if args == ['api', '/user/repository_invitations']:
+                return json.dumps([
+                    {'id': 5, 'repository': {'full_name': 'other/repo'}},
+                    {'id': 7, 'repository': {'full_name': 'O/R'}},
+                ])
+            return ''
+
+        monkeypatch.setattr(ghcli, 'run_gh', fake_run_gh)
+        assert ghcli.accept_repo_invitation('o/r') is True
+        assert calls[-1] == ['api', '-X', 'PATCH',
+                             '/user/repository_invitations/7']
+
+    def test_no_invitation_is_noop(self, monkeypatch):
+        monkeypatch.setattr(ghcli, 'run_gh',
+                            lambda args, timeout=60: '[]')
+        assert ghcli.accept_repo_invitation('o/r') is False

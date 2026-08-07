@@ -52,8 +52,11 @@ def _friendly_message(stderr):
                 '「gh auth login」を実行してください。')
     if 'could not resolve' in s or 'connect' in s or 'network' in s:
         return 'ネットワークに接続できません。接続環境を確認してください。'
+    if '403' in s or 'forbidden' in s:
+        return ('権限がありません。この操作はリポジトリのオーナー (管理者) '
+                'のみ実行できます。')
     if 'not found' in s or '404' in s:
-        return '対象が見つかりませんでした。リポジトリの設定を確認してください。'
+        return '対象が見つかりませんでした。ユーザー名やリポジトリの設定を確認してください。'
     if 'rate limit' in s:
         return 'GitHub の利用制限に達しました。しばらく待って再試行してください。'
     return ('GitHub との通信でエラーが発生しました。'
@@ -94,6 +97,36 @@ def latest_stable(releases):
 
 def prereleases(releases):
     return [r for r in releases if r['prerelease']]
+
+
+def invite_collaborator(repo, username):
+    """username を collaborator (push 権限) として招待する。管理者のみ実行可.
+
+    既に collaborator の場合も成功扱い (GitHub API が 204 を返す)。
+    """
+    run_gh(['api', '-X', 'PUT',
+            'repos/%s/collaborators/%s' % (repo, username),
+            '-f', 'permission=push'])
+
+
+def accept_repo_invitation(repo):
+    """自分宛の招待のうち repo のものがあれば承諾する.
+
+    メンバーがマネージャーを起動するだけで参加が完了するようにするための
+    仕組み。招待が無ければ何もしない。戻り値: 承諾したら True。
+    """
+    out = run_gh(['api', '/user/repository_invitations'])
+    try:
+        invitations = json.loads(out)
+    except ValueError:
+        return False
+    for inv in invitations:
+        full_name = ((inv.get('repository') or {}).get('full_name') or '')
+        if full_name.lower() == repo.lower():
+            run_gh(['api', '-X', 'PATCH',
+                    '/user/repository_invitations/%s' % inv['id']])
+            return True
+    return False
 
 
 def tag_commit_sha(repo, tag):

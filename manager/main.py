@@ -824,6 +824,51 @@ def main(page: ft.Page):
             page.update()
         run_bg(work)
 
+    def on_invite(_):
+        """提出・承認に参加するメンバーを collaborator として招待する.
+
+        招待された側はマネージャーを起動するだけで自動承諾される。
+        実行できるのはリポジトリのオーナー (管理者) のみ。
+        """
+        field = ft.TextField(label='招待する人の GitHub ユーザー名',
+                             autofocus=True)
+        err = ft.Text('', size=12, color='#b91c1c')
+
+        def send(_):
+            name = (field.value or '').strip()
+            if not name:
+                err.value = 'ユーザー名を入力してください。'
+                page.update()
+                return
+
+            def work():
+                try:
+                    ghcli.invite_collaborator(repo, name)
+                    page.pop_dialog()
+                    t5_status.value = ('%s さんを招待しました。相手が'
+                                       'マネージャーを起動すると自動で'
+                                       '参加が完了します。' % name)
+                    page.update()
+                except ghcli.GhError as e:
+                    err.value = str(e)
+                    page.update()
+            run_bg(work)
+
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text('メンバーを招待'),
+            content=ft.Column([
+                ft.Text('提出・承認に参加するメンバーを招待します '
+                        '(実行できるのはリポジトリのオーナーのみ)。'
+                        '招待された人は、マネージャーを起動するだけで'
+                        '参加が完了します。', size=12, color='#555555'),
+                field, err], tight=True, width=480),
+            actions=[
+                ft.TextButton('キャンセル',
+                              on_click=lambda _: page.pop_dialog()),
+                ft.FilledButton('招待する', on_click=send,
+                                bgcolor=NAVY, color='#ffffff'),
+            ]))
+
     tab_beta_review = ft.Container(padding=24, content=ft.Column([
         ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
                 'ます。β版を試して問題なければ承認してください。%d 人の'
@@ -834,8 +879,12 @@ def main(page: ft.Page):
         ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
                 'ため、通常の作業には影響しません。', size=12,
                 color='#555555'),
-        ft.OutlinedButton('一覧を取得', icon=ft.Icons.REFRESH,
-                          on_click=on_refresh_reviews),
+        ft.Row([
+            ft.OutlinedButton('一覧を取得', icon=ft.Icons.REFRESH,
+                              on_click=on_refresh_reviews),
+            ft.OutlinedButton('メンバーを招待', icon=ft.Icons.PERSON_ADD,
+                              on_click=on_invite),
+        ], spacing=12),
         t5_list,
         t5_beta_extra,
         t5_status,
@@ -897,6 +946,19 @@ def main(page: ft.Page):
             timer.start()
 
     check_update_notice()
+
+    # ---- 招待の自動承諾 (招待されたメンバーは起動するだけで参加が完了する) ----
+
+    def accept_invitation_if_any():
+        def work():
+            try:
+                if ghcli.accept_repo_invitation(repo):
+                    log.info('リポジトリへの招待を承諾しました')
+            except Exception:
+                log.info('招待の確認をスキップしました (オフライン等)')
+        run_bg(work)
+
+    accept_invitation_if_any()
 
     # ---------------- 初回セットアップ (名前と API キーの登録) ----------------
 
