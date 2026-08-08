@@ -477,18 +477,100 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
-    def on_feedback_dialog(pr, beta):
-        """フィードバック一覧 (誰が・いつ・内容) + β版があれば投稿欄."""
+    def _edit_feedback_dialog(fb):
+        """自分のフィードバックの編集ダイアログ."""
+        field = ft.TextField(label='フィードバックを編集', value=fb['text'],
+                             multiline=True, min_lines=3, max_lines=6)
+        err = ft.Text('', size=12, color='#b91c1c')
+
+        def save(_):
+            def work():
+                try:
+                    feedback.update_feedback(fb['comment_id'], fb['tag'],
+                                             field.value, config)
+                    page.pop_dialog()
+                    t5_status.value = 'フィードバックを更新しました。'
+                    page.update()
+                    on_refresh_reviews(None)
+                except (feedback.FeedbackError, ghcli.GhError) as e:
+                    err.value = str(e)
+                    page.update()
+            run_bg(work)
+
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text('フィードバックの編集'),
+            content=ft.Column([field, err], tight=True, width=560),
+            actions=[ft.TextButton('キャンセル',
+                                   on_click=lambda _: page.pop_dialog()),
+                     ft.FilledButton('保存', on_click=save,
+                                     bgcolor=NAVY, color='#ffffff')]))
+
+    def _delete_feedback_dialog(fb):
+        """自分のフィードバックの削除確認ダイアログ."""
+        err = ft.Text('', size=12, color='#b91c1c')
+
+        def do_delete(_):
+            def work():
+                try:
+                    feedback.delete_feedback(fb['comment_id'], config)
+                    page.pop_dialog()
+                    t5_status.value = 'フィードバックを削除しました。'
+                    page.update()
+                    on_refresh_reviews(None)
+                except (feedback.FeedbackError, ghcli.GhError) as e:
+                    err.value = str(e)
+                    page.update()
+            run_bg(work)
+
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text('フィードバックの削除'),
+            content=ft.Column([
+                ft.Text('このフィードバックを削除しますか?', size=13),
+                ft.Text(fb['text'], size=12, color='#555555'),
+                err,
+            ], tight=True, width=560),
+            actions=[ft.TextButton('キャンセル',
+                                   on_click=lambda _: page.pop_dialog()),
+                     ft.FilledButton('削除する', on_click=do_delete,
+                                     bgcolor='#b91c1c', color='#ffffff')]))
+
+    def on_feedback_dialog(pr, beta, me):
+        """フィードバック一覧 (誰が・いつ・内容) + β版があれば投稿欄.
+
+        自分が書いたフィードバックには編集・削除ボタンを表示する。
+        """
+        def _open_edit(fb):
+            def h(_):
+                page.pop_dialog()
+                _edit_feedback_dialog(fb)
+            return h
+
+        def _open_delete(fb):
+            def h(_):
+                page.pop_dialog()
+                _delete_feedback_dialog(fb)
+            return h
+
         def handler(_):
             items = []
             for fb in pr.get('feedback') or []:
+                header = [ft.Text('%s さん (%s / %s)'
+                                  % (fb['name'], fb['tag'], fb['date']),
+                                  size=12, weight=ft.FontWeight.BOLD,
+                                  color='#555555', expand=True)]
+                if fb.get('author') == me and fb.get('comment_id'):
+                    header += [
+                        ft.IconButton(ft.Icons.EDIT_OUTLINED,
+                                      icon_size=16, tooltip='編集',
+                                      on_click=_open_edit(fb)),
+                        ft.IconButton(ft.Icons.DELETE_OUTLINE,
+                                      icon_size=16, tooltip='削除',
+                                      on_click=_open_delete(fb)),
+                    ]
                 items.append(ft.Container(
                     bgcolor='#f5f7fa', border_radius=6, padding=10,
                     content=ft.Column([
-                        ft.Text('%s さん (%s / %s)'
-                                % (fb['name'], fb['tag'], fb['date']),
-                                size=12, weight=ft.FontWeight.BOLD,
-                                color='#555555'),
+                        ft.Row(header, spacing=4),
                         ft.Text(fb['text'], size=13, selectable=True),
                     ], spacing=4)))
             if not items:
@@ -750,7 +832,7 @@ def main(page: ft.Page):
         buttons.append(ft.OutlinedButton(
             'フィードバック %d 件' % len(fb),
             disabled=(beta is None and not fb),
-            on_click=on_feedback_dialog(pr, beta)))
+            on_click=on_feedback_dialog(pr, beta, me)))
         buttons.append(ft.OutlinedButton('差分',
                                          on_click=on_show_diff(pr)))
         if pr['author'] == me:

@@ -94,7 +94,9 @@ def parse_feedback(comments):
 
     feedback.post_feedback が投稿する
     「β版 <tag> のフィードバック (<名前>):\\n\\n<本文>」形式のみ拾う。
-    戻り値: [{'tag', 'name', 'date', 'text'}] (投稿順)
+    戻り値: [{'tag', 'name', 'date', 'text', 'author', 'comment_id'}]
+    (投稿順)。author は GitHub ログイン名、comment_id は編集・削除用の
+    コメント ID (URL から取れない場合は None)。
     """
     result = []
     for c in comments or []:
@@ -102,9 +104,12 @@ def parse_feedback(comments):
         m = re.match(r'β版 (\S+) のフィードバック \((.+?)\):\s*', body)
         if not m:
             continue
+        cid = re.search(r'#issuecomment-(\d+)', c.get('url') or '')
         result.append({'tag': m.group(1), 'name': m.group(2),
                        'date': (c.get('createdAt') or '')[:10],
-                       'text': body[m.end():].strip()})
+                       'text': body[m.end():].strip(),
+                       'author': (c.get('author') or {}).get('login', ''),
+                       'comment_id': cid.group(1) if cid else None})
     return result
 
 

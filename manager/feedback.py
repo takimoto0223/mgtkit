@@ -23,6 +23,11 @@ def pr_number_from_release(release):
     return int(m.group(1)) if m else None
 
 
+def _comment_body(tag, name, text):
+    """コメント本文 (reviews.parse_feedback が拾う形式)."""
+    return 'β版 %s のフィードバック (%s):\n\n%s' % (tag, name, text)
+
+
 def post_feedback(release, text, config=None):
     """β版の感想・不具合報告を対応する PR にコメントとして投稿する.
 
@@ -36,8 +41,30 @@ def post_feedback(release, text, config=None):
         raise FeedbackError('このβ版に対応する提出が見つからないため、'
                             'フィードバックを送信できません。')
     name = settings.user_name(config) or '匿名'
-    body = 'β版 %s のフィードバック (%s):\n\n%s' % (
-        release.get('tag', '?'), name, text)
+    body = _comment_body(release.get('tag', '?'), name, text)
     ghcli.run_gh(['pr', 'comment', str(pr_number), '--repo',
                   paths.repo_slug(config), '--body', body])
     return pr_number
+
+
+def update_feedback(comment_id, tag, text, config=None):
+    """自分のフィードバックを書き換える.
+
+    GitHub 側の権限により、他人のコメントは書き換えられない
+    (UI でも本人のフィードバックにのみ編集ボタンを出す)。
+    """
+    text = (text or '').strip()
+    if not text:
+        raise FeedbackError('フィードバックの内容を入力してください。')
+    name = settings.user_name(config) or '匿名'
+    ghcli.run_gh(['api', '-X', 'PATCH',
+                  'repos/%s/issues/comments/%s'
+                  % (paths.repo_slug(config), comment_id),
+                  '-f', 'body=%s' % _comment_body(tag, name, text)])
+
+
+def delete_feedback(comment_id, config=None):
+    """自分のフィードバックを削除する (権限は update_feedback と同様)."""
+    ghcli.run_gh(['api', '-X', 'DELETE',
+                  'repos/%s/issues/comments/%s'
+                  % (paths.repo_slug(config), comment_id)])

@@ -50,3 +50,37 @@ class TestPostFeedback:
             feedback.post_feedback({'tag': 'v9.9-beta.1', 'notes': 'x'},
                                    '感想', {})
         assert gh_calls == []
+
+
+class TestEditDeleteFeedback:
+    @pytest.fixture()
+    def gh_calls(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(feedback.ghcli, 'run_gh',
+                            lambda args, timeout=60: calls.append(args)
+                            or '')
+        monkeypatch.setattr(feedback.settings, 'user_name',
+                            lambda config=None: '山田太郎')
+        return calls
+
+    def test_update_patches_comment(self, gh_calls):
+        feedback.update_feedback('12345', 'v1.1-beta.2', '修正後の感想',
+                                 {'repo': 'o/r'})
+        args = gh_calls[0]
+        assert args[:3] == ['api', '-X', 'PATCH']
+        assert args[3] == 'repos/o/r/issues/comments/12345'
+        body = args[args.index('-f') + 1]
+        # parse_feedback が拾える形式を維持したまま書き換える
+        assert body.startswith('body=β版 v1.1-beta.2 のフィードバック '
+                               '(山田太郎):')
+        assert '修正後の感想' in body
+
+    def test_update_empty_text_rejected(self, gh_calls):
+        with pytest.raises(feedback.FeedbackError, match='内容'):
+            feedback.update_feedback('12345', 'v1.1-beta.2', ' ', {})
+        assert gh_calls == []
+
+    def test_delete_removes_comment(self, gh_calls):
+        feedback.delete_feedback('12345', {'repo': 'o/r'})
+        assert gh_calls[0] == ['api', '-X', 'DELETE',
+                               'repos/o/r/issues/comments/12345']
