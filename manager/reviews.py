@@ -113,8 +113,21 @@ def parse_feedback(comments):
     return result
 
 
+# マネージャー経由の提出 (submit.py) が使うブランチの接頭辞。
+# これ以外 (管理者によるマネージャー自体の更新など) は mgtkit の更新では
+# ないため、承認タブの対象にしない
+SUBMISSION_BRANCH_PREFIX = 'feature/'
+
+
+def _is_submission(pr):
+    return (pr.get('headRefName') or '').startswith(SUBMISSION_BRANCH_PREFIX)
+
+
 def list_pending(config=None):
-    """承認待ちの提出一覧 (open PR + 承認状況 + 検証状況 + 競合有無)."""
+    """承認待ちの提出一覧 (open PR + 承認状況 + 検証状況 + 競合有無).
+
+    マネージャー経由の提出 (feature/ ブランチ) のみを対象とする。
+    """
     out = ghcli.run_gh([
         'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
         '--json', 'number,title,url,author,headRefName'])
@@ -125,6 +138,8 @@ def list_pending(config=None):
     members = collaborators(config)
     result = []
     for pr in prs:
+        if not _is_submission(pr):
+            continue
         detail = _pr_detail(pr['number'], config)
         summary = approval_summary(detail.get('reviews'), members)
         result.append({
@@ -145,14 +160,18 @@ def list_pending(config=None):
 
 
 def count_pending(config=None):
-    """承認待ち (open PR) の件数のみを軽量に取得する (タブバッジ用)."""
+    """承認待ちの提出件数のみを軽量に取得する (タブバッジ用).
+
+    list_pending と同じく feature/ ブランチの提出のみ数える。
+    """
     out = ghcli.run_gh([
         'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
-        '--json', 'number', '--jq', 'length'])
+        '--json', 'headRefName'])
     try:
-        return int(out.strip() or 0)
+        prs = json.loads(out)
     except ValueError:
         return 0
+    return sum(1 for pr in prs if _is_submission(pr))
 
 
 def _pr_detail(pr_number, config=None):
