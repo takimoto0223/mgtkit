@@ -75,6 +75,49 @@ class TestCollaborators:
         assert reviews.collaborators({'repo': 'o/r'}) is None
 
 
+class TestSubmissionFilter:
+    """承認タブはマネージャー経由の提出 (feature/) のみを対象とする."""
+
+    def test_is_submission(self):
+        assert reviews._is_submission({'headRefName': 'feature/yamada-1'})
+        assert not reviews._is_submission({'headRefName': 'claude/x'})
+        assert not reviews._is_submission({'headRefName': 'main'})
+        assert not reviews._is_submission({})
+
+    def test_count_pending_excludes_manager_updates(self, monkeypatch):
+        monkeypatch.setattr(
+            reviews.ghcli, 'run_gh',
+            lambda args, timeout=60:
+            '[{"headRefName": "feature/yamada-20260808-1"},'
+            ' {"headRefName": "claude/app-manager-update"}]')
+        assert reviews.count_pending({'repo': 'o/r'}) == 1
+
+    def test_list_pending_excludes_manager_updates(self, monkeypatch):
+        import json as _json
+
+        def fake_run_gh(args, timeout=60):
+            if args[:2] == ['pr', 'list']:
+                return _json.dumps([
+                    {'number': 33, 'title': '組立断面', 'url': 'u',
+                     'author': {'login': 'fujitaka'},
+                     'headRefName': 'feature/fujitaka-20260808-1'},
+                    {'number': 35, 'title': 'マネージャー更新', 'url': 'u',
+                     'author': {'login': 'takimoto0223'},
+                     'headRefName': 'claude/app-manager-phase-1'},
+                ])
+            if args[:2] == ['pr', 'view']:
+                return _json.dumps({'reviews': [], 'statusCheckRollup': [],
+                                    'mergeable': 'MERGEABLE',
+                                    'headRefName': 'x', 'title': 'x',
+                                    'body': '', 'author': {},
+                                    'comments': []})
+            return '[]'
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake_run_gh)
+        pending = reviews.list_pending({'repo': 'o/r'})
+        assert [p['number'] for p in pending] == [33]
+
+
 class TestParseFeedback:
     def test_extracts_feedback_comments_only(self):
         comments = [
