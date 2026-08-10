@@ -118,6 +118,79 @@ class TestSubmissionFilter:
         assert [p['number'] for p in pending] == [33]
 
 
+class TestWithdraw:
+    """提出者本人による取り下げ (PR クローズ + ブランチ・β版の削除)."""
+
+    def _fake_gh(self, calls, pr_author='fujitaka'):
+        import json as _json
+
+        def fake(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'user']:
+                return 'fujitaka\n'
+            if args[:2] == ['pr', 'view']:
+                return _json.dumps({'author': {'login': pr_author},
+                                    'reviews': [], 'statusCheckRollup': [],
+                                    'mergeable': 'MERGEABLE',
+                                    'headRefName': 'feature/x',
+                                    'title': 'x', 'body': '',
+                                    'comments': []})
+            return ''
+        return fake
+
+    def test_only_author_can_withdraw(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reviews.ghcli, 'run_gh',
+                            self._fake_gh(calls, pr_author='yamada'))
+        with pytest.raises(reviews.ReviewError, match='本人'):
+            reviews.withdraw(33, '', {'repo': 'o/r'})
+        assert not any(a[:2] == ['pr', 'close'] for a in calls)
+
+    def test_closes_pr_and_deletes_beta(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', self._fake_gh(calls))
+        monkeypatch.setattr(
+            reviews.ghcli, 'fetch_releases',
+            lambda repo, limit=30: [
+                {'tag': 'v1.1-beta.2', 'prerelease': True,
+                 'notes': '提出 #33 の検証通過版です。'},
+                {'tag': 'v1.1-beta.1', 'prerelease': True,
+                 'notes': '提出 #31 の検証通過版です。'},
+            ])
+        reviews.withdraw(33, '実装をやり直したい', {'repo': 'o/r'})
+        comment = next(a for a in calls if a[:2] == ['pr', 'comment'])
+        assert '取り下げ' in comment[comment.index('--body') + 1]
+        close = next(a for a in calls if a[:2] == ['pr', 'close'])
+        assert close[2] == '33' and '--delete-branch' in close
+        # 対応するβ版 (v1.1-beta.2) だけが削除される
+        deletes = [a for a in calls if a[:2] == ['release', 'delete']]
+        assert [d[2] for d in deletes] == ['v1.1-beta.2']
+
+    def test_beta_cleanup_failure_is_not_fatal(self, monkeypatch):
+        calls = []
+
+        def fake(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'user']:
+                return 'fujitaka\n'
+            if args[:2] == ['pr', 'view']:
+                import json as _json
+                return _json.dumps({'author': {'login': 'fujitaka'},
+                                    'comments': []})
+            if args[:2] == ['release', 'delete']:
+                raise reviews.ghcli.GhError('通信エラー')
+            return ''
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
+        monkeypatch.setattr(
+            reviews.ghcli, 'fetch_releases',
+            lambda repo, limit=30: [
+                {'tag': 'v1.1-beta.2', 'prerelease': True,
+                 'notes': '提出 #33 の検証通過版です。'}])
+        reviews.withdraw(33, '', {'repo': 'o/r'})  # 例外にならない
+        assert any(a[:2] == ['pr', 'close'] for a in calls)
+
+
 class TestParseFeedback:
     def test_extracts_feedback_comments_only(self):
         comments = [

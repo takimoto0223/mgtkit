@@ -13,7 +13,7 @@ import json
 import logging
 import re
 
-from . import claude_helper, ghcli, paths
+from . import claude_helper, feedback, ghcli, paths
 from .autofix import AUTOFIX_PREFIX, _summarize_checks
 from .gitcli import ensure_work_repo, run_git
 from .submit import workrepo_dir
@@ -203,6 +203,40 @@ def request_changes(pr_number, comment, config=None):
     ghcli.run_gh(['pr', 'review', str(pr_number), '--repo',
                   paths.repo_slug(config), '--request-changes',
                   '--body', comment])
+
+
+def withdraw(pr_number, reason='', config=None):
+    """提出者本人が自分の提出を取り下げる.
+
+    PR をクローズして提出ブランチを削除し、対応するβ版 (prerelease) も
+    片付ける。GitHub の仕様で自分の提出には却下レビューを付けられない
+    ため、本人向けは「取り下げ」として提供する。
+    """
+    detail = _pr_detail(pr_number, config)
+    if ((detail.get('author') or {}).get('login')) != current_user():
+        raise ReviewError('取り下げは提出者本人のみ行えます。'
+                          '他の提出には「却下」を使ってください。')
+    slug = paths.repo_slug(config)
+    reason = (reason or '').strip()
+    if reason:
+        ghcli.run_gh(['pr', 'comment', str(pr_number), '--repo', slug,
+                      '--body', '提出者が取り下げました: %s' % reason])
+    ghcli.run_gh(['pr', 'close', str(pr_number), '--repo', slug,
+                  '--delete-branch'])
+    # 対応するβ版が「その他のβ版」として残らないよう削除する
+    try:
+        betas = ghcli.prereleases(ghcli.fetch_releases(slug))
+    except ghcli.GhError:
+        return  # β版の掃除は失敗しても取り下げ自体は完了している
+    for r in betas:
+        if feedback.pr_number_from_release(r) != pr_number:
+            continue
+        try:
+            ghcli.run_gh(['release', 'delete', r['tag'], '--repo', slug,
+                          '--yes', '--cleanup-tag'])
+        except ghcli.GhError:
+            log.warning('β版 %s の削除に失敗 (残っても動作に影響なし)',
+                        r['tag'])
 
 
 def classified_diff(pr_number, config=None):

@@ -613,6 +613,41 @@ def main(page: ft.Page):
                 actions=actions))
         return handler
 
+    def on_withdraw(pr):
+        """提出者本人による取り下げ (確認ダイアログつき)."""
+        def handler(_):
+            reason = ft.TextField(label='取り下げの理由 (任意)',
+                                  multiline=True, min_lines=2, max_lines=4)
+            err = ft.Text('', size=12, color='#b91c1c')
+
+            def do_withdraw(_):
+                def work():
+                    try:
+                        reviews.withdraw(pr['number'], reason.value, config)
+                        page.pop_dialog()
+                        t5_status.value = ('#%d を取り下げました。'
+                                           % pr['number'])
+                        page.update()
+                        on_refresh_reviews(None)
+                    except (reviews.ReviewError, ghcli.GhError) as e:
+                        err.value = str(e)
+                        page.update()
+                run_bg(work)
+
+            page.show_dialog(ft.AlertDialog(
+                modal=True, title=ft.Text('#%d を取り下げ' % pr['number']),
+                content=ft.Column([
+                    ft.Text('この提出を取り下げます。承認待ちから消え、'
+                            '対応するβ版も削除されます。', size=13),
+                    reason, err,
+                ], tight=True, width=560),
+                actions=[ft.TextButton('キャンセル',
+                                       on_click=lambda _: page.pop_dialog()),
+                         ft.FilledButton('取り下げる', on_click=do_withdraw,
+                                         bgcolor='#b91c1c',
+                                         color='#ffffff')]))
+        return handler
+
     def on_approve(pr):
         def handler(_):
             def work():
@@ -840,6 +875,8 @@ def main(page: ft.Page):
                 buttons.append(ft.FilledButton(
                     '最新版と統合', on_click=on_resolve_conflict(pr),
                     bgcolor=AMBER, color='#ffffff'))
+            buttons.append(ft.OutlinedButton('取り下げ',
+                                             on_click=on_withdraw(pr)))
         else:
             already = me in pr['approved']
             buttons.append(ft.FilledButton(
