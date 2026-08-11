@@ -697,7 +697,8 @@ def main(page: ft.Page):
         return handler
 
     def on_show_diff(pr, beta=None):
-        def open_viewer(_):
+        """「差分」クリックで差分ビューワ (HTML) を既定ブラウザで開く."""
+        def handler(_):
             _t5_progress('差分ビューワを準備しています...')
 
             def work():
@@ -705,61 +706,14 @@ def main(page: ft.Page):
                     path = diffview.write_diff_html(
                         pr, config,
                         beta_tag=beta['tag'] if beta else None)
-                    webbrowser.open('file:///' + path.replace(os.sep, '/'))
-                    t5_status.value = ('差分ビューワをブラウザで開きました '
-                                       '(#%d)。' % pr['number'])
+                    # new=1: 可能なら新しいウィンドウで開く (ブラウザ依存)
+                    webbrowser.open('file:///' + path.replace(os.sep, '/'),
+                                    new=1)
+                    t5_status.value = ('#%d の差分をブラウザで開きました。'
+                                       % pr['number'])
                 except Exception as e:
                     log.exception('diff viewer failed')
-                    t5_status.value = '差分ビューワを開けませんでした: %s' % e
-                page.update()
-            run_bg(work)
-
-        def handler(_):
-            _t5_progress('差分を取得しています...')
-
-            def work():
-                try:
-                    d = reviews.classified_diff(pr['number'], config)
-                except Exception as e:
-                    log.exception('classified_diff failed')
-                    t5_status.value = '差分を取得できませんでした: %s' % e
-                    page.update()
-                    return
-                items = []
-                if d['user_files']:
-                    items.append(ft.Text('提出者の変更:', size=13,
-                                         weight=ft.FontWeight.BOLD,
-                                         color=NAVY))
-                    items += [ft.Text('  ' + f, size=12, color=NAVY)
-                              for f in d['user_files']]
-                if d['autofix_files']:
-                    items.append(ft.Text('自動修正 [auto-fix] による変更:',
-                                         size=13,
-                                         weight=ft.FontWeight.BOLD,
-                                         color=AMBER))
-                    items += [ft.Text('  ' + f, size=12, color=AMBER)
-                              for f in d['autofix_files']]
-                diff = d['diff_text']
-                if len(diff) > 20000:
-                    diff = diff[:20000] + '\n... (以降は GitHub で確認)'
-                items.append(ft.Container(
-                    bgcolor='#1e293b', border_radius=6, padding=10,
-                    content=ft.Text(diff, size=11, color='#e2e8f0',
-                                    font_family='monospace',
-                                    selectable=True)))
-                t5_status.value = ''
-                page.show_dialog(ft.AlertDialog(
-                    title=ft.Text('#%d の差分' % pr['number']),
-                    content=ft.Column(items, width=640, height=420,
-                                      scroll=ft.ScrollMode.AUTO),
-                    actions=[
-                        ft.TextButton(
-                            '閉じる', on_click=lambda _: page.pop_dialog()),
-                        ft.FilledButton(
-                            '詳細ビューワで開く', icon=ft.Icons.OPEN_IN_NEW,
-                            on_click=open_viewer,
-                            bgcolor=NAVY, color='#ffffff'),
-                    ]))
+                    t5_status.value = '差分を開けませんでした: %s' % e
                 page.update()
             run_bg(work)
         return handler
