@@ -10,23 +10,27 @@ HTML 1 枚として一時フォルダへ書き出し、パスを返す (開く�
   - 変更が MAX_CHANGED_LINES 行を超えるファイルは省略表示
   - 画像・バイナリは「表示対象外」と明記
 """
+import base64
 import difflib
 import html
+import io
 import logging
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 from . import ghcli, paths
 from .gitcli import ensure_work_repo, run_git
-from .submit import workrepo_dir
+from .submit import _is_dist_scope, workrepo_dir
 
 log = logging.getLogger(__name__)
 
 MAX_HUNK_CONTEXT = 3      # 変更行の前後に見せる行数
 MAX_CHANGED_LINES = 800   # これを超えるファイルは省略表示
+MAX_DL_MB = 20            # 更新データ ZIP の埋め込み上限 (超えたらボタン非表示)
 
 BINARY_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip',
                '.xlsx', '.pyc', '.exe', '.dll'}
@@ -122,9 +126,15 @@ def _esc(s):
 _CSS = """
 body { font-family: 'Yu Gothic UI', 'Meiryo', sans-serif; margin: 0;
        background: #f5f7fa; color: #1f2937; }
-header { background: #1e3a5f; color: #fff; padding: 14px 24px; }
+header { background: #1e3a5f; color: #fff; padding: 14px 24px;
+         display: flex; justify-content: space-between;
+         align-items: center; gap: 16px; }
 header h1 { font-size: 17px; margin: 0 0 4px; }
 header .meta { font-size: 12px; opacity: .85; }
+a.dl { flex: none; border: 1px solid rgba(255,255,255,.55); color: #fff;
+       border-radius: 6px; padding: 7px 14px; font-size: 12px;
+       text-decoration: none; white-space: nowrap; }
+a.dl:hover { background: rgba(255,255,255,.12); }
 .wrap { margin: 0 auto; padding: 16px 20px 48px; }
 .sec-h { font-size: 14px; margin: 18px 0 10px; color: #1e3a5f;
          border-left: 4px solid #1e3a5f; padding-left: 8px; }
@@ -162,9 +172,36 @@ tr.gap td { background: #eef2f7; color: #6b7280; text-align: center;
          background: #eff6ff; border-left: 3px solid #93c5fd;
          padding: 4px 10px; border-radius: 0 4px 4px 0; }
 td .fnote { margin: 2px 0 2px; }
+.fnote2 { font-weight: normal; font-size: 12px; color: #1f2937;
+          background: #eff6ff; border-left: 3px solid #93c5fd;
+          padding: 2px 8px; border-radius: 0 4px 4px 0; margin-left: 8px; }
 .top { position: fixed; right: 18px; bottom: 18px; background: #1e3a5f;
        color: #fff; border-radius: 20px; padding: 8px 16px; font-size: 12px;
        text-decoration: none; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+.ovl { position: fixed; inset: 0; background: rgba(15,23,42,.55);
+       display: none; align-items: center; justify-content: center;
+       z-index: 50; }
+.ovl.show { display: flex; }
+.modal { background: #fff; border-radius: 10px; padding: 22px 26px;
+         max-width: 760px; width: 92%; max-height: 88vh; overflow: auto;
+         box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+.modal h2 { font-size: 16px; margin: 0 0 10px; color: #b45309; }
+.mlead { font-size: 13px; margin: 0 0 12px; }
+.rcards { display: flex; gap: 12px; }
+.rcard { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0;
+         border-radius: 8px; padding: 10px 12px; }
+.rcard svg { width: 100%; height: 84px; display: block; }
+.rcard h3 { font-size: 12.5px; margin: 6px 0 4px; color: #b45309; }
+.rcard p { font-size: 11.5px; color: #475569; margin: 0;
+           line-height: 1.55; }
+.mfoot { font-size: 12px; color: #475569; margin: 12px 0 14px; }
+.mbtns { display: flex; justify-content: flex-end; gap: 10px; }
+.mcancel { font-size: 13px; color: #475569; text-decoration: none;
+           padding: 8px 16px; border-radius: 6px; }
+.mcancel:hover { background: #f1f5f9; }
+.mgo { font-size: 13px; color: #fff; background: #1e3a5f;
+       text-decoration: none; padding: 8px 16px; border-radius: 6px; }
+.mgo:hover { background: #2b4a6f; }
 """
 
 _STATUS_JP = {'M': ('変更', 'tagM'), 'A': ('追加', 'tagA'),
@@ -208,11 +245,182 @@ def _display_path(path):
 
 
 def _file_section(anchor, path, stat_html, inner, note=None):
-    note_html = ('<p class="fnote">%s</p>' % html.escape(note)) if note \
-        else ''
-    return ('<div class="card" id="%s"><h2>%s %s</h2>%s%s</div>'
+    # 説明はファイル名と同じ行の右横に置く (見出しだけで内容がわかるように)
+    note_html = (' <span class="fnote2">%s</span>' % html.escape(note)) \
+        if note else ''
+    return ('<div class="card" id="%s"><h2>%s %s%s</h2>%s</div>'
             % (anchor, html.escape(_display_path(path)), stat_html,
                note_html, inner))
+
+
+# 資料「バージョン管理と同時開発のしくみ」4.2 の 3 リスクカード
+# (タイトル・説明・ミニイラスト SVG)。モーダルで表示する
+_RISK_CARDS = [
+    ('① 基点の消滅',
+     '親の提出が却下・取り下げで消えると、その上に作った変更は'
+     '土台を失い「基点となる版が見つかりません」で提出不能になる。',
+     '<svg viewBox="0 0 150 84">'
+     '<line x1="10" y1="66" x2="140" y2="66" stroke="#94a3b8" '
+     'stroke-width="3"/>'
+     '<text x="14" y="80" font-size="9" fill="#64748b">正式版</text>'
+     '<line x1="45" y1="66" x2="62" y2="38" stroke="#fca5a5" '
+     'stroke-width="2" stroke-dasharray="4 3"/>'
+     '<circle cx="68" cy="32" r="11" fill="#fee2e2" stroke="#b91c1c" '
+     'stroke-width="2"/>'
+     '<line x1="61" y1="25" x2="75" y2="39" stroke="#b91c1c" '
+     'stroke-width="2.5"/>'
+     '<line x1="75" y1="25" x2="61" y2="39" stroke="#b91c1c" '
+     'stroke-width="2.5"/>'
+     '<text x="52" y="16" font-size="9" fill="#b91c1c">親: 削除</text>'
+     '<circle cx="118" cy="24" r="11" fill="#fff" stroke="#1e3a5f" '
+     'stroke-width="2"/>'
+     '<text x="114" y="28" font-size="11" fill="#1e3a5f">?</text>'
+     '<text x="100" y="50" font-size="9" fill="#475569">宙に浮く</text>'
+     '</svg>'),
+    ('② 親リリース後の縮退',
+     '親がリリースされると正式版には「同じ内容だが別の記録」が入る。'
+     'その上の変更の合流はずれやすく、衝突化しやすい。',
+     '<svg viewBox="0 0 150 84">'
+     '<line x1="10" y1="66" x2="140" y2="66" stroke="#94a3b8" '
+     'stroke-width="3"/>'
+     '<circle cx="55" cy="66" r="9" fill="#bbf7d0" stroke="#15803d" '
+     'stroke-width="2"/>'
+     '<text x="40" y="82" font-size="9" fill="#15803d">親&#39; (別記録)</text>'
+     '<circle cx="60" cy="30" r="9" fill="#f1f5f9" stroke="#94a3b8" '
+     'stroke-width="2" stroke-dasharray="3 2"/>'
+     '<text x="42" y="17" font-size="9" fill="#64748b">親 (旧)</text>'
+     '<circle cx="110" cy="24" r="11" fill="#fef3c7" stroke="#b45309" '
+     'stroke-width="2"/>'
+     '<text x="106" y="29" font-size="12" fill="#b45309">!</text>'
+     '<text x="92" y="50" font-size="9" fill="#b45309">衝突しやすい</text>'
+     '</svg>'),
+    ('③ レビュー責任の曖昧化',
+     '親が未承認のまま、その上の変更だけ承認すると「親の内容込みの'
+     '承認か」が不明瞭になる。親の決着を待つのが原則。',
+     '<svg viewBox="0 0 150 84">'
+     '<circle cx="45" cy="46" r="12" fill="#f1f5f9" stroke="#64748b" '
+     'stroke-width="2"/>'
+     '<text x="41" y="51" font-size="12" fill="#64748b">?</text>'
+     '<text x="24" y="74" font-size="9" fill="#64748b">親: 未承認</text>'
+     '<line x1="58" y1="40" x2="92" y2="30" stroke="#94a3b8" '
+     'stroke-width="2"/>'
+     '<circle cx="105" cy="27" r="12" fill="#dcfce7" stroke="#15803d" '
+     'stroke-width="2"/>'
+     '<text x="99" y="32" font-size="11" fill="#15803d">&#10003;</text>'
+     '<text x="86" y="58" font-size="9" fill="#475569">承認した…?</text>'
+     '</svg>'),
+]
+
+
+def _dl_readme(meta, changed, dl_deleted):
+    lines = [
+        '#%d の確認用データ' % meta['number'],
+        'タイトル: %s' % meta['title'],
+        '提出者: %s' % meta.get('author', '?'),
+    ]
+    if meta.get('beta'):
+        lines.append('β版: %s' % meta['beta'])
+    lines += [
+        '',
+        '[フォルダ構成]',
+        ' 一式/%s      … β版まるごと。そのまま動作チェックに使えます'
+        % DISPLAY_ROOT,
+        ' 変更のみ/%s  … この提出で追加・変更されたファイルだけ'
+        ' (中身チェック用)' % DISPLAY_ROOT,
+        '',
+        'この提出で追加・変更されたファイル:',
+    ]
+    lines += [' - %s/%s' % (DISPLAY_ROOT, p) for p in changed]
+    if dl_deleted:
+        lines += ['', 'この提出で削除されたファイル (ZIP には含まれません):']
+        lines += [' - %s/%s' % (DISPLAY_ROOT, p) for p in dl_deleted]
+    lines += [
+        '',
+        '※ 一式には版の情報 (version.json) を意図的に含めていません。',
+        '  そのため、このフォルダを ZIP にしてもマネージャーから提出は',
+        '  できません (誤って開発の土台にしない仕組みです)。',
+        '',
+        '【注意】',
+        'このデータを保存して開発の土台にすることには、資料',
+        '「バージョン管理と同時開発のしくみ」4.2 に示した 3 つのリスク',
+        '(①基点の消滅 ②親リリース後の縮退 ③レビュー責任の曖昧化) が',
+        'あります。このリスクが理解できる人のみ利用してください。',
+    ]
+    return '\n'.join(lines)
+
+
+def _download_link(meta, dl_files, dl_deleted, workrepo, head_ref):
+    """「更新データをダウンロード」ボタンとリスク確認モーダルの HTML.
+
+    β版一覧に置くと誤って開発の土台にする人が出るため、差分ビューワの
+    右上にだけ置き、クリック時に資料 4.2 の 3 リスクをイラスト付きで
+    確認してからダウンロードさせる。ZIP には「一式」(動作チェック用の
+    β版まるごと) と「変更のみ」(中身チェック用) の両方を入れる。
+    戻り値: (ボタン HTML, モーダル HTML)。出さないときは ('', '')。
+    """
+    if not dl_files:
+        return '', ''
+    # 一式 = 提出後の配布相当ファイル全部 (version.json はあえて入れない
+    # ことで、この一式をそのまま提出の土台にできないようにする)
+    full = []
+    for p in run_git(['ls-tree', '-r', '--name-only', head_ref],
+                     cwd=workrepo).splitlines():
+        p = p.strip()
+        if not p or not _is_dist_scope(p):
+            continue
+        data = _git_bytes(workrepo, ['show', '%s:%s' % (head_ref, p)])
+        if data is not None:
+            full.append((p, data))
+    if sum(len(d) for _, d in full) + sum(len(d) for _, d in dl_files) \
+            > MAX_DL_MB * 1024 * 1024:
+        return '', ''
+    changed = [p for p, _ in dl_files]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('更新データについて.txt',
+                    _dl_readme(meta, changed, dl_deleted))
+        for path, data in full:
+            zf.writestr('一式/%s/%s' % (DISPLAY_ROOT, path), data)
+        for path, data in dl_files:
+            zf.writestr('変更のみ/%s/%s' % (DISPLAY_ROOT, path), data)
+    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+
+    btn = ('<a class="dl" id="dlbtn" href="#">'
+           '⬇ 更新データをダウンロード</a>')
+    cards = ''.join(
+        '<div class="rcard">%s<h3>%s</h3><p>%s</p></div>'
+        % (svg, html.escape(title), html.escape(text))
+        for title, text, svg in _RISK_CARDS)
+    modal = (
+        '<div class="ovl" id="dlovl"><div class="modal">'
+        '<h2>ダウンロードの前に【注意】</h2>'
+        '<p class="mlead">ここからダウンロードしたデータを保存して'
+        '<b>開発の土台にする</b>ことには、資料「バージョン管理と同時開発の'
+        'しくみ」4.2 に示した 3 つのリスクがあります。</p>'
+        '<div class="rcards">%s</div>'
+        '<p class="mfoot">このリスクが理解できる人のみダウンロードして'
+        'ください。動作チェックやプログラムの中身の確認に使うのは'
+        '問題ありません (ZIP には動作チェック用の「一式」と中身チェック用の'
+        '「変更のみ」が入っています)。</p>'
+        '<div class="mbtns">'
+        '<a class="mcancel" id="dlcancel" href="#">キャンセル</a>'
+        '<a class="mgo" id="dlgo" download="#%d_確認用.zip" '
+        'href="data:application/zip;base64,%s">'
+        '⬇ リスクを理解した上でダウンロード</a>'
+        '</div></div></div>'
+        '<script>(function(){'
+        'var o=document.getElementById("dlovl");'
+        'document.getElementById("dlbtn").addEventListener("click",'
+        'function(e){e.preventDefault();o.classList.add("show");});'
+        'document.getElementById("dlcancel").addEventListener("click",'
+        'function(e){e.preventDefault();o.classList.remove("show");});'
+        'document.getElementById("dlgo").addEventListener("click",'
+        'function(){o.classList.remove("show");});'
+        'o.addEventListener("click",function(e){'
+        'if(e.target===o)o.classList.remove("show");});'
+        '})();</script>'
+        % (cards, meta['number'], b64))
+    return btn, modal
 
 
 def build_html(meta, base_ref, head_ref, workrepo):
@@ -229,9 +437,18 @@ def build_html(meta, base_ref, head_ref, workrepo):
     notes = meta.get('notes') or {}
 
     sums, sections = [], []
+    dl_files, dl_deleted = [], []
     n_add = n_del = 0
     for status, path in ((s[0], p) for s, p in files):
         jp, cls = _STATUS_JP.get(status, ('変更', 'tagM'))
+        # 更新データ ZIP 用に提出後の内容を控える (削除ファイルは一覧のみ)
+        if status == 'D':
+            dl_deleted.append(path)
+        else:
+            data = _git_bytes(workrepo, ['show',
+                                         '%s:%s' % (head_ref, path)])
+            if data is not None:
+                dl_files.append((path, data))
         note = notes.get(path)
         anchor = 'f-%s' % path.replace('/', '-').replace('.', '-')
         ext = ('.' + path.rsplit('.', 1)[-1].lower()) if '.' in path else ''
@@ -293,14 +510,16 @@ def build_html(meta, base_ref, head_ref, workrepo):
     notes_caveat = ('<br>※ 各ファイルの青枠の説明は提出時に自動生成された'
                     'ものです (その後の自動修正・統合は反映されません)。'
                     if notes else '')
+    dl_html, dl_modal = _download_link(meta, dl_files, dl_deleted,
+                                       workrepo, head_ref)
     beta = ('・ β版 %s ' % html.escape(meta['beta'])) if meta.get('beta') \
         else ''
     return (
         '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">'
-        '<title>提出 #%d の差分</title><style>%s</style></head><body>'
-        '<header><h1>提出 #%d %s</h1>'
+        '<title>#%d の差分</title><style>%s</style></head><body>'
+        '<header><div><h1>#%d %s</h1>'
         '<div class="meta">提出者: %s %s・ 基点との比較 '
-        '(追加 <b>+%d</b> 行 / 削除 <b>-%d</b> 行)</div></header>'
+        '(追加 <b>+%d</b> 行 / 削除 <b>-%d</b> 行)</div></div>%s</header>'
         '<div class="wrap">'
         '<h2 class="sec-h">&lt;1&gt; フォルダ比較 '
         '(変更されたファイル %d 件)</h2>'
@@ -312,11 +531,11 @@ def build_html(meta, base_ref, head_ref, workrepo):
         '<span style="background:#bbf7d0">&nbsp;緑&nbsp;</span>'
         '= 追加された行。%s</p></div>'
         '<h2 class="sec-h">&lt;2&gt; ファイル比較</h2>%s</div>'
-        '<a class="top" href="#">▲ 先頭へ</a></body></html>'
+        '<a class="top" href="#">▲ 先頭へ</a>%s</body></html>'
         % (meta['number'], _CSS, meta['number'],
            html.escape(meta['title']), html.escape(meta['author']), beta,
-           n_add, n_del, len(files), sum_rows, notes_caveat,
-           ''.join(sections)))
+           n_add, n_del, dl_html, len(files), sum_rows, notes_caveat,
+           ''.join(sections), dl_modal))
 
 
 def write_diff_html(pr, config=None, workrepo=None, beta_tag=None):

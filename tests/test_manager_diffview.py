@@ -88,6 +88,7 @@ def diff_repo(tmp_path):
     g('config', 'user.name', 'テスト')
     lines = ['line%d = %d' % (i, i) for i in range(30)]
     (repo / 'calc.py').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    (repo / 'stable.py').write_text('KEEP = 1\n', encoding='utf-8')
     g('add', '-A')
     g('commit', '-m', 'base')
     g('checkout', '-b', 'feature')
@@ -106,7 +107,8 @@ class TestBuildHtml:
 
     def test_contains_summary_and_diff(self, diff_repo):
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
-        assert '提出 #33' in page and '組立断面の対応' in page
+        assert '<h1>#33 組立断面の対応</h1>' in page
+        assert '提出 #33' not in page      # 見出しに「提出」は付けない
         assert 'フォルダ比較' in page and 'ファイル比較' in page
         assert 'calc.py' in page
         assert 'line15&nbsp;=&nbsp;9999' in page      # 変更後の行
@@ -122,6 +124,48 @@ class TestBuildHtml:
         monkeypatch.setattr(diffview, 'MAX_CHANGED_LINES', 1)
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
         assert '大きすぎるため' in page
+
+    def test_download_button_with_risk_modal(self, diff_repo):
+        page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
+        assert '更新データをダウンロード' in page
+        assert 'data:application/zip;base64,' in page
+        # クリックで資料 4.2 の 3 リスクをイラスト付きモーダルで確認する
+        assert 'id="dlovl"' in page
+        assert '基点の消滅' in page
+        assert '親リリース後の縮退' in page
+        assert 'レビュー責任の曖昧化' in page
+        assert 'リスクを理解した上でダウンロード' in page
+        assert 'download="#33_確認用.zip"' in page
+
+    def test_download_zip_contents(self, diff_repo):
+        import base64
+        import io
+        import re
+        import zipfile
+        page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
+        m = re.search(r'data:application/zip;base64,([A-Za-z0-9+/=]+)', page)
+        assert m
+        zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(m.group(1))))
+        names = zf.namelist()
+        # 一式 = β版まるごと (未変更ファイルも入る)、変更のみ = 差分のみ
+        assert '一式/mgtkit/calc.py' in names
+        assert '一式/mgtkit/stable.py' in names
+        assert '一式/mgtkit/img.png' in names
+        assert '変更のみ/mgtkit/calc.py' in names
+        assert '変更のみ/mgtkit/img.png' in names
+        assert '変更のみ/mgtkit/stable.py' not in names
+        assert 'line15 = 9999' in zf.read(
+            '一式/mgtkit/calc.py').decode('utf-8')
+        # 説明テキスト: 素性・構成・version.json を入れない理由・注意書き
+        readme = zf.read('更新データについて.txt').decode('utf-8')
+        assert '#33 の確認用データ' in readme.split('\n')[0]
+        assert 'version.json' in readme
+        assert '3 つのリスク' in readme
+
+    def test_download_hidden_when_too_large(self, diff_repo, monkeypatch):
+        monkeypatch.setattr(diffview, 'MAX_DL_MB', 0)
+        page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
+        assert '更新データをダウンロード' not in page
 
     def test_file_notes_are_shown(self, diff_repo):
         meta = dict(self.META,
@@ -143,7 +187,10 @@ class TestBuildHtml:
             f.write('if a < b: print("<b>")\n')
         run_git(['commit', '-am', 'esc'], cwd=diff_repo)
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
-        assert '<b>' not in page.split('ファイル比較')[1]
+        # 検査対象はファイル比較の差分表のみ (後続のモーダルには正当な
+        # <b> タグがある)
+        tail = page.split('ファイル比較')[1].split('<div class="ovl"')[0]
+        assert '<b>' not in tail
 
 
 class TestWriteDiffHtml:
