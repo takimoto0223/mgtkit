@@ -6,12 +6,15 @@ Git / GitHub の用語はユーザーに見せず、平易な日本語のみ表�
 """
 import asyncio
 import logging
+import os
 import threading
 
 import flet as ft
 
-from . import (autofix, conflicts, feedback, ghcli, launcher, paths,
-               reviews, settings, submit, updater)
+import webbrowser
+
+from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
+               paths, reviews, settings, submit, updater)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
@@ -693,7 +696,24 @@ def main(page: ft.Page):
                 ]))
         return handler
 
-    def on_show_diff(pr):
+    def on_show_diff(pr, beta=None):
+        def open_viewer(_):
+            _t5_progress('差分ビューワを準備しています...')
+
+            def work():
+                try:
+                    path = diffview.write_diff_html(
+                        pr, config,
+                        beta_tag=beta['tag'] if beta else None)
+                    webbrowser.open('file:///' + path.replace(os.sep, '/'))
+                    t5_status.value = ('差分ビューワをブラウザで開きました '
+                                       '(#%d)。' % pr['number'])
+                except Exception as e:
+                    log.exception('diff viewer failed')
+                    t5_status.value = '差分ビューワを開けませんでした: %s' % e
+                page.update()
+            run_bg(work)
+
         def handler(_):
             _t5_progress('差分を取得しています...')
 
@@ -732,8 +752,14 @@ def main(page: ft.Page):
                     title=ft.Text('#%d の差分' % pr['number']),
                     content=ft.Column(items, width=640, height=420,
                                       scroll=ft.ScrollMode.AUTO),
-                    actions=[ft.TextButton(
-                        '閉じる', on_click=lambda _: page.pop_dialog())]))
+                    actions=[
+                        ft.TextButton(
+                            '閉じる', on_click=lambda _: page.pop_dialog()),
+                        ft.FilledButton(
+                            '詳細ビューワで開く', icon=ft.Icons.OPEN_IN_NEW,
+                            on_click=open_viewer,
+                            bgcolor=NAVY, color='#ffffff'),
+                    ]))
                 page.update()
             run_bg(work)
         return handler
@@ -869,7 +895,7 @@ def main(page: ft.Page):
             disabled=(beta is None and not fb),
             on_click=on_feedback_dialog(pr, beta, me)))
         buttons.append(ft.OutlinedButton('差分',
-                                         on_click=on_show_diff(pr)))
+                                         on_click=on_show_diff(pr, beta)))
         if pr['author'] == me:
             if pr['conflicting']:
                 buttons.append(ft.FilledButton(
