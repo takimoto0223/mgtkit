@@ -199,6 +199,81 @@ class TestCancelMyReview:
             reviews.cancel_my_review(33, {'repo': 'o/r'})
 
 
+class TestDeleteBetasFor:
+    def test_deletes_only_matching_beta(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reviews.ghcli, 'run_gh',
+                            lambda args, timeout=60: calls.append(args)
+                            or '')
+        monkeypatch.setattr(
+            reviews.ghcli, 'fetch_releases',
+            lambda repo, limit=30: [
+                {'tag': 'v1.1-beta.2', 'prerelease': True,
+                 'notes': '提出 #33 の検証通過版です。'},
+                {'tag': 'v1.1-beta.1', 'prerelease': True,
+                 'notes': '提出 #31 の検証通過版です。'},
+                {'tag': 'v1.1', 'prerelease': False, 'notes': '#33'},
+            ])
+        reviews.delete_betas_for(33, {'repo': 'o/r'})
+        deletes = [a for a in calls if a[:2] == ['release', 'delete']]
+        assert [d[2] for d in deletes] == ['v1.1-beta.2']
+
+    def test_fetch_failure_is_silent(self, monkeypatch):
+        def boom(repo, limit=30):
+            raise reviews.ghcli.GhError('通信エラー')
+        monkeypatch.setattr(reviews.ghcli, 'fetch_releases', boom)
+        reviews.delete_betas_for(33, {'repo': 'o/r'})  # 例外にならない
+
+
+class TestResetAllReviews:
+    def test_dismisses_latest_review_of_each_member(self, monkeypatch):
+        import json as _json
+        calls = []
+
+        def fake(args, timeout=60):
+            calls.append(args)
+            if args[0] == 'api' and '/reviews?' in args[1]:
+                return _json.dumps([
+                    {'id': 10, 'user': {'login': 'yamada'},
+                     'state': 'CHANGES_REQUESTED'},
+                    {'id': 11, 'user': {'login': 'yamada'},
+                     'state': 'APPROVED'},
+                    {'id': 12, 'user': {'login': 'sato'},
+                     'state': 'APPROVED'},
+                    {'id': 13, 'user': {'login': 'suzuki'},
+                     'state': 'COMMENTED'},
+                ])
+            return ''
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
+        count = reviews.reset_all_reviews(33, {'repo': 'o/r'})
+        assert count == 2
+        dismissed = sorted(a[3] for a in calls if a[:3] == ['api', '-X',
+                                                            'PUT'])
+        # 各メンバーの最新レビューのみ (yamada は 11、sato は 12)
+        assert dismissed == [
+            'repos/o/r/pulls/33/reviews/11/dismissals',
+            'repos/o/r/pulls/33/reviews/12/dismissals']
+
+    def test_partial_failure_continues(self, monkeypatch):
+        import json as _json
+
+        def fake(args, timeout=60):
+            if args[0] == 'api' and '/reviews?' in args[1]:
+                return _json.dumps([
+                    {'id': 11, 'user': {'login': 'yamada'},
+                     'state': 'APPROVED'},
+                    {'id': 12, 'user': {'login': 'sato'},
+                     'state': 'APPROVED'},
+                ])
+            if '/reviews/11/' in (args[3] if len(args) > 3 else ''):
+                raise reviews.ghcli.GhError('通信エラー')
+            return ''
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
+        assert reviews.reset_all_reviews(33, {'repo': 'o/r'}) == 1
+
+
 class TestWithdraw:
     """提出者本人による取り下げ (PR クローズ + ブランチ・β版の削除)."""
 
