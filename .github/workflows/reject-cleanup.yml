@@ -91,4 +91,23 @@ jobs:
                       gh('release', 'delete', rel['tag_name'],
                          '--repo', repo, '--yes', '--cleanup-tag')
                       print('β版 %s を削除' % rel['tag_name'])
+
+          # どの open な提出にも対応しないβ版の残骸を掃除する
+          # (リリース済み・クローズ済みの提出のβ版。マネージャー側の
+          #  削除が通信断などで漏れた場合の受け皿)
+          open_numbers = {pr['number'] for pr in json.loads(
+              gh('pr', 'list', '--repo', repo, '--state', 'open',
+                 '--json', 'number'))}
+          rels = json.loads(gh(
+              'api', 'repos/%s/releases?per_page=100' % repo))
+          for rel in rels:
+              if not rel.get('prerelease'):
+                  continue
+              m = re.search(r'#(\d+)\b', rel.get('body') or '')
+              if not m or int(m.group(1)) in open_numbers:
+                  continue
+              gh('release', 'delete', rel['tag_name'], '--repo', repo,
+                 '--yes', '--cleanup-tag')
+              print('残骸のβ版 %s を削除 (提出 #%s はクローズ済み)'
+                    % (rel['tag_name'], m.group(1)))
           EOF

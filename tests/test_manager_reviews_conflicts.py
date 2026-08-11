@@ -199,6 +199,32 @@ class TestCancelMyReview:
             reviews.cancel_my_review(33, {'repo': 'o/r'})
 
 
+class TestDeleteBetasFor:
+    def test_deletes_only_matching_beta(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reviews.ghcli, 'run_gh',
+                            lambda args, timeout=60: calls.append(args)
+                            or '')
+        monkeypatch.setattr(
+            reviews.ghcli, 'fetch_releases',
+            lambda repo, limit=30: [
+                {'tag': 'v1.1-beta.2', 'prerelease': True,
+                 'notes': '提出 #33 の検証通過版です。'},
+                {'tag': 'v1.1-beta.1', 'prerelease': True,
+                 'notes': '提出 #31 の検証通過版です。'},
+                {'tag': 'v1.1', 'prerelease': False, 'notes': '#33'},
+            ])
+        reviews.delete_betas_for(33, {'repo': 'o/r'})
+        deletes = [a for a in calls if a[:2] == ['release', 'delete']]
+        assert [d[2] for d in deletes] == ['v1.1-beta.2']
+
+    def test_fetch_failure_is_silent(self, monkeypatch):
+        def boom(repo, limit=30):
+            raise reviews.ghcli.GhError('通信エラー')
+        monkeypatch.setattr(reviews.ghcli, 'fetch_releases', boom)
+        reviews.delete_betas_for(33, {'repo': 'o/r'})  # 例外にならない
+
+
 class TestResetAllReviews:
     def test_dismisses_latest_review_of_each_member(self, monkeypatch):
         import json as _json

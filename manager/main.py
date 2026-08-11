@@ -448,7 +448,6 @@ def main(page: ft.Page):
     # ------------- タブ4: β版の確認と承認 (β版の試用 + 承認を 1 画面に) -------------
 
     t5_list = ft.Column([], spacing=8)
-    t5_beta_extra = ft.Column([], spacing=8)
     t5_status = status_text()
 
     def _t5_progress(msg):
@@ -1039,49 +1038,23 @@ def main(page: ft.Page):
             if not visible:
                 t5_list.controls.append(
                     ft.Text('確認・承認待ちの提出はありません', size=14))
-            used = set()
             for pr in visible:
-                beta = _beta_for(pr['number'], betas)
-                if beta is not None:
-                    used.add(beta['tag'])
-                t5_list.controls.append(_review_row(pr, me, beta))
+                t5_list.controls.append(
+                    _review_row(pr, me, _beta_for(pr['number'], betas)))
             if folded:
                 # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
                 t5_list.controls.append(ft.Text(
                     '非表示にした提出 (却下確定)', size=12,
                     color='#9ca3af'))
                 for pr in folded:
-                    used_beta = _beta_for(pr['number'], betas)
-                    if used_beta is not None:
-                        used.add(used_beta['tag'])
                     t5_list.controls.append(ft.Row([
                         ft.Text('#%d %s' % (pr['number'], pr['title']),
                                 size=12, color='#9ca3af', expand=True),
                         ft.TextButton('一覧に戻す',
                                       on_click=on_unhide_pr(pr)),
                     ], spacing=8))
-            others = [b for b in betas if b['tag'] not in used]
-            t5_beta_extra.controls.clear()
-            if others:
-                t5_beta_extra.controls.append(ft.Text(
-                    'その他のβ版 (承認待ちの提出とは対応しません)',
-                    size=13, weight=ft.FontWeight.BOLD))
-                for r in others:
-                    t5_beta_extra.controls.append(ft.Container(
-                        bgcolor='#f5f7fa', border_radius=6, padding=12,
-                        content=ft.Row([
-                            ft.Column([
-                                ft.Text('%s (%s)' % (r['tag'],
-                                                     r['published_at']),
-                                        weight=ft.FontWeight.BOLD),
-                                ft.Text(r['name'], size=12,
-                                        color='#555555'),
-                            ], spacing=2, expand=True),
-                            ft.FilledButton(
-                                '試す', icon=ft.Icons.SCIENCE,
-                                on_click=try_beta(r),
-                                bgcolor=AMBER, color='#ffffff'),
-                        ])))
+            # 提出に対応しないβ版はリリース・取り下げ・却下確定の時点で
+            # 自動削除されるため、ここでは表示しない
             t5_status.value = ''
             page.update()
         run_bg(work)
@@ -1099,7 +1072,6 @@ def main(page: ft.Page):
         ft.OutlinedButton('一覧を取得', icon=ft.Icons.REFRESH,
                           on_click=on_refresh_reviews),
         t5_list,
-        t5_beta_extra,
         t5_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 

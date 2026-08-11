@@ -254,6 +254,28 @@ def cancel_my_review(pr_number, config=None):
                   '-f', 'message=本人が取り消しました'])
 
 
+def delete_betas_for(pr_number, config=None):
+    """提出 pr_number に対応するβ版 (prerelease) を削除する.
+
+    リリース・取り下げ・却下確定の後始末に共通で使う。
+    失敗しても本処理は成立しているため警告ログのみ。
+    """
+    slug = paths.repo_slug(config)
+    try:
+        betas = ghcli.prereleases(ghcli.fetch_releases(slug))
+    except ghcli.GhError:
+        return
+    for r in betas:
+        if feedback.pr_number_from_release(r) != int(pr_number):
+            continue
+        try:
+            ghcli.run_gh(['release', 'delete', r['tag'], '--repo', slug,
+                          '--yes', '--cleanup-tag'])
+        except ghcli.GhError:
+            log.warning('β版 %s の削除に失敗 (残っても動作に影響なし)',
+                        r['tag'])
+
+
 def reset_all_reviews(pr_number, config=None):
     """全員の承認・却下を取り消す (統合で内容が変わったときの仕切り直し).
 
@@ -306,20 +328,8 @@ def withdraw(pr_number, reason='', config=None):
                       '--body', '提出者が取り下げました: %s' % reason])
     ghcli.run_gh(['pr', 'close', str(pr_number), '--repo', slug,
                   '--delete-branch'])
-    # 対応するβ版が「その他のβ版」として残らないよう削除する
-    try:
-        betas = ghcli.prereleases(ghcli.fetch_releases(slug))
-    except ghcli.GhError:
-        return  # β版の掃除は失敗しても取り下げ自体は完了している
-    for r in betas:
-        if feedback.pr_number_from_release(r) != pr_number:
-            continue
-        try:
-            ghcli.run_gh(['release', 'delete', r['tag'], '--repo', slug,
-                          '--yes', '--cleanup-tag'])
-        except ghcli.GhError:
-            log.warning('β版 %s の削除に失敗 (残っても動作に影響なし)',
-                        r['tag'])
+    # 対応するβ版が残骸として残らないよう削除する
+    delete_betas_for(pr_number, config)
 
 
 def classified_diff(pr_number, config=None):
@@ -422,6 +432,8 @@ def release(pr_number, config=None, on_progress=None):
                   paths.repo_slug(config),
                   '-f', 'version=%s' % version,
                   '-f', 'notes=%s' % notes], timeout=120)
+    progress('役目を終えたβ版を片付けています...')
+    delete_betas_for(pr_number, config)
     return {'version': version,
             'message': ('%s として取り込みました。数分でリリースが公開され、'
                         '各メンバーの更新タブに表示されます。' % version)}
