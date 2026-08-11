@@ -51,8 +51,9 @@ DIST_EXCLUDE_DIRS = ('.github/', 'tests/', 'docs/', 'scripts/', 'manager/')
 DIST_EXCLUDE_FILES = ('.gitignore', 'pytest.ini', 'requirements-dev.txt')
 
 # version.json は配布時に生成、settings.json はマネージャーの個人設定
-# (名前・API キー)。どちらも提出対象から常に除外する
-GENERATED_FILES = ('version.json', 'settings.json')
+# (名前・API キー)、usage.json は API 利用量の個人記録。
+# いずれも提出対象から常に除外する
+GENERATED_FILES = ('version.json', 'settings.json', 'usage.json')
 
 # 作業フォルダに混ざりがちな生成物・環境フォルダ。ZIP に入っていても
 # 差分対象にしない (「フォルダ丸ごと ZIP で OK」を成立させるため)

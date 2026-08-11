@@ -34,6 +34,15 @@ def _client():
     return anthropic.Anthropic(api_key=key)
 
 
+def _record_usage(response):
+    """API 応答の利用量をローカルへ積算する (失敗しても生成は続行)."""
+    try:
+        from . import usage
+        usage.record(response.usage)
+    except Exception:
+        log.debug('利用量の記録に失敗しました', exc_info=True)
+
+
 def _generate(prompt, max_tokens=1500):
     client = _client()
     if client is None:
@@ -45,6 +54,7 @@ def _generate(prompt, max_tokens=1500):
             max_tokens=max_tokens,
             messages=[{'role': 'user', 'content': prompt}],
         )
+        _record_usage(response)
         if response.stop_reason == 'refusal':
             log.warning('Claude が生成を辞退しました')
             return None
@@ -143,6 +153,7 @@ def generate_fix(failure_log, files):
             messages=[{'role': 'user', 'content': prompt}],
         ) as stream:
             response = stream.get_final_message()
+        _record_usage(response)
         if response.stop_reason == 'refusal':
             log.warning('Claude が修正生成を辞退しました')
             return None
@@ -260,6 +271,7 @@ def generate_merge(conflict_files, policy_instruction):
             messages=[{'role': 'user', 'content': prompt}],
         ) as stream:
             response = stream.get_final_message()
+        _record_usage(response)
         if response.stop_reason == 'refusal':
             return None
         text = next((b.text for b in response.content if b.type == 'text'),
