@@ -30,6 +30,10 @@ MAX_CHANGED_LINES = 800   # これを超えるファイルは省略表示
 BINARY_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip',
                '.xlsx', '.pyc', '.exe', '.dll'}
 
+# 表示上のパスの先頭に付けるフォルダ名。メンバーの手元では
+# C:\Users\(自分)\mgtkit\... に展開されるため、その見え方に合わせる
+DISPLAY_ROOT = 'mgtkit'
+
 
 def _git_bytes(workrepo, args):
     """バイト列が要る git 出力 (ファイル内容)。失敗は None."""
@@ -162,9 +166,13 @@ _STATUS_JP = {'M': ('変更', 'tagM'), 'A': ('追加', 'tagA'),
               'D': ('削除', 'tagD'), 'R': ('移動', 'tagM')}
 
 
+def _display_path(path):
+    return '%s/%s' % (DISPLAY_ROOT, path)
+
+
 def _file_section(anchor, path, stat_html, inner):
     return ('<div class="card" id="%s"><h2>%s %s</h2>%s</div>'
-            % (anchor, html.escape(path), stat_html, inner))
+            % (anchor, html.escape(_display_path(path)), stat_html, inner))
 
 
 def build_html(meta, base_ref, head_ref, workrepo):
@@ -236,7 +244,7 @@ def build_html(meta, base_ref, head_ref, workrepo):
     sum_rows = ''.join(
         '<tr><td width="60"><span class="%s">%s</span></td>'
         '<td><a href="#%s">%s</a></td><td width="120">%s</td></tr>'
-        % (cls, jp, anchor, html.escape(path), stat)
+        % (cls, jp, anchor, html.escape(_display_path(path)), stat)
         for jp, cls, path, anchor, stat in sums)
     beta = ('・ β版 %s ' % html.escape(meta['beta'])) if meta.get('beta') \
         else ''
