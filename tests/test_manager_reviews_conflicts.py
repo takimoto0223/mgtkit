@@ -25,11 +25,25 @@ class TestApprovalSummary:
         s = reviews.approval_summary([
             {'author': {'login': 'a'}, 'state': 'APPROVED', 'body': ''},
             {'author': {'login': 'b'}, 'state': 'CHANGES_REQUESTED',
-             'body': '検定比の丸めが違います'},
+             'body': '検定比の丸めが違います',
+             'submittedAt': '2026-08-10T09:00:00Z'},
         ])
         assert s['approved'] == ['a']
         assert s['rejected'] == [
-            {'name': 'b', 'comment': '検定比の丸めが違います'}]
+            {'name': 'b', 'comment': '検定比の丸めが違います',
+             'at': '2026-08-10T09:00:00Z'}]
+
+    def test_dismissed_returns_to_neutral(self):
+        # 承認・却下の後に取り消し (DISMISSED) されたらどちらにも数えない
+        s = reviews.approval_summary([
+            {'author': {'login': 'a'}, 'state': 'APPROVED', 'body': ''},
+            {'author': {'login': 'a'}, 'state': 'DISMISSED', 'body': ''},
+            {'author': {'login': 'b'}, 'state': 'CHANGES_REQUESTED',
+             'body': 'x'},
+            {'author': {'login': 'b'}, 'state': 'DISMISSED', 'body': ''},
+        ])
+        assert s['approved'] == []
+        assert s['rejected'] == []
 
     def test_empty(self):
         s = reviews.approval_summary([])
@@ -116,6 +130,73 @@ class TestSubmissionFilter:
         monkeypatch.setattr(reviews.ghcli, 'run_gh', fake_run_gh)
         pending = reviews.list_pending({'repo': 'o/r'})
         assert [p['number'] for p in pending] == [33]
+
+
+class TestRejectedFinal:
+    """却下が必要数そろった提出の判定と確定時刻."""
+
+    def test_rejected_since(self):
+        summary = {'rejected': [
+            {'name': 'a', 'comment': '', 'at': '2026-08-11T00:00:00Z'},
+            {'name': 'b', 'comment': '', 'at': '2026-08-10T00:00:00Z'},
+        ]}
+        # 2 人目 (時刻順で後の方) の却下時刻が確定時刻
+        assert reviews.rejected_since(summary, 2) == '2026-08-11T00:00:00Z'
+
+    def test_not_final(self):
+        summary = {'rejected': [{'name': 'a', 'comment': '', 'at': 'x'}]}
+        assert reviews.rejected_since(summary, 2) is None
+
+    def test_cleanup_days_default_and_config(self):
+        assert reviews.rejected_cleanup_days({}) == 3
+        assert reviews.rejected_cleanup_days(
+            {'manager': {'rejected_cleanup_days': 7}}) == 7
+
+
+class TestCancelMyReview:
+    def _fake_gh(self, calls):
+        import json as _json
+
+        def fake(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'user']:
+                return 'yamada\n'
+            if args[0] == 'api' and '/reviews?' in args[1]:
+                return _json.dumps([
+                    {'id': 10, 'user': {'login': 'yamada'},
+                     'state': 'CHANGES_REQUESTED'},
+                    {'id': 11, 'user': {'login': 'sato'},
+                     'state': 'APPROVED'},
+                    {'id': 12, 'user': {'login': 'yamada'},
+                     'state': 'APPROVED'},
+                ])
+            return ''
+        return fake
+
+    def test_dismisses_own_latest_review(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', self._fake_gh(calls))
+        reviews.cancel_my_review(33, {'repo': 'o/r'})
+        dismiss = calls[-1]
+        assert dismiss[:3] == ['api', '-X', 'PUT']
+        # 自分 (yamada) の最新レビュー id=12 を取り消す (他人の 11 ではない)
+        assert dismiss[3] == 'repos/o/r/pulls/33/reviews/12/dismissals'
+
+    def test_nothing_to_cancel(self, monkeypatch):
+        import json as _json
+
+        def fake(args, timeout=60):
+            if args[:2] == ['api', 'user']:
+                return 'yamada\n'
+            if args[0] == 'api' and '/reviews?' in args[1]:
+                return _json.dumps([
+                    {'id': 11, 'user': {'login': 'sato'},
+                     'state': 'APPROVED'}])
+            return ''
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
+        with pytest.raises(reviews.ReviewError, match='取り消せる'):
+            reviews.cancel_my_review(33, {'repo': 'o/r'})
 
 
 class TestWithdraw:
