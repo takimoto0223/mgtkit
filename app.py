@@ -422,6 +422,90 @@ def api_file():
                      download_name=os.path.basename(path))
 
 
+# ---------------------------------------------------------------------------
+# エンドポイント: ネイティブのファイル/フォルダ選択 (自己完結運用)
+# ---------------------------------------------------------------------------
+
+_PICK_CHILD = (
+    "import sys, tkinter as tk\n"
+    "from tkinter import filedialog\n"
+    "root = tk.Tk(); root.withdraw()\n"
+    "root.attributes('-topmost', True)\n"
+    "kind, initdir, filt = sys.argv[1], sys.argv[2], sys.argv[3]\n"
+    "ft = {'mgt': [('MIDAS mgt', '*.mgt'), ('All', '*.*')],\n"
+    "      'txt': [('Text', '*.txt'), ('All', '*.*')],\n"
+    "      'all': [('All', '*.*')]}[filt]\n"
+    "if kind == 'dir':\n"
+    "    r = filedialog.askdirectory(initialdir=initdir or None,\n"
+    "                                parent=root)\n"
+    "else:\n"
+    "    r = filedialog.askopenfilename(initialdir=initdir or None,\n"
+    "                                   filetypes=ft, parent=root)\n"
+    "sys.stdout.buffer.write((r or '').encode('utf-8'))\n"
+)
+
+
+@app.route('/api/pick_path', methods=['POST'])
+def api_pick_path():
+    """Windows標準のファイル/フォルダ選択ダイアログを開き実パスを返す.
+
+    ブラウザのfile inputはセキュリティ上実パスを渡せず、一時フォルダへの
+    コピーが必要になる。本アプリはブラウザとサーバーが同一PCで動く
+    自己完結運用のため、サーバー側でネイティブダイアログを開いて
+    実パスを取得する (tkinterはFlaskスレッドと相性が悪いため子プロセス)。
+    キャンセル時は path='' を返す。
+    """
+    import subprocess
+    p = request.get_json(force=True)
+    kind = 'dir' if p.get('kind') == 'dir' else 'file'
+    filt = str(p.get('filter') or 'all')
+    if filt not in ('mgt', 'txt', 'all'):
+        filt = 'all'
+    initial = str(p.get('initial') or '').strip()
+    initdir = ''
+    if initial:
+        d = initial if os.path.isdir(initial) else os.path.dirname(initial)
+        if os.path.isdir(d):
+            initdir = d
+    try:
+        flags = 0x08000000 if os.name == 'nt' else 0  # CREATE_NO_WINDOW
+        out = subprocess.run(
+            [sys.executable, '-c', _PICK_CHILD, kind, initdir, filt],
+            capture_output=True, timeout=600, creationflags=flags)
+        path = out.stdout.decode('utf-8', errors='replace').strip()
+        return jsonify({'path': os.path.normpath(path) if path else ''})
+    except Exception as e:  # noqa: BLE001
+        return _error_response(e)
+
+
+@app.route('/api/scan_case_dir', methods=['POST'])
+def api_scan_case_dir():
+    """事例フォルダを走査し mgt・応力ファイル群の実パスを返す.
+
+    同名候補が複数ある場合は更新日時が最新のものを採用する。
+    """
+    import glob as _glob
+    p = request.get_json(force=True)
+    d = str(p.get('dir') or '').strip()
+    if not os.path.isdir(d):
+        return jsonify({'error': 'フォルダが見つかりません: %s' % d}), 400
+
+    def newest(pat):
+        hits = [h for h in _glob.glob(os.path.join(d, pat))
+                if os.path.isfile(h)]
+        return max(hits, key=os.path.getmtime) if hits else ''
+
+    return jsonify({
+        'mgt_path': newest('*.mgt'),
+        'beam_stress_path': newest('*beam_stress*.txt'),
+        'truss_stress_path': newest('*truss_stress*.txt'),
+        'plate_stress_path': newest('*plate_stress*.txt'),
+        'wall_stress_path': newest('*wall_stress*.txt'),
+        'reaction_path': newest('*reaction*.txt'),
+        'deformation_path': newest('*deformation*.txt'),
+    })
+
+
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
     f = request.files.get('file')
