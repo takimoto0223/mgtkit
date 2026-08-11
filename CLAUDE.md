@@ -1,4 +1,4 @@
-# mgtkit 開発メモ (Claude / 開発者向け)
+# アプリマネージャー 開発メモ (Claude / 開発者向け)
 
 ## 設計判断の記録ルール
 
@@ -15,9 +15,6 @@
 
 ## リポジトリの約束事
 
-- ユーザー向け文言の用語は「Claude API」「Claude Console」(現行の正式名称)。
-  `anthropic` (SDK 名)・`ANTHROPIC_API_KEY`・settings.json の
-  `anthropic_api_key` は技術的な固有名なので変更しない
 - テスト: `python -m pytest` 全緑を確認してからコミットする
 - CI の required check は `test` と `safety` (job 名を変えるときは
   ブランチ保護側も更新)
