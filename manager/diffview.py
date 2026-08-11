@@ -188,12 +188,17 @@ td .fnote { margin: 2px 0 2px; }
 .modal h2 { font-size: 16px; margin: 0 0 10px; color: #b45309; }
 .mlead { font-size: 13px; margin: 0 0 12px; }
 .rcards { display: flex; gap: 12px; }
-.rcard { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0;
-         border-radius: 8px; padding: 10px 12px; }
-.rcard svg { width: 100%; height: 84px; display: block; }
-.rcard h3 { font-size: 12.5px; margin: 6px 0 4px; color: #b45309; }
-.rcard p { font-size: 11.5px; color: #475569; margin: 0;
-           line-height: 1.55; }
+.rcard { flex: 1; border: 1px solid #e2e8f0; border-radius: 8px;
+         padding: 8px 12px; background: #fff; }
+.rcard.bad { border-color: #fecaca; background: #fff7f7; }
+.rcard.warn { border-color: #fde68a; background: #fffcf0; }
+.rcard .fig { text-align: center; margin: 6px 0 2px; }
+.rcard svg { width: 100%; height: auto; max-height: 96px; }
+.rcard h3 { font-size: 12.5px; margin: 0 0 2px; }
+.rcard.bad h3 { color: #b91c1c; }
+.rcard.warn h3 { color: #b45309; }
+.rcard p { font-size: 11.5px; color: #334155; margin: 4px 0 0;
+           line-height: 1.6; }
 .mfoot { font-size: 12px; color: #475569; margin: 12px 0 14px; }
 .mbtns { display: flex; justify-content: flex-end; gap: 10px; }
 .mcancel { font-size: 13px; color: #475569; text-decoration: none;
@@ -253,61 +258,80 @@ def _file_section(anchor, path, stat_html, inner, note=None):
                note_html, inner))
 
 
-# 資料「バージョン管理と同時開発のしくみ」4.2 の 3 リスクカード
-# (タイトル・説明・ミニイラスト SVG)。モーダルで表示する
+# 資料「バージョン管理と同時開発のしくみ」4.2 の 3 リスクカード。
+# イラスト (SVG)・文面・配色は資料の正本と完全に同一にそろえる
+# (cls, タイトル, 本文 HTML, SVG)
 _RISK_CARDS = [
-    ('① 基点の消滅',
-     '親の提出が却下・取り下げで消えると、その上に作った変更は'
-     '土台を失い「基点となる版が見つかりません」で提出不能になる。',
-     '<svg viewBox="0 0 150 84">'
-     '<line x1="10" y1="66" x2="140" y2="66" stroke="#94a3b8" '
-     'stroke-width="3"/>'
-     '<text x="14" y="80" font-size="9" fill="#64748b">正式版</text>'
-     '<line x1="45" y1="66" x2="62" y2="38" stroke="#fca5a5" '
-     'stroke-width="2" stroke-dasharray="4 3"/>'
-     '<circle cx="68" cy="32" r="11" fill="#fee2e2" stroke="#b91c1c" '
-     'stroke-width="2"/>'
-     '<line x1="61" y1="25" x2="75" y2="39" stroke="#b91c1c" '
+    ('bad', '① 基点の消滅',
+     '親 PR が却下確定・取り下げで消えると枝ごと削除され、基点 SHA が'
+     '辿れなくなる。A-1-1 は「基点となる版が履歴に見つかりません」で'
+     '<b>提出不能</b>。安定版から移植し直しになる',
+     '<svg width="180" height="74" viewBox="0 0 180 74" '
+     'font-family="IPAPGothic, sans-serif">'
+     '<line x1="8" y1="52" x2="80" y2="52" stroke="#1e3a5f" '
      'stroke-width="2.5"/>'
-     '<line x1="75" y1="25" x2="61" y2="39" stroke="#b91c1c" '
+     '<path d="M 40 50 C 60 32, 78 28, 96 28" stroke="#d97706" '
+     'stroke-width="2" fill="none" stroke-dasharray="4 3" opacity="0.6"/>'
+     '<circle cx="100" cy="28" r="6" fill="#d97706" opacity="0.45"/>'
+     '<line x1="92" y1="20" x2="108" y2="36" stroke="#dc2626" '
      'stroke-width="2.5"/>'
-     '<text x="52" y="16" font-size="9" fill="#b91c1c">親: 削除</text>'
-     '<circle cx="118" cy="24" r="11" fill="#fff" stroke="#1e3a5f" '
-     'stroke-width="2"/>'
-     '<text x="114" y="28" font-size="11" fill="#1e3a5f">?</text>'
-     '<text x="100" y="50" font-size="9" fill="#475569">宙に浮く</text>'
+     '<line x1="108" y1="20" x2="92" y2="36" stroke="#dc2626" '
+     'stroke-width="2.5"/>'
+     '<text x="100" y="12" font-size="7.5" text-anchor="middle" '
+     'fill="#dc2626">A-1 が削除</text>'
+     '<path d="M 106 26 C 126 22, 138 26, 148 30" stroke="#94a3b8" '
+     'stroke-width="1.5" fill="none" stroke-dasharray="3 3"/>'
+     '<circle cx="155" cy="32" r="6" fill="#059669"/>'
+     '<text x="155" y="48" font-size="7.5" text-anchor="middle" '
+     'fill="#475569">A-1-1</text>'
+     '<text x="95" y="70" font-size="7.4" text-anchor="middle" '
+     'fill="#64748b">土台を失って宙に浮き、提出不能に</text>'
      '</svg>'),
-    ('② 親リリース後の縮退',
-     '親がリリースされると正式版には「同じ内容だが別の記録」が入る。'
-     'その上の変更の合流はずれやすく、衝突化しやすい。',
-     '<svg viewBox="0 0 150 84">'
-     '<line x1="10" y1="66" x2="140" y2="66" stroke="#94a3b8" '
-     'stroke-width="3"/>'
-     '<circle cx="55" cy="66" r="9" fill="#bbf7d0" stroke="#15803d" '
-     'stroke-width="2"/>'
-     '<text x="40" y="82" font-size="9" fill="#15803d">親&#39; (別記録)</text>'
-     '<circle cx="60" cy="30" r="9" fill="#f1f5f9" stroke="#94a3b8" '
-     'stroke-width="2" stroke-dasharray="3 2"/>'
-     '<text x="42" y="17" font-size="9" fill="#64748b">親 (旧)</text>'
-     '<circle cx="110" cy="24" r="11" fill="#fef3c7" stroke="#b45309" '
-     'stroke-width="2"/>'
-     '<text x="106" y="29" font-size="12" fill="#b45309">!</text>'
-     '<text x="92" y="50" font-size="9" fill="#b45309">衝突しやすい</text>'
+    ('warn', '② 親リリース後の縮退',
+     '親が squash マージされると main には「同内容だが別 SHA」が入る。'
+     '子の合流はたいてい自動解決するが、autofix 等で親の最終形が違うと'
+     '<b>衝突化しやすい</b> (→ 統合待ちフローで解消)',
+     '<svg width="180" height="74" viewBox="0 0 180 74" '
+     'font-family="IPAPGothic, sans-serif">'
+     '<line x1="8" y1="52" x2="172" y2="52" stroke="#1e3a5f" '
+     'stroke-width="2.5"/>'
+     '<circle cx="120" cy="52" r="6" fill="#0d9488"/>'
+     '<text x="118" y="68" font-size="7.2" text-anchor="middle" '
+     'fill="#475569">A-1&#8242; (squash 済・別 SHA)</text>'
+     '<path d="M 26 50 C 44 30, 60 24, 76 24" stroke="#d97706" '
+     'stroke-width="2" fill="none"/>'
+     '<circle cx="78" cy="24" r="5" fill="#d97706"/>'
+     '<text x="46" y="14" font-size="7.4" text-anchor="middle" '
+     'fill="#92400e">A-1 (旧)</text>'
+     '<circle cx="112" cy="20" r="5" fill="#059669"/>'
+     '<path d="M 83 23 C 93 21, 100 20, 107 20" stroke="#059669" '
+     'stroke-width="2" fill="none"/>'
+     '<text x="130" y="14" font-size="7.4" text-anchor="middle" '
+     'fill="#14532d">A-1-1</text>'
+     '<path d="M 117 24 C 132 30, 142 38, 148 46" stroke="#dc2626" '
+     'stroke-width="1.6" fill="none" stroke-dasharray="4 3"/>'
+     '<text x="152" y="36" font-size="8.5" fill="#dc2626" '
+     'font-weight="bold">!</text>'
      '</svg>'),
-    ('③ レビュー責任の曖昧化',
-     '親が未承認のまま、その上の変更だけ承認すると「親の内容込みの'
-     '承認か」が不明瞭になる。親の決着を待つのが原則。',
-     '<svg viewBox="0 0 150 84">'
-     '<circle cx="45" cy="46" r="12" fill="#f1f5f9" stroke="#64748b" '
-     'stroke-width="2"/>'
-     '<text x="41" y="51" font-size="12" fill="#64748b">?</text>'
-     '<text x="24" y="74" font-size="9" fill="#64748b">親: 未承認</text>'
-     '<line x1="58" y1="40" x2="92" y2="30" stroke="#94a3b8" '
-     'stroke-width="2"/>'
-     '<circle cx="105" cy="27" r="12" fill="#dcfce7" stroke="#15803d" '
-     'stroke-width="2"/>'
-     '<text x="99" y="32" font-size="11" fill="#15803d">&#10003;</text>'
-     '<text x="86" y="58" font-size="9" fill="#475569">承認した…?</text>'
+    ('warn', '③ レビュー責任の曖昧化',
+     '親が未承認のまま子を承認すると「親の内容込みの承認か」が不明瞭に。'
+     '<b>親の決着 (リリース or 却下) を待ってから子を審査</b>するのが原則',
+     '<svg width="180" height="74" viewBox="0 0 180 74" '
+     'font-family="IPAPGothic, sans-serif">'
+     '<rect x="22" y="36" width="120" height="22" rx="4" fill="#fffbeb" '
+     'stroke="#b45309" stroke-width="1.2"/>'
+     '<text x="82" y="50" font-size="7.6" text-anchor="middle" '
+     'fill="#92400e">A-1 (親) &#8212; まだ未承認</text>'
+     '<rect x="22" y="8" width="120" height="22" rx="4" fill="#f0fdf4" '
+     'stroke="#059669" stroke-width="1.2"/>'
+     '<text x="82" y="22" font-size="7.6" text-anchor="middle" '
+     'fill="#14532d">A-1-1 (子) &#8212; 承認した</text>'
+     '<path d="M 150 12 l5 6 l9 -10" stroke="#059669" stroke-width="2.5" '
+     'fill="none"/>'
+     '<text x="156" y="52" font-size="12" text-anchor="middle" '
+     'fill="#dc2626" font-weight="bold">?</text>'
+     '<text x="88" y="70" font-size="7.4" text-anchor="middle" '
+     'fill="#64748b">親の分まで承認したことになる&#8230;?</text>'
      '</svg>'),
 ]
 
@@ -388,9 +412,9 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, head_ref):
     btn = ('<a class="dl" id="dlbtn" href="#">'
            '⬇ 更新データをダウンロード</a>')
     cards = ''.join(
-        '<div class="rcard">%s<h3>%s</h3><p>%s</p></div>'
-        % (svg, html.escape(title), html.escape(text))
-        for title, text, svg in _RISK_CARDS)
+        '<div class="rcard %s"><h3>%s</h3><div class="fig">%s</div>'
+        '<p>%s</p></div>' % (cls, title, svg, text)
+        for cls, title, text, svg in _RISK_CARDS)
     modal = (
         '<div class="ovl" id="dlovl"><div class="modal">'
         '<h2>ダウンロードの前に【注意】</h2>'
