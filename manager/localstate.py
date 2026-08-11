@@ -49,6 +49,15 @@ def hide_pr(number, config=None):
     _save(data, config)
 
 
+def unhide_pr(number, config=None):
+    """非表示を解除して一覧に戻す."""
+    nums = hidden_prs(config)
+    nums.discard(int(number))
+    data = _load(config)
+    data['hidden_prs'] = sorted(nums)
+    _save(data, config)
+
+
 def prune_hidden(open_numbers, config=None):
     """クローズ済みの提出の非表示記録を掃除する."""
     nums = hidden_prs(config)

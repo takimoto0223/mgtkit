@@ -15,6 +15,15 @@ class TestHiddenPrs:
         localstate.hide_pr(33, cfg)  # 重複はまとまる
         assert localstate.hidden_prs(cfg) == {31, 33}
 
+    def test_unhide_restores(self, tmp_path):
+        cfg = _config(tmp_path)
+        localstate.hide_pr(31, cfg)
+        localstate.hide_pr(33, cfg)
+        localstate.unhide_pr(31, cfg)
+        assert localstate.hidden_prs(cfg) == {33}
+        localstate.unhide_pr(99, cfg)  # 記録がない番号は無視
+        assert localstate.hidden_prs(cfg) == {33}
+
     def test_prune_removes_closed(self, tmp_path):
         cfg = _config(tmp_path)
         localstate.hide_pr(31, cfg)

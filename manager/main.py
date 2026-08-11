@@ -681,12 +681,20 @@ def main(page: ft.Page):
         return handler
 
     def on_hide_pr(pr):
-        """却下確定した提出を自分の画面からだけ非表示にする."""
+        """却下確定した提出を一覧の下に畳む (自分の画面のみ)."""
         def handler(_):
             localstate.hide_pr(pr['number'], config)
-            t5_status.value = ('#%d を非表示にしました (自分の画面のみ。'
-                               '他のメンバーには表示されたままです)。'
-                               % pr['number'])
+            t5_status.value = ('#%d を一覧の下に畳みました (自分の画面のみ。'
+                               '「一覧に戻す」で戻せます)。' % pr['number'])
+            page.update()
+            on_refresh_reviews(None)
+        return handler
+
+    def on_unhide_pr(pr):
+        """畳んだ提出を一覧に戻す."""
+        def handler(_):
+            localstate.unhide_pr(pr['number'], config)
+            t5_status.value = '#%d を一覧に戻しました。' % pr['number']
             page.update()
             on_refresh_reviews(None)
         return handler
@@ -967,9 +975,9 @@ def main(page: ft.Page):
             # (クローズ済みの記録は掃除する)
             localstate.prune_hidden([p['number'] for p in pending], config)
             hidden = localstate.hidden_prs(config)
-            visible = [p for p in pending
-                       if not (p.get('rejected_final')
-                               and p['number'] in hidden)]
+            folded = [p for p in pending
+                      if p.get('rejected_final') and p['number'] in hidden]
+            visible = [p for p in pending if p not in folded]
             set_badge(review_badge, len(visible))
             t5_list.controls.clear()
             if not visible:
@@ -981,6 +989,21 @@ def main(page: ft.Page):
                 if beta is not None:
                     used.add(beta['tag'])
                 t5_list.controls.append(_review_row(pr, me, beta))
+            if folded:
+                # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
+                t5_list.controls.append(ft.Text(
+                    '非表示にした提出 (却下確定)', size=12,
+                    color='#9ca3af'))
+                for pr in folded:
+                    used_beta = _beta_for(pr['number'], betas)
+                    if used_beta is not None:
+                        used.add(used_beta['tag'])
+                    t5_list.controls.append(ft.Row([
+                        ft.Text('#%d %s' % (pr['number'], pr['title']),
+                                size=12, color='#9ca3af', expand=True),
+                        ft.TextButton('一覧に戻す',
+                                      on_click=on_unhide_pr(pr)),
+                    ], spacing=8))
             others = [b for b in betas if b['tag'] not in used]
             t5_beta_extra.controls.clear()
             if others:
