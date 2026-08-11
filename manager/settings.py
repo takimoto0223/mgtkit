@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""利用者ごとのローカル設定 (名前・Anthropic API キー).
+"""利用者ごとのローカル設定 (名前・Claude API キー).
 
 - 保存先: <install_root>/settings.json (各自の PC のみ。リポジトリや
   GitHub には一切送らない)
@@ -40,7 +40,7 @@ def save_settings(name, api_key, config=None):
     if not name:
         raise ValueError('名前を入力してください。')
     if not api_key:
-        raise ValueError('Anthropic API キーを入力してください。')
+        raise ValueError('Claude API キーを入力してください。')
     if not api_key.startswith('sk-ant-'):
         raise ValueError('API キーの形式が正しくありません '
                          '(sk-ant- で始まる文字列を入力してください)。')

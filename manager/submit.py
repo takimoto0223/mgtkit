@@ -62,7 +62,7 @@ JUNK_DIRS = {'.git', '__pycache__', '.pytest_cache', 'mgtkit_out',
 
 # 明確な認証情報は即ブロック (誤提出による流出を防ぐ)
 _SECRET_BLOCKER_PATTERNS = [
-    ('Anthropic API キー', re.compile(r'sk-ant-[A-Za-z0-9_\-]{16,}')),
+    ('Claude API キー', re.compile(r'sk-ant-[A-Za-z0-9_\-]{16,}')),
     ('AWS アクセスキー', re.compile(r'AKIA[0-9A-Z]{16}')),
     ('GitHub トークン',
      re.compile(r'(?:ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})')),
