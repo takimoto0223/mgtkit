@@ -5,6 +5,7 @@
 Git / GitHub の用語はユーザーに見せず、平易な日本語のみ表示する。
 """
 import asyncio
+import datetime
 import logging
 import os
 import threading
@@ -14,7 +15,7 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
-               paths, reviews, settings, submit, updater)
+               localstate, paths, reviews, settings, submit, updater)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
@@ -664,6 +665,40 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
+    def on_cancel_review(pr):
+        """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
+        def handler(_):
+            def work():
+                try:
+                    reviews.cancel_my_review(pr['number'], config)
+                    t5_status.value = ('#%d への承認・却下を取り消しました。'
+                                       % pr['number'])
+                except (reviews.ReviewError, ghcli.GhError) as e:
+                    t5_status.value = str(e)
+                page.update()
+                on_refresh_reviews(None)
+            run_bg(work)
+        return handler
+
+    def on_hide_pr(pr):
+        """却下確定した提出を一覧の下に畳む (自分の画面のみ)."""
+        def handler(_):
+            localstate.hide_pr(pr['number'], config)
+            t5_status.value = ('#%d を一覧の下に畳みました (自分の画面のみ。'
+                               '「一覧に戻す」で戻せます)。' % pr['number'])
+            page.update()
+            on_refresh_reviews(None)
+        return handler
+
+    def on_unhide_pr(pr):
+        """畳んだ提出を一覧に戻す."""
+        def handler(_):
+            localstate.unhide_pr(pr['number'], config)
+            t5_status.value = '#%d を一覧に戻しました。' % pr['number']
+            page.update()
+            on_refresh_reviews(None)
+        return handler
+
     def on_reject(pr):
         def handler(_):
             reason = ft.TextField(label='却下の理由 (必須。提出者に伝わります)',
@@ -796,24 +831,45 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
+    def _days_until_cleanup(pr):
+        """却下確定から自動削除までの残り日数 (0 = まもなく)。不明は None."""
+        try:
+            t = datetime.datetime.strptime(
+                (pr.get('rejected_since') or '')[:19], '%Y-%m-%dT%H:%M:%S')
+        except ValueError:
+            return None
+        passed = (datetime.datetime.utcnow() - t).days
+        return max(0, reviews.rejected_cleanup_days(config) - max(0, passed))
+
     def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
-        badges = [ft.Container(
-            bgcolor='#fef08a', border_radius=4,
-            padding=ft.Padding.symmetric(vertical=2, horizontal=8),
-            content=ft.Text('承認 %d/%d' % (len(pr['approved']), n_req),
-                            size=12, weight=ft.FontWeight.BOLD,
-                            color='#713f12'))]
-        if pr['rejected']:
-            badges.append(ft.Container(
-                bgcolor='#fecaca', border_radius=4,
+        final = pr.get('rejected_final')
+        rejected_names = [r['name'] for r in pr['rejected']]
+
+        def _badge(text, bg, fg):
+            return ft.Container(
+                bgcolor=bg, border_radius=4,
                 padding=ft.Padding.symmetric(vertical=2, horizontal=8),
-                content=ft.Text('却下あり', size=12, color='#7f1d1d')))
-        if pr['conflicting']:
-            badges.append(ft.Container(
-                bgcolor='#fde68a', border_radius=4,
-                padding=ft.Padding.symmetric(vertical=2, horizontal=8),
-                content=ft.Text('最新版と衝突', size=12, color='#78350f')))
+                content=ft.Text(text, size=12, weight=ft.FontWeight.BOLD,
+                                color=fg))
+
+        badges = []
+        if final:
+            badges.append(_badge('却下 %d/%d' % (len(rejected_names), n_req),
+                                 '#dc2626', '#ffffff'))
+            left = _days_until_cleanup(pr)
+            if left is not None:
+                badges.append(ft.Text(
+                    'あと %d 日で自動削除' % left if left
+                    else 'まもなく自動削除', size=12,
+                    weight=ft.FontWeight.BOLD, color='#b91c1c'))
+        else:
+            badges.append(_badge('承認 %d/%d' % (len(pr['approved']), n_req),
+                                 '#fef08a', '#713f12'))
+            if pr['rejected']:
+                badges.append(_badge('却下あり', '#fecaca', '#7f1d1d'))
+            if pr['conflicting']:
+                badges.append(_badge('最新版と衝突', '#fde68a', '#78350f'))
         checks_label, checks_color = {
             'success': ('検証OK', '#15803d'),
             'failure': ('検証で問題あり', '#b91c1c'),
@@ -829,7 +885,7 @@ def main(page: ft.Page):
                              ft.Text('提出者: %s' % pr['author'], size=12,
                                      color='#555555')], spacing=8),
         ]
-        if pr['approved']:
+        if pr['approved'] and not final:
             lines.append(ft.Text('承認済み: %s' % '、'.join(pr['approved']),
                                  size=12, color='#15803d'))
         for rej in pr['rejected']:
@@ -839,7 +895,7 @@ def main(page: ft.Page):
                 size=12, color='#b91c1c'))
 
         buttons = []
-        if beta is not None:
+        if beta is not None and not final:
             buttons.append(ft.FilledButton(
                 'β版 %s を試す' % beta['tag'], icon=ft.Icons.SCIENCE,
                 on_click=try_beta(beta), bgcolor=AMBER, color='#ffffff'))
@@ -850,7 +906,19 @@ def main(page: ft.Page):
             on_click=on_feedback_dialog(pr, beta, me)))
         buttons.append(ft.OutlinedButton('差分',
                                          on_click=on_show_diff(pr, beta)))
-        if pr['author'] == me:
+        if final:
+            # 却下確定: 却下した本人は取り消し可、提出者は取り下げ可。
+            # 全員が自分の画面から非表示にできる
+            if me in rejected_names:
+                buttons.append(ft.OutlinedButton(
+                    '却下を取り消す', on_click=on_cancel_review(pr)))
+            if pr['author'] == me:
+                buttons.append(ft.OutlinedButton(
+                    '取り下げ', on_click=on_withdraw(pr)))
+            buttons.append(ft.OutlinedButton(
+                '非表示', icon=ft.Icons.VISIBILITY_OFF,
+                on_click=on_hide_pr(pr)))
+        elif pr['author'] == me:
             if pr['conflicting']:
                 buttons.append(ft.FilledButton(
                     '最新版と統合', on_click=on_resolve_conflict(pr),
@@ -858,19 +926,28 @@ def main(page: ft.Page):
             buttons.append(ft.OutlinedButton('取り下げ',
                                              on_click=on_withdraw(pr)))
         else:
-            already = me in pr['approved']
-            buttons.append(ft.FilledButton(
-                '承認済み' if already else '承認',
-                disabled=already, on_click=on_approve(pr),
-                bgcolor='#15803d', color='#ffffff'))
-            buttons.append(ft.OutlinedButton('却下',
-                                             on_click=on_reject(pr)))
-        if reviews.can_release(pr, config, me):
+            # 2 回目のクリックで自分の承認・却下を取り消せる (トグル)
+            if me in pr['approved']:
+                buttons.append(ft.FilledButton(
+                    '承認を取り消す', on_click=on_cancel_review(pr),
+                    bgcolor='#15803d', color='#ffffff'))
+            else:
+                buttons.append(ft.FilledButton(
+                    '承認', on_click=on_approve(pr),
+                    bgcolor='#15803d', color='#ffffff'))
+            if me in rejected_names:
+                buttons.append(ft.OutlinedButton(
+                    '却下を取り消す', on_click=on_cancel_review(pr)))
+            else:
+                buttons.append(ft.OutlinedButton('却下',
+                                                 on_click=on_reject(pr)))
+        if not final and reviews.can_release(pr, config, me):
             buttons.append(ft.FilledButton(
                 'リリース', icon=ft.Icons.ROCKET_LAUNCH,
                 on_click=on_release(pr), bgcolor=NAVY, color='#ffffff'))
         lines.append(ft.Row(buttons, spacing=8))
         return ft.Container(bgcolor='#f5f7fa', border_radius=6, padding=12,
+                            opacity=0.55 if final else 1.0,
                             content=ft.Column(lines, spacing=6))
 
     def _beta_for(pr_number, betas):
@@ -894,17 +971,39 @@ def main(page: ft.Page):
                 page.update()
                 return
             betas = ghcli.prereleases(releases)
-            set_badge(review_badge, len(pending))
+            # 「非表示」にした却下確定の提出は自分の画面から除く
+            # (クローズ済みの記録は掃除する)
+            localstate.prune_hidden([p['number'] for p in pending], config)
+            hidden = localstate.hidden_prs(config)
+            folded = [p for p in pending
+                      if p.get('rejected_final') and p['number'] in hidden]
+            visible = [p for p in pending if p not in folded]
+            set_badge(review_badge, len(visible))
             t5_list.controls.clear()
-            if not pending:
+            if not visible:
                 t5_list.controls.append(
                     ft.Text('確認・承認待ちの提出はありません', size=14))
             used = set()
-            for pr in pending:
+            for pr in visible:
                 beta = _beta_for(pr['number'], betas)
                 if beta is not None:
                     used.add(beta['tag'])
                 t5_list.controls.append(_review_row(pr, me, beta))
+            if folded:
+                # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
+                t5_list.controls.append(ft.Text(
+                    '非表示にした提出 (却下確定)', size=12,
+                    color='#9ca3af'))
+                for pr in folded:
+                    used_beta = _beta_for(pr['number'], betas)
+                    if used_beta is not None:
+                        used.add(used_beta['tag'])
+                    t5_list.controls.append(ft.Row([
+                        ft.Text('#%d %s' % (pr['number'], pr['title']),
+                                size=12, color='#9ca3af', expand=True),
+                        ft.TextButton('一覧に戻す',
+                                      on_click=on_unhide_pr(pr)),
+                    ], spacing=8))
             others = [b for b in betas if b['tag'] not in used]
             t5_beta_extra.controls.clear()
             if others:

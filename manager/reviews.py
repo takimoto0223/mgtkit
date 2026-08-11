@@ -34,6 +34,20 @@ def required_approvals(config=None):
                .get('required_approvals', 2))
 
 
+def rejected_cleanup_days(config=None):
+    """却下確定からβ版・提出を自動で片付けるまでの日数."""
+    return int(((config or {}).get('manager') or {})
+               .get('rejected_cleanup_days', 3))
+
+
+def rejected_since(summary, n_req):
+    """却下が必要数に達した時刻 (n 人目の却下の時刻)。未達なら None."""
+    if len(summary['rejected']) < n_req:
+        return None
+    times = sorted(r.get('at') or '' for r in summary['rejected'])
+    return times[n_req - 1] or None
+
+
 def admins(config=None):
     """リリース操作を許可するユーザーの一覧。空 = 制限なし (全員可)."""
     lst = ((config or {}).get('manager') or {}).get('admins') or []
@@ -80,10 +94,12 @@ def approval_summary(reviews, members=None):
         name = ((r.get('author') or {}).get('login')) or '?'
         if members is not None and name not in members:
             continue  # メンバー外 (public リポジトリの第三者等) は数えない
-        latest[name] = {'state': state, 'comment': r.get('body') or ''}
+        latest[name] = {'state': state, 'comment': r.get('body') or '',
+                        'at': r.get('submittedAt')
+                        or r.get('submitted_at') or ''}
     approved = sorted(n for n, v in latest.items()
                       if v['state'] == 'APPROVED')
-    rejected = [{'name': n, 'comment': v['comment']}
+    rejected = [{'name': n, 'comment': v['comment'], 'at': v['at']}
                 for n, v in sorted(latest.items())
                 if v['state'] == 'CHANGES_REQUESTED']
     return {'approved': approved, 'rejected': rejected}
@@ -136,12 +152,14 @@ def list_pending(config=None):
     except ValueError:
         raise ReviewError('承認待ち一覧を取得できませんでした。')
     members = collaborators(config)
+    n_req = required_approvals(config)
     result = []
     for pr in prs:
         if not _is_submission(pr):
             continue
         detail = _pr_detail(pr['number'], config)
         summary = approval_summary(detail.get('reviews'), members)
+        since = rejected_since(summary, n_req)
         result.append({
             'number': pr['number'],
             'title': pr['title'],
@@ -150,6 +168,8 @@ def list_pending(config=None):
             'author': (pr.get('author') or {}).get('login', '?'),
             'approved': summary['approved'],
             'rejected': summary['rejected'],
+            'rejected_final': len(summary['rejected']) >= n_req,
+            'rejected_since': since,
             'feedback': parse_feedback(detail.get('comments')),
             'checks': _summarize_checks(detail.get('statusCheckRollup')
                                         or []),
@@ -203,6 +223,35 @@ def request_changes(pr_number, comment, config=None):
     ghcli.run_gh(['pr', 'review', str(pr_number), '--repo',
                   paths.repo_slug(config), '--request-changes',
                   '--body', comment])
+
+
+def cancel_my_review(pr_number, config=None):
+    """自分の承認・却下を取り消してニュートラルに戻す.
+
+    GitHub のレビュー却下 (dismiss) を自分の最新レビューに対して行う。
+    push 権限を持つ collaborator であれば実行できる。
+    """
+    slug = paths.repo_slug(config)
+    me = current_user()
+    out = ghcli.run_gh(['api', 'repos/%s/pulls/%d/reviews?per_page=100'
+                        % (slug, int(pr_number))])
+    try:
+        revs = json.loads(out)
+    except ValueError:
+        raise ReviewError('レビュー情報を取得できませんでした。')
+    target = None
+    for r in revs:
+        if ((r.get('user') or {}).get('login')) != me:
+            continue
+        if (r.get('state') or '').upper() in ('APPROVED',
+                                              'CHANGES_REQUESTED'):
+            target = r  # 自分の最新の承認/却下
+    if target is None:
+        raise ReviewError('取り消せる承認・却下がありません。')
+    ghcli.run_gh(['api', '-X', 'PUT',
+                  'repos/%s/pulls/%d/reviews/%s/dismissals'
+                  % (slug, int(pr_number), target['id']),
+                  '-f', 'message=本人が取り消しました'])
 
 
 def withdraw(pr_number, reason='', config=None):

@@ -1,0 +1,94 @@
+# 却下が確定した提出の自動片付け
+#
+# 却下 (CHANGES_REQUESTED) が必要承認数 (config.json の required_approvals)
+# に達したまま rejected_cleanup_days 日が過ぎた提出を、毎日 1 回まとめて
+# クローズし、対応するβ版 (prerelease) も削除する。
+# マネージャーの「あと n 日で自動削除」表示と対になる仕組み。
+#
+# - 却下のカウントは push 権限を持つ collaborator の最新状態のみ
+#   (マネージャーの承認集計と同じルール)
+# - 期限前に却下が取り消されて必要数を下回れば、何もしない
+name: reject-cleanup
+
+on:
+  schedule:
+    - cron: '0 19 * * *'   # 毎日 19:00 UTC = 日本時間 翌 4:00
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # ブランチ削除・β版 (release/tag) 削除
+      pull-requests: write   # PR のコメント・クローズ
+    steps:
+      - uses: actions/checkout@v4
+      - name: 却下確定のまま規定日数を過ぎた提出をクローズ
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import datetime
+          import json
+          import os
+          import re
+          import subprocess
+
+          def gh(*args):
+              return subprocess.run(['gh'] + list(args),
+                                    capture_output=True, text=True,
+                                    check=True).stdout
+
+          repo = os.environ['REPO']
+          cfg = json.load(open('config.json', encoding='utf-8'))
+          required = int(cfg.get('branch_protection', {})
+                         .get('required_approvals', 2))
+          days = int(cfg.get('manager', {})
+                     .get('rejected_cleanup_days', 3))
+
+          collabs = set(json.loads(gh(
+              'api', 'repos/%s/collaborators?per_page=100' % repo,
+              '--jq', '[.[] | select(.permissions.push) | .login]')))
+          prs = json.loads(gh('pr', 'list', '--repo', repo,
+                              '--state', 'open',
+                              '--json', 'number,headRefName'))
+          now = datetime.datetime.now(datetime.timezone.utc)
+          for pr in prs:
+              if not pr['headRefName'].startswith('feature/'):
+                  continue  # マネージャー経由の提出のみ対象
+              n = pr['number']
+              revs = json.loads(gh(
+                  'api', 'repos/%s/pulls/%d/reviews?per_page=100'
+                  % (repo, n)))
+              latest = {}
+              for r in revs:
+                  user = (r.get('user') or {}).get('login')
+                  state = (r.get('state') or '').upper()
+                  if user in collabs and state in (
+                          'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'):
+                      latest[user] = (state, r.get('submitted_at') or '')
+              rejects = sorted(t for s, t in latest.values()
+                               if s == 'CHANGES_REQUESTED')
+              if len(rejects) < required:
+                  continue
+              t = datetime.datetime.fromisoformat(
+                  rejects[required - 1].replace('Z', '+00:00'))
+              if (now - t).days < days:
+                  print('#%d: 却下確定だが %d 日未経過' % (n, days))
+                  continue
+              print('#%d を片付けます (却下確定 %s)' % (n, t))
+              gh('pr', 'comment', str(n), '--repo', repo, '--body',
+                 '却下が確定してから %d 日が経過したため、この提出を'
+                 '自動で片付けました。内容を見直して再提出できます。'
+                 % days)
+              gh('pr', 'close', str(n), '--repo', repo, '--delete-branch')
+              rels = json.loads(gh(
+                  'api', 'repos/%s/releases?per_page=100' % repo))
+              for rel in rels:
+                  if rel.get('prerelease') and re.search(
+                          r'#%d\b' % n, rel.get('body') or ''):
+                      gh('release', 'delete', rel['tag_name'],
+                         '--repo', repo, '--yes', '--cleanup-tag')
+                      print('β版 %s を削除' % rel['tag_name'])
+          EOF
