@@ -5,7 +5,7 @@
   提出対象外で、GitHub には送らない)
 - claude_helper が API 応答を受け取るたびに record() で日別に積算する
 - 料金は config.json manager.api_pricing の単価 ($/MTok) から計算した
-  「目安」。正確な請求額は Anthropic Console で確認する
+  「目安」。正確な請求額は Claude Console で確認する
 - 単価は記録時点のもので日別に確定額 (usd) として保存するため、
   後から単価設定を変えても過去の記録は変わらない
 """

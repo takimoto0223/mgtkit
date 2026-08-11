@@ -84,7 +84,7 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
   拡張子ホワイトリスト (config `manager.allowed_extensions`)、
   サイズ/件数上限、簡易秘密情報スキャン (正規表現) は警告→確認の上続行可。
   gitleaks 等の本格スキャンは Phase 4 の CI 側で実施。
-- コミットメッセージ (未入力時) と PR 本文は Anthropic API
+- コミットメッセージ (未入力時) と PR 本文は Claude API
   (`manager.claude_model`、既定 claude-opus-5、キーは環境変数
   ANTHROPIC_API_KEY) で自動生成。キー未設定・失敗時は定型文へ
   フォールバックし、提出自体は Claude なしでも完結する。
@@ -95,7 +95,7 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
 
 - **API キーの運用 (仕様からの変更点)**: 管理者キーを repo Secrets に置いて
   `claude-code-action` を使う方式はやめ、**提出者本人の API キー**を使う。
-  - マネージャー初回起動時に「名前 + Anthropic API キー」の登録を必須化。
+  - マネージャー初回起動時に「名前 + Claude API キー」の登録を必須化。
     保存先は各自の PC の `<install_root>/settings.json` のみ
     (GitHub には一切送らない。ANTHROPIC_API_KEY 環境変数はフォールバック)。
   - コミットメッセージ/PR 本文生成・自動修正ループはすべて本人キーで実行。

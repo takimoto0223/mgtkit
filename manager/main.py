@@ -126,7 +126,7 @@ def main(page: ft.Page):
                         size=13, weight=ft.FontWeight.BOLD),
                 ft.Text('※ 金額は単価設定 (入力 $%.2f / 出力 $%.2f '
                         'per 100万トークン) からの目安です。正確な請求額は '
-                        'Anthropic Console で確認してください。'
+                        'Claude Console で確認してください。'
                         '他の PC や他のアプリでの利用は含みません。'
                         % (p['input_per_mtok'], p['output_per_mtok']),
                         size=11, color='#6b7280'),
@@ -1243,7 +1243,7 @@ def main(page: ft.Page):
     def show_first_run_dialog():
         name_field = ft.TextField(label='名前 (例: 山田太郎)', autofocus=True)
         key_field = ft.TextField(
-            label='Anthropic API キー (sk-ant- で始まる文字列)',
+            label='Claude API キー (sk-ant- で始まる文字列)',
             password=True, can_reveal_password=True)
         err_text = ft.Text('', size=12, color='#b91c1c')
 
@@ -1263,7 +1263,7 @@ def main(page: ft.Page):
             title=ft.Text('はじめに登録してください'),
             content=ft.Column([
                 ft.Text('mgtkit マネージャーの利用には、名前と本人の '
-                        'Anthropic API キーの登録が必要です。', size=13),
+                        'Claude API キーの登録が必要です。', size=13),
                 ft.Text('キーはこの PC の中にだけ保存され、提出時の説明文の'
                         '自動作成と、検証失敗時の自動修正に本人のキーとして'
                         '使われます。', size=12, color='#555555'),

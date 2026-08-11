@@ -240,7 +240,7 @@ class TestSafetyCheck:
         result = self._check(
             tmp_path,
             {'helper.py': 'KEY = "sk-ant-api03-abcdefghijklmnop123"\n'})
-        assert any('Anthropic API キー' in b for b in result['blockers'])
+        assert any('Claude API キー' in b for b in result['blockers'])
 
     def test_requirements_change_warned(self, tmp_path):
         result = self._check(tmp_path,
