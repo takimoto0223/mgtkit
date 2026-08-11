@@ -15,7 +15,8 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
-               localstate, paths, reviews, settings, submit, updater)
+               localstate, paths, reviews, settings, submit, updater,
+               usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
@@ -63,6 +64,76 @@ def main(page: ft.Page):
         badge.content.value = '99+' if count > 99 else str(count)
         badge.visible = count > 0
 
+    def on_show_usage(_):
+        """API 利用量ダイアログ (月小計 + 30日グラフ + 日別 + 通算合計)."""
+        s = usage.summary(config)
+        rate = usage.usd_jpy_rate(config)
+        p = usage.pricing(config)
+
+        def usd(v):
+            return '$%.2f' % v if (v >= 0.005 or v == 0) else '$%.3f' % v
+
+        def jpy(v):
+            return '約¥{:,}'.format(round(v * rate))
+
+        def short(d):
+            return d[5:].replace('-', '/')
+
+        max_usd = max((u for _, u, _, _, _ in s['days']), default=0.0)
+        bars = [ft.Container(
+            width=13, border_radius=2,
+            height=4 + (108 * u / max_usd if max_usd else 0),
+            bgcolor=NAVY if u else '#d1d5db',
+            tooltip='%s: %s (%d回)' % (short(d), usd(u), calls))
+            for d, u, _, _, calls in s['days']]
+        day_lines = [
+            ft.Text('%s: %s (%s) ・ %d回 ・ 入力 %s / 出力 %s tok'
+                    % (short(d), usd(u), jpy(u), calls,
+                       format(tin, ','), format(tout, ',')),
+                    size=12, color='#374151')
+            for d, u, tin, tout, calls in reversed(s['days']) if calls]
+        if not day_lines:
+            day_lines = [ft.Text('この 30 日間の利用はありません。',
+                                 size=12, color='#6b7280')]
+        page.show_dialog(ft.AlertDialog(
+            title=ft.Text('API 利用量 (この PC のマネージャー経由分)'),
+            content=ft.Column([
+                ft.Text('%s の小計: %s (%s)'
+                        % (s['month'], usd(s['month_usd']),
+                           jpy(s['month_usd'])),
+                        size=16, weight=ft.FontWeight.BOLD, color=NAVY),
+                ft.Container(
+                    bgcolor='#f5f7fa', border_radius=6,
+                    padding=ft.Padding.symmetric(vertical=8, horizontal=10),
+                    content=ft.Column([
+                        ft.Row(bars, spacing=3,
+                               vertical_alignment=ft.CrossAxisAlignment.END),
+                        ft.Row([
+                            ft.Text('30日前', size=10, color='#9ca3af'),
+                            ft.Container(expand=True),
+                            ft.Text('今日', size=10, color='#9ca3af'),
+                        ]),
+                    ], spacing=2)),
+                ft.Text('日ごとの利用料 (新しい順)', size=12,
+                        weight=ft.FontWeight.BOLD),
+                ft.Column(day_lines, spacing=2, height=140,
+                          scroll=ft.ScrollMode.AUTO),
+                ft.Divider(),
+                ft.Text('通算合計: %s (%s) ・ %d回 ・ 入力 %s / 出力 %s tok'
+                        % (usd(s['total_usd']), jpy(s['total_usd']),
+                           s['total_calls'], format(s['total_in'], ','),
+                           format(s['total_out'], ',')),
+                        size=13, weight=ft.FontWeight.BOLD),
+                ft.Text('※ 金額は単価設定 (入力 $%.2f / 出力 $%.2f '
+                        'per 100万トークン) からの目安です。正確な請求額は '
+                        'Anthropic Console で確認してください。'
+                        '他の PC や他のアプリでの利用は含みません。'
+                        % (p['input_per_mtok'], p['output_per_mtok']),
+                        size=11, color='#6b7280'),
+            ], tight=True, width=620),
+            actions=[ft.TextButton('閉じる',
+                                   on_click=lambda _: page.pop_dialog())]))
+
     def header():
         return ft.Container(
             bgcolor=NAVY,
@@ -71,6 +142,10 @@ def main(page: ft.Page):
                 ft.Text('mgtkit', size=20, weight=ft.FontWeight.BOLD,
                         color='#ffffff'),
                 ft.Text('アプリマネージャー', size=12, color='#ffffffcc'),
+                ft.Container(expand=True),
+                ft.IconButton(ft.Icons.BAR_CHART, icon_color='#ffffff',
+                              icon_size=20, tooltip='API 利用量',
+                              on_click=on_show_usage),
             ], spacing=10),
         )
 
