@@ -14,11 +14,12 @@ import difflib
 import html
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
 
-from . import paths
+from . import ghcli, paths
 from .gitcli import ensure_work_repo, run_git
 from .submit import workrepo_dir
 
@@ -157,6 +158,10 @@ tr.del td.code.r, tr.add td.code.l { background: #e5e7eb; }
 tr.gap td { background: #eef2f7; color: #6b7280; text-align: center;
             font-size: 11px; padding: 3px; }
 .note { color: #6b7280; font-size: 12px; margin: 6px 0 0; }
+.fnote { color: #1f2937; font-size: 12px; margin: 2px 0 8px;
+         background: #eff6ff; border-left: 3px solid #93c5fd;
+         padding: 4px 10px; border-radius: 0 4px 4px 0; }
+td .fnote { margin: 2px 0 2px; }
 .top { position: fixed; right: 18px; bottom: 18px; background: #1e3a5f;
        color: #fff; border-radius: 20px; padding: 8px 16px; font-size: 12px;
        text-decoration: none; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
@@ -165,14 +170,49 @@ tr.gap td { background: #eef2f7; color: #6b7280; text-align: center;
 _STATUS_JP = {'M': ('変更', 'tagM'), 'A': ('追加', 'tagA'),
               'D': ('削除', 'tagD'), 'R': ('移動', 'tagM')}
 
+# PR 本文の「## 変更ファイルの説明」の 1 行 (- パス — 説明)。
+# 生成のゆらぎに備え、区切り (— ― -- - : :) と `パス` の装飾は緩く許容する
+_NOTES_HEADING = re.compile(r'^#{2,4}\s*変更ファイルの説明\s*$', re.M)
+_NOTE_LINE = re.compile(
+    r'^\s*[-*]\s+[`*]*([^\s`*]+)[`*]*[ \t　]*'
+    r'(?:—|―|--|-|:|：)?[ \t　]*(\S.*)$')
+
+
+def parse_file_notes(body):
+    """PR 本文からファイルごとの変更説明を取り出す.
+
+    提出時に Claude が生成した「## 変更ファイルの説明」節を読む。
+    節が無い・形式が崩れている行は黙って無視する (表示は説明なしになる
+    だけで、差分ビューワ自体は常に成立させる)。
+    戻り値: {リポジトリ相対パス: 説明}
+    """
+    m = _NOTES_HEADING.search(body or '')
+    if not m:
+        return {}
+    notes = {}
+    for line in body[m.end():].splitlines():
+        if re.match(r'^#{1,6}\s', line):    # 次の見出しで節が終わる
+            break
+        lm = _NOTE_LINE.match(line)
+        if not lm:
+            continue
+        path = lm.group(1).replace('\\', '/')
+        if path.startswith(DISPLAY_ROOT + '/'):
+            path = path[len(DISPLAY_ROOT) + 1:]
+        notes[path] = lm.group(2).strip()
+    return notes
+
 
 def _display_path(path):
     return '%s/%s' % (DISPLAY_ROOT, path)
 
 
-def _file_section(anchor, path, stat_html, inner):
-    return ('<div class="card" id="%s"><h2>%s %s</h2>%s</div>'
-            % (anchor, html.escape(_display_path(path)), stat_html, inner))
+def _file_section(anchor, path, stat_html, inner, note=None):
+    note_html = ('<p class="fnote">%s</p>' % html.escape(note)) if note \
+        else ''
+    return ('<div class="card" id="%s"><h2>%s %s</h2>%s%s</div>'
+            % (anchor, html.escape(_display_path(path)), stat_html,
+               note_html, inner))
 
 
 def build_html(meta, base_ref, head_ref, workrepo):
@@ -186,22 +226,24 @@ def build_html(meta, base_ref, head_ref, workrepo):
                   cwd=workrepo)
     files = [line.split('\t', 1) for line in out.splitlines()
              if line.strip()]
+    notes = meta.get('notes') or {}
 
     sums, sections = [], []
     n_add = n_del = 0
     for status, path in ((s[0], p) for s, p in files):
         jp, cls = _STATUS_JP.get(status, ('変更', 'tagM'))
+        note = notes.get(path)
         anchor = 'f-%s' % path.replace('/', '-').replace('.', '-')
         ext = ('.' + path.rsplit('.', 1)[-1].lower()) if '.' in path else ''
         old = [] if status == 'A' else _file_lines(workrepo, mb, path)
         new = [] if status == 'D' else _file_lines(workrepo, head_ref, path)
 
         if ext in BINARY_EXTS or old is None or new is None:
-            sums.append((jp, cls, path, anchor, '(表示対象外)'))
+            sums.append((jp, cls, path, anchor, '(表示対象外)', note))
             sections.append(_file_section(
                 anchor, path, '',
                 '<p class="note">画像・バイナリ形式のため差分表示の'
-                '対象外です。</p>'))
+                '対象外です。</p>', note))
             continue
 
         rows = side_by_side(old, new)
@@ -212,13 +254,13 @@ def build_html(meta, base_ref, head_ref, workrepo):
         n_del += dels
         stat = ('<span class="stat"><b class="add">+%d</b> / '
                 '<b class="del">-%d</b></span>' % (adds, dels))
-        sums.append((jp, cls, path, anchor, stat))
+        sums.append((jp, cls, path, anchor, stat, note))
 
         if changed > MAX_CHANGED_LINES:
             sections.append(_file_section(
                 anchor, path, stat,
                 '<p class="note">%d 行の変更があります。大きすぎるため'
-                '全体は省略しました。</p>' % changed))
+                '全体は省略しました。</p>' % changed, note))
             continue
 
         body = []
@@ -239,13 +281,18 @@ def build_html(meta, base_ref, head_ref, workrepo):
             '<table class="diff"><colgroup>'
             '<col style="width:48px"><col>'
             '<col style="width:48px"><col></colgroup>%s</table>'
-            % ''.join(body)))
+            % ''.join(body), note))
 
     sum_rows = ''.join(
         '<tr><td width="60"><span class="%s">%s</span></td>'
-        '<td><a href="#%s">%s</a></td><td width="120">%s</td></tr>'
-        % (cls, jp, anchor, html.escape(_display_path(path)), stat)
-        for jp, cls, path, anchor, stat in sums)
+        '<td><a href="#%s">%s</a>%s</td><td width="120">%s</td></tr>'
+        % (cls, jp, anchor, html.escape(_display_path(path)),
+           ('<div class="fnote">%s</div>' % html.escape(note))
+           if note else '', stat)
+        for jp, cls, path, anchor, stat, note in sums)
+    notes_caveat = ('<br>※ 各ファイルの青枠の説明は提出時に自動生成された'
+                    'ものです (その後の自動修正・統合は反映されません)。'
+                    if notes else '')
     beta = ('・ β版 %s ' % html.escape(meta['beta'])) if meta.get('beta') \
         else ''
     return (
@@ -263,12 +310,13 @@ def build_html(meta, base_ref, head_ref, workrepo):
         '<span style="background:#fecaca">&nbsp;赤&nbsp;</span>'
         '= 削除された行、'
         '<span style="background:#bbf7d0">&nbsp;緑&nbsp;</span>'
-        '= 追加された行。</p></div>'
+        '= 追加された行。%s</p></div>'
         '<h2 class="sec-h">&lt;2&gt; ファイル比較</h2>%s</div>'
         '<a class="top" href="#">▲ 先頭へ</a></body></html>'
         % (meta['number'], _CSS, meta['number'],
            html.escape(meta['title']), html.escape(meta['author']), beta,
-           n_add, n_del, len(files), sum_rows, ''.join(sections)))
+           n_add, n_del, len(files), sum_rows, notes_caveat,
+           ''.join(sections)))
 
 
 def write_diff_html(pr, config=None, workrepo=None, beta_tag=None):
@@ -283,9 +331,19 @@ def write_diff_html(pr, config=None, workrepo=None, beta_tag=None):
     base = (config or {}).get('base_branch', 'main')
     run_git(['fetch', 'origin', base, pr['branch']], cwd=workrepo,
             timeout=300)
+    # 提出時に生成されたファイル別説明 (PR 本文)。取れなくても表示は続行
+    try:
+        body = ghcli.run_gh(['pr', 'view', str(pr['number']),
+                             '--repo', paths.repo_slug(config),
+                             '--json', 'body', '--jq', '.body'])
+    except ghcli.GhError:
+        log.warning('PR #%s の本文取得に失敗 (説明なしで表示します)',
+                    pr['number'])
+        body = ''
     text = build_html(
         {'number': pr['number'], 'title': pr['title'],
-         'author': pr.get('author', '?'), 'beta': beta_tag},
+         'author': pr.get('author', '?'), 'beta': beta_tag,
+         'notes': parse_file_notes(body)},
         'origin/%s' % base, 'origin/%s' % pr['branch'], workrepo)
     out = os.path.join(tempfile.gettempdir(),
                        'mgtkit_diff_%d.html' % pr['number'])

@@ -42,6 +42,38 @@ class TestCollapseContext:
         assert all(r[0] != 'gap' for r in rows)
 
 
+class TestParseFileNotes:
+    BODY = ('## 更新内容\n- 断面算定の追加\n\n'
+            '## 変更ファイルの説明\n'
+            '- s_check.py — TC2_analysis() の断面算定の追加\n'
+            '- `mgtkit/util.py` : 共通の丸め処理 round_sig() の追加\n'
+            '- data/x.json - 材料定数の更新\n'
+            '- 形式が崩れていて説明のない行\n'
+            '\n## 注意\n- app.py — これは説明ではない\n')
+
+    def test_parses_dash_backtick_colon(self):
+        notes = diffview.parse_file_notes(self.BODY)
+        assert notes['s_check.py'] == 'TC2_analysis() の断面算定の追加'
+        # `パス` の装飾と mgtkit/ 接頭辞は取り除かれる
+        assert notes['util.py'] == '共通の丸め処理 round_sig() の追加'
+        assert notes['data/x.json'] == '材料定数の更新'
+
+    def test_stops_at_next_heading(self):
+        notes = diffview.parse_file_notes(self.BODY)
+        assert 'app.py' not in notes
+
+    def test_missing_section_or_empty_body(self):
+        assert diffview.parse_file_notes('## 更新内容\n- x') == {}
+        assert diffview.parse_file_notes('') == {}
+        assert diffview.parse_file_notes(None) == {}
+
+    def test_fullwidth_space_separator(self):
+        body = ('## 変更ファイルの説明\n'
+                '- s_check.py　組立断面の算定の追加\n')
+        assert diffview.parse_file_notes(body) == {
+            's_check.py': '組立断面の算定の追加'}
+
+
 @pytest.fixture()
 def diff_repo(tmp_path):
     """main と feature の 2 ブランチを持つ実 git リポジトリ."""
@@ -91,6 +123,18 @@ class TestBuildHtml:
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
         assert '大きすぎるため' in page
 
+    def test_file_notes_are_shown(self, diff_repo):
+        meta = dict(self.META,
+                    notes={'calc.py': '断面算定ロジックの拡張'})
+        page = diffview.build_html(meta, 'main', 'feature', diff_repo)
+        # フォルダ比較とファイル比較の両方に説明が出る
+        assert page.count('断面算定ロジックの拡張') == 2
+        assert '提出時に自動生成' in page
+
+    def test_no_notes_no_caveat(self, diff_repo):
+        page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
+        assert '提出時に自動生成' not in page
+
     def test_html_escapes_code(self, diff_repo):
         # コード内の <> が HTML として解釈されないこと
         import os
@@ -103,21 +147,47 @@ class TestBuildHtml:
 
 
 class TestWriteDiffHtml:
-    def test_writes_file_and_returns_path(self, tmp_path, monkeypatch):
-        calls = []
+    @pytest.fixture()
+    def env(self, tmp_path, monkeypatch):
+        """git/gh をモックし、build_html へ渡った meta を記録する."""
+        calls = {'git': [], 'meta': None}
         monkeypatch.setattr(diffview, 'run_git',
                             lambda args, cwd=None, timeout=120:
-                            calls.append(args) or '')
-        monkeypatch.setattr(diffview, 'build_html',
-                            lambda meta, b, h, w: '<html>ok</html>')
+                            calls['git'].append(args) or '')
+
+        def fake_build(meta, b, h, w):
+            calls['meta'] = meta
+            return '<html>ok</html>'
+
+        monkeypatch.setattr(diffview, 'build_html', fake_build)
         monkeypatch.setattr(diffview.tempfile, 'gettempdir',
                             lambda: str(tmp_path))
-        pr = {'number': 33, 'title': 't', 'author': 'a',
-              'branch': 'feature/x-1'}
-        out = diffview.write_diff_html(pr, {'repo': 'o/r'}, workrepo='wr')
+        monkeypatch.setattr(
+            diffview.ghcli, 'run_gh',
+            lambda args, timeout=60:
+            '## 変更ファイルの説明\n- app.py — CSV 出力の追加\n')
+        return calls
+
+    PR = {'number': 33, 'title': 't', 'author': 'a',
+          'branch': 'feature/x-1'}
+
+    def test_writes_file_and_returns_path(self, env):
+        out = diffview.write_diff_html(self.PR, {'repo': 'o/r'},
+                                       workrepo='wr')
         assert out.endswith('mgtkit_diff_33.html')
         with open(out, encoding='utf-8') as f:
             assert f.read() == '<html>ok</html>'
         # 最新の main と提出ブランチを取得してから比較している
-        assert calls[0][:2] == ['fetch', 'origin']
-        assert 'feature/x-1' in calls[0]
+        assert env['git'][0][:2] == ['fetch', 'origin']
+        assert 'feature/x-1' in env['git'][0]
+
+    def test_pr_body_notes_are_passed(self, env):
+        diffview.write_diff_html(self.PR, {'repo': 'o/r'}, workrepo='wr')
+        assert env['meta']['notes'] == {'app.py': 'CSV 出力の追加'}
+
+    def test_gh_failure_falls_back_to_no_notes(self, env, monkeypatch):
+        def boom(args, timeout=60):
+            raise diffview.ghcli.GhError('down')
+        monkeypatch.setattr(diffview.ghcli, 'run_gh', boom)
+        diffview.write_diff_html(self.PR, {'repo': 'o/r'}, workrepo='wr')
+        assert env['meta']['notes'] == {}

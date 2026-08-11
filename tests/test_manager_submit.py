@@ -269,6 +269,10 @@ class TestFullFlow:
                 return 'testuser\n'
             if args[:2] == ['pr', 'create']:
                 return 'https://github.com/o/r/pull/99\n'
+            if args[:2] == ['pr', 'edit']:
+                return ''
+            if args[:2] == ['pr', 'list']:
+                return 'https://github.com/o/r/pull/99\n'
             raise AssertionError('unexpected gh call: %r' % args)
 
         monkeypatch.setattr(submit.ghcli, 'run_gh', fake_run_gh)
@@ -322,6 +326,31 @@ class TestFullFlow:
             result = submit.finalize_submission(prep, [], 'msg', {})
             assert result['branch'] == (
                 'feature/testuser-%s-%d' % (today, expected_seq))
+
+    def test_resubmission_updates_pr_body(self, repo_env, tmp_path,
+                                          gh_mock):
+        # 初回提出でブランチを作る
+        z1 = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("app v2")\n'}),
+            name='first.zip')
+        prep = submit.prepare_submission(z1, {}, repo_env['workrepo'])
+        first = submit.finalize_submission(prep, [], 'msg', {})
+
+        # 同じブランチへ修正版を積むと、新規 PR は作らず本文を更新する
+        z2 = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("app v3")\n'}),
+            name='second.zip')
+        prep2 = submit.prepare_submission(z2, {}, repo_env['workrepo'])
+        gh_mock.clear()
+        result = submit.finalize_submission(
+            prep2, [], 'msg2', {}, existing_branch=first['branch'])
+
+        assert result['branch'] == first['branch']
+        edits = [c for c in gh_mock if c[:2] == ['pr', 'edit']]
+        assert len(edits) == 1
+        assert first['branch'] in edits[0]
+        assert '--body' in edits[0]
+        assert not any(c[:2] == ['pr', 'create'] for c in gh_mock)
 
     def test_no_changes_rejected(self, repo_env, tmp_path, gh_mock):
         z = _make_zip(tmp_path, _dist_files(repo_env['base_sha']))
