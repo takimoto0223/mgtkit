@@ -254,6 +254,40 @@ def cancel_my_review(pr_number, config=None):
                   '-f', 'message=本人が取り消しました'])
 
 
+def reset_all_reviews(pr_number, config=None):
+    """全員の承認・却下を取り消す (統合で内容が変わったときの仕切り直し).
+
+    各メンバーの最新レビューを dismiss する。個別の失敗はスキップ。
+    戻り値: 取り消した件数。
+    """
+    slug = paths.repo_slug(config)
+    out = ghcli.run_gh(['api', 'repos/%s/pulls/%d/reviews?per_page=100'
+                        % (slug, int(pr_number))])
+    try:
+        revs = json.loads(out)
+    except ValueError:
+        return 0
+    latest = {}
+    for r in revs:
+        user = (r.get('user') or {}).get('login')
+        state = (r.get('state') or '').upper()
+        if user and state in ('APPROVED', 'CHANGES_REQUESTED'):
+            latest[user] = r
+    count = 0
+    for r in latest.values():
+        try:
+            ghcli.run_gh([
+                'api', '-X', 'PUT',
+                'repos/%s/pulls/%d/reviews/%s/dismissals'
+                % (slug, int(pr_number), r['id']),
+                '-f', 'message=最新版との統合により内容が変わったため、'
+                      '承認・却下をリセットしました'])
+            count += 1
+        except ghcli.GhError:
+            log.warning('レビュー %s の取り消しに失敗 (続行)', r.get('id'))
+    return count
+
+
 def withdraw(pr_number, reason='', config=None):
     """提出者本人が自分の提出を取り下げる.
 

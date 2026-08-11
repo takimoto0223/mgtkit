@@ -555,31 +555,47 @@ def main(page: ft.Page):
                 _delete_feedback_dialog(fb)
             return h
 
+        def _fb_card(fb, muted=False):
+            text_color = '#9ca3af' if muted else '#555555'
+            header = [ft.Text('%s さん (%s / %s)'
+                              % (fb['name'], fb['tag'], fb['date']),
+                              size=12, weight=ft.FontWeight.BOLD,
+                              color=text_color, expand=True)]
+            if fb.get('author') == me and fb.get('comment_id'):
+                header += [
+                    ft.IconButton(ft.Icons.EDIT_OUTLINED,
+                                  icon_size=16, tooltip='編集',
+                                  on_click=_open_edit(fb)),
+                    ft.IconButton(ft.Icons.DELETE_OUTLINE,
+                                  icon_size=16, tooltip='削除',
+                                  on_click=_open_delete(fb)),
+                ]
+            return ft.Container(
+                bgcolor='#f5f7fa', border_radius=6, padding=10,
+                content=ft.Column([
+                    ft.Row(header, spacing=4),
+                    ft.Text(fb['text'], size=13, selectable=True,
+                            color='#9ca3af' if muted else None),
+                ], spacing=4))
+
         def handler(_):
-            items = []
-            for fb in pr.get('feedback') or []:
-                header = [ft.Text('%s さん (%s / %s)'
-                                  % (fb['name'], fb['tag'], fb['date']),
-                                  size=12, weight=ft.FontWeight.BOLD,
-                                  color='#555555', expand=True)]
-                if fb.get('author') == me and fb.get('comment_id'):
-                    header += [
-                        ft.IconButton(ft.Icons.EDIT_OUTLINED,
-                                      icon_size=16, tooltip='編集',
-                                      on_click=_open_edit(fb)),
-                        ft.IconButton(ft.Icons.DELETE_OUTLINE,
-                                      icon_size=16, tooltip='削除',
-                                      on_click=_open_delete(fb)),
-                    ]
-                items.append(ft.Container(
-                    bgcolor='#f5f7fa', border_radius=6, padding=10,
-                    content=ft.Column([
-                        ft.Row(header, spacing=4),
-                        ft.Text(fb['text'], size=13, selectable=True),
-                    ], spacing=4)))
+            fb_all = pr.get('feedback') or []
+            # 現在のβ版宛てが「今回のフィードバック」。統合などで新しい
+            # β版に切り替わった後は、旧版宛てを下に薄く残す
+            if beta is not None:
+                current = [f for f in fb_all if f['tag'] == beta['tag']]
+                old = [f for f in fb_all if f['tag'] != beta['tag']]
+            else:
+                current, old = fb_all, []
+            items = [_fb_card(f) for f in current]
             if not items:
                 items.append(ft.Text('フィードバックはまだありません。',
                                      size=13))
+            if old:
+                items.append(ft.Text(
+                    '以前の版へのフィードバック (統合前など。記録として'
+                    '残しています)', size=12, color='#9ca3af'))
+                items += [_fb_card(f, muted=True) for f in old]
             actions = [ft.TextButton(
                 '閉じる', on_click=lambda _: page.pop_dialog())]
             if beta is not None:
@@ -805,7 +821,16 @@ def main(page: ft.Page):
                             summary = conflicts.resolve(
                                 analysis, policy.value, config,
                                 on_progress=_t5_progress)
-                            t5_status.value = '統合しました: %s' % summary
+                            # 内容が変わったので全員の承認・却下を仕切り直す
+                            try:
+                                reviews.reset_all_reviews(pr['number'],
+                                                          config)
+                            except Exception:
+                                log.exception('review reset failed')
+                            t5_status.value = ('統合しました: %s '
+                                               '(承認・却下はリセットされ、'
+                                               '改めて確認をお願いする状態に'
+                                               '戻りました)' % summary)
                         except (conflicts.ConflictError, GitError,
                                 ghcli.GhError) as e:
                             t5_status.value = str(e)
@@ -844,6 +869,8 @@ def main(page: ft.Page):
     def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
         final = pr.get('rejected_final')
+        # 最新版と衝突中は「統合待ち」: 提出者の統合・取り下げ以外を閉じる
+        locked = pr['conflicting'] and not final
         rejected_names = [r['name'] for r in pr['rejected']]
 
         def _badge(text, bg, fg):
@@ -898,15 +925,34 @@ def main(page: ft.Page):
         if beta is not None and not final:
             buttons.append(ft.FilledButton(
                 'β版 %s を試す' % beta['tag'], icon=ft.Icons.SCIENCE,
-                on_click=try_beta(beta), bgcolor=AMBER, color='#ffffff'))
-        fb = pr.get('feedback') or []
+                disabled=locked,
+                on_click=try_beta(beta),
+                bgcolor='#e5e7eb' if locked else AMBER,
+                color='#9ca3af' if locked else '#ffffff'))
+        fb_all = pr.get('feedback') or []
+        # 件数は現在のβ版宛てのみ (統合後は新β版基準で仕切り直し)
+        fb = [f for f in fb_all
+              if beta is None or f['tag'] == beta['tag']]
         buttons.append(ft.OutlinedButton(
             'フィードバック %d 件' % len(fb),
-            disabled=(beta is None and not fb),
+            disabled=locked or (beta is None and not fb_all),
             on_click=on_feedback_dialog(pr, beta, me)))
-        buttons.append(ft.OutlinedButton('差分',
+        buttons.append(ft.OutlinedButton('差分', disabled=locked,
                                          on_click=on_show_diff(pr, beta)))
-        if final:
+        if locked:
+            # 統合待ち: 提出者だけが動ける。他は操作不可 (押せない状態で表示)
+            if pr['author'] == me:
+                buttons.append(ft.FilledButton(
+                    '最新版と統合', on_click=on_resolve_conflict(pr),
+                    bgcolor=AMBER, color='#ffffff'))
+                buttons.append(ft.OutlinedButton(
+                    '取り下げ', on_click=on_withdraw(pr)))
+            else:
+                buttons.append(ft.FilledButton(
+                    '承認', disabled=True,
+                    bgcolor='#e5e7eb', color='#9ca3af'))
+                buttons.append(ft.OutlinedButton('却下', disabled=True))
+        elif final:
             # 却下確定: 却下した本人は取り消し可、提出者は取り下げ可。
             # 全員が自分の画面から非表示にできる
             if me in rejected_names:
@@ -919,10 +965,6 @@ def main(page: ft.Page):
                 '非表示', icon=ft.Icons.VISIBILITY_OFF,
                 on_click=on_hide_pr(pr)))
         elif pr['author'] == me:
-            if pr['conflicting']:
-                buttons.append(ft.FilledButton(
-                    '最新版と統合', on_click=on_resolve_conflict(pr),
-                    bgcolor=AMBER, color='#ffffff'))
             buttons.append(ft.OutlinedButton('取り下げ',
                                              on_click=on_withdraw(pr)))
         else:
@@ -945,10 +987,24 @@ def main(page: ft.Page):
             buttons.append(ft.FilledButton(
                 'リリース', icon=ft.Icons.ROCKET_LAUNCH,
                 on_click=on_release(pr), bgcolor=NAVY, color='#ffffff'))
-        lines.append(ft.Row(buttons, spacing=8))
+        if locked:
+            # カード情報は薄く、案内文だけ明るく表示する
+            content = ft.Column([
+                ft.Container(opacity=0.45,
+                             content=ft.Column(lines, spacing=6)),
+                ft.Text('最新版と衝突したため、提出者による統合待ちです。'
+                        '統合されると承認・却下はリセットされ、'
+                        '改めて確認をお願いします。',
+                        size=13, weight=ft.FontWeight.BOLD,
+                        color='#b45309'),
+                ft.Row(buttons, spacing=8),
+            ], spacing=6)
+        else:
+            lines.append(ft.Row(buttons, spacing=8))
+            content = ft.Column(lines, spacing=6)
         return ft.Container(bgcolor='#f5f7fa', border_radius=6, padding=12,
                             opacity=0.55 if final else 1.0,
-                            content=ft.Column(lines, spacing=6))
+                            content=content)
 
     def _beta_for(pr_number, betas):
         """提出番号に対応するβ版 (リリースノートの #N で対応付け)."""
