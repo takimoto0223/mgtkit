@@ -168,10 +168,6 @@ tr.del td.code.r, tr.add td.code.l { background: #e5e7eb; }
 tr.gap td { background: #eef2f7; color: #6b7280; text-align: center;
             font-size: 11px; padding: 3px; }
 .note { color: #6b7280; font-size: 12px; margin: 6px 0 0; }
-.fnote { color: #1f2937; font-size: 12px; margin: 2px 0 8px;
-         background: #eff6ff; border-left: 3px solid #93c5fd;
-         padding: 4px 10px; border-radius: 0 4px 4px 0; }
-td .fnote { margin: 2px 0 2px; }
 .fnote2 { font-weight: normal; font-size: 12px; color: #1f2937;
           background: #eff6ff; border-left: 3px solid #93c5fd;
           padding: 2px 8px; border-radius: 0 4px 4px 0; margin-left: 8px; }
@@ -528,7 +524,7 @@ def build_html(meta, base_ref, head_ref, workrepo):
         '<tr><td width="60"><span class="%s">%s</span></td>'
         '<td><a href="#%s">%s</a>%s</td><td width="120">%s</td></tr>'
         % (cls, jp, anchor, html.escape(_display_path(path)),
-           ('<div class="fnote">%s</div>' % html.escape(note))
+           (' <span class="fnote2">%s</span>' % html.escape(note))
            if note else '', stat)
         for jp, cls, path, anchor, stat, note in sums)
     notes_caveat = ('<br>※ 各ファイルの青枠の説明は提出時に自動生成された'
