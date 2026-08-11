@@ -106,7 +106,8 @@ class TestBuildHtml:
 
     def test_contains_summary_and_diff(self, diff_repo):
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
-        assert '提出 #33' in page and '組立断面の対応' in page
+        assert '<h1>#33 組立断面の対応</h1>' in page
+        assert '提出 #33' not in page      # 見出しに「提出」は付けない
         assert 'フォルダ比較' in page and 'ファイル比較' in page
         assert 'calc.py' in page
         assert 'line15&nbsp;=&nbsp;9999' in page      # 変更後の行
@@ -122,6 +123,39 @@ class TestBuildHtml:
         monkeypatch.setattr(diffview, 'MAX_CHANGED_LINES', 1)
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
         assert '大きすぎるため' in page
+
+    def test_download_button_with_warning(self, diff_repo):
+        page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
+        assert '更新データをダウンロード' in page
+        assert 'data:application/zip;base64,' in page
+        # クリック時にリスク確認 (資料 4.2) を挟む
+        assert 'confirm(' in page
+        assert '基点の消滅' in page
+        assert 'リスクが理解できる人のみ' in page
+
+    def test_download_zip_contents(self, diff_repo):
+        import base64
+        import io
+        import re
+        import zipfile
+        page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
+        m = re.search(r'data:application/zip;base64,([A-Za-z0-9+/=]+)', page)
+        assert m
+        zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(m.group(1))))
+        names = zf.namelist()
+        # 変更ファイルは mgtkit/ 以下に提出後の内容で入る (バイナリ含む)
+        assert 'mgtkit/calc.py' in names
+        assert 'mgtkit/img.png' in names
+        assert 'line15 = 9999' in zf.read('mgtkit/calc.py').decode('utf-8')
+        # 説明テキストにも注意書きがある
+        readme = zf.read('更新データについて.txt').decode('utf-8')
+        assert '提出 #33' in readme.split('\n')[0]
+        assert '3 つのリスク' in readme
+
+    def test_download_hidden_when_too_large(self, diff_repo, monkeypatch):
+        monkeypatch.setattr(diffview, 'MAX_DL_MB', 0)
+        page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
+        assert '更新データをダウンロード' not in page
 
     def test_file_notes_are_shown(self, diff_repo):
         meta = dict(self.META,

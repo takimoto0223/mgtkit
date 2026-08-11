@@ -10,14 +10,17 @@ HTML 1 枚として一時フォルダへ書き出し、パスを返す (開く�
   - 変更が MAX_CHANGED_LINES 行を超えるファイルは省略表示
   - 画像・バイナリは「表示対象外」と明記
 """
+import base64
 import difflib
 import html
+import io
 import logging
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 from . import ghcli, paths
 from .gitcli import ensure_work_repo, run_git
@@ -27,6 +30,7 @@ log = logging.getLogger(__name__)
 
 MAX_HUNK_CONTEXT = 3      # 変更行の前後に見せる行数
 MAX_CHANGED_LINES = 800   # これを超えるファイルは省略表示
+MAX_DL_MB = 20            # 更新データ ZIP の埋め込み上限 (超えたらボタン非表示)
 
 BINARY_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip',
                '.xlsx', '.pyc', '.exe', '.dll'}
@@ -122,9 +126,15 @@ def _esc(s):
 _CSS = """
 body { font-family: 'Yu Gothic UI', 'Meiryo', sans-serif; margin: 0;
        background: #f5f7fa; color: #1f2937; }
-header { background: #1e3a5f; color: #fff; padding: 14px 24px; }
+header { background: #1e3a5f; color: #fff; padding: 14px 24px;
+         display: flex; justify-content: space-between;
+         align-items: center; gap: 16px; }
 header h1 { font-size: 17px; margin: 0 0 4px; }
 header .meta { font-size: 12px; opacity: .85; }
+a.dl { flex: none; border: 1px solid rgba(255,255,255,.55); color: #fff;
+       border-radius: 6px; padding: 7px 14px; font-size: 12px;
+       text-decoration: none; white-space: nowrap; }
+a.dl:hover { background: rgba(255,255,255,.12); }
 .wrap { margin: 0 auto; padding: 16px 20px 48px; }
 .sec-h { font-size: 14px; margin: 18px 0 10px; color: #1e3a5f;
          border-left: 4px solid #1e3a5f; padding-left: 8px; }
@@ -215,6 +225,66 @@ def _file_section(anchor, path, stat_html, inner, note=None):
                note_html, inner))
 
 
+# ダウンロード確認 (JS confirm)。\n は JS 文字列の改行として渡す
+_DL_WARNING = (
+    '【注意】\\n'
+    'ここからダウンロードしたデータを保存して開発に使うことには、'
+    '資料「バージョン管理と同時開発のしくみ」4.2 に示した '
+    '3 つのリスクがあります。\\n'
+    '  ① 基点の消滅\\n  ② 親リリース後の縮退\\n  ③ レビュー責任の曖昧化\\n'
+    'このリスクが理解できる人のみダウンロードしてください。\\n'
+    '(動作確認やプログラムの中身の確認のために読むのは問題ありません)\\n\\n'
+    'ダウンロードしますか?')
+
+
+def _download_link(meta, dl_files, dl_deleted):
+    """「更新データをダウンロード」ボタンの HTML (ZIP を data URI で埋め込み).
+
+    β版一覧に置くと誤って開発の土台にする人が出るため、差分ビューワの
+    右上にだけ置き、クリック時に β版基点のリスク (資料 4.2) の確認を挟む。
+    変更ファイルなし・サイズ上限超過のときはボタンを出さない。
+    """
+    if not dl_files:
+        return ''
+    if sum(len(d) for _, d in dl_files) > MAX_DL_MB * 1024 * 1024:
+        return ''
+    lines = [
+        '提出 #%d の更新データ (変更されたファイルのみ)' % meta['number'],
+        'タイトル: %s' % meta['title'],
+        '提出者: %s' % meta.get('author', '?'),
+    ]
+    if meta.get('beta'):
+        lines.append('β版: %s' % meta['beta'])
+    lines += [
+        '',
+        '%s/ 以下が、この提出で追加・変更されたファイルの提出後の内容です。'
+        % DISPLAY_ROOT,
+        '動作確認やプログラムの中身の確認に使ってください。',
+    ]
+    if dl_deleted:
+        lines += ['', 'この提出で削除されたファイル (ZIP には含まれません):']
+        lines += [' - %s/%s' % (DISPLAY_ROOT, p) for p in dl_deleted]
+    lines += [
+        '',
+        '【注意】',
+        'このデータを保存して開発の土台にすることには、資料',
+        '「バージョン管理と同時開発のしくみ」4.2 に示した 3 つのリスク',
+        '(①基点の消滅 ②親リリース後の縮退 ③レビュー責任の曖昧化) が',
+        'あります。このリスクが理解できる人のみ利用してください。',
+    ]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('更新データについて.txt', '\n'.join(lines))
+        for path, data in dl_files:
+            zf.writestr('%s/%s' % (DISPLAY_ROOT, path), data)
+    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    return ('<a class="dl" download="提出%d_更新データ.zip" '
+            'href="data:application/zip;base64,%s" '
+            'onclick="return confirm(\'%s\')">'
+            '⬇ 更新データをダウンロード</a>'
+            % (meta['number'], b64, _DL_WARNING))
+
+
 def build_html(meta, base_ref, head_ref, workrepo):
     """差分ビューワの HTML 全体を組み立てて文字列で返す.
 
@@ -229,9 +299,18 @@ def build_html(meta, base_ref, head_ref, workrepo):
     notes = meta.get('notes') or {}
 
     sums, sections = [], []
+    dl_files, dl_deleted = [], []
     n_add = n_del = 0
     for status, path in ((s[0], p) for s, p in files):
         jp, cls = _STATUS_JP.get(status, ('変更', 'tagM'))
+        # 更新データ ZIP 用に提出後の内容を控える (削除ファイルは一覧のみ)
+        if status == 'D':
+            dl_deleted.append(path)
+        else:
+            data = _git_bytes(workrepo, ['show',
+                                         '%s:%s' % (head_ref, path)])
+            if data is not None:
+                dl_files.append((path, data))
         note = notes.get(path)
         anchor = 'f-%s' % path.replace('/', '-').replace('.', '-')
         ext = ('.' + path.rsplit('.', 1)[-1].lower()) if '.' in path else ''
@@ -293,14 +372,15 @@ def build_html(meta, base_ref, head_ref, workrepo):
     notes_caveat = ('<br>※ 各ファイルの青枠の説明は提出時に自動生成された'
                     'ものです (その後の自動修正・統合は反映されません)。'
                     if notes else '')
+    dl_html = _download_link(meta, dl_files, dl_deleted)
     beta = ('・ β版 %s ' % html.escape(meta['beta'])) if meta.get('beta') \
         else ''
     return (
         '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">'
-        '<title>提出 #%d の差分</title><style>%s</style></head><body>'
-        '<header><h1>提出 #%d %s</h1>'
+        '<title>#%d の差分</title><style>%s</style></head><body>'
+        '<header><div><h1>#%d %s</h1>'
         '<div class="meta">提出者: %s %s・ 基点との比較 '
-        '(追加 <b>+%d</b> 行 / 削除 <b>-%d</b> 行)</div></header>'
+        '(追加 <b>+%d</b> 行 / 削除 <b>-%d</b> 行)</div></div>%s</header>'
         '<div class="wrap">'
         '<h2 class="sec-h">&lt;1&gt; フォルダ比較 '
         '(変更されたファイル %d 件)</h2>'
@@ -315,7 +395,7 @@ def build_html(meta, base_ref, head_ref, workrepo):
         '<a class="top" href="#">▲ 先頭へ</a></body></html>'
         % (meta['number'], _CSS, meta['number'],
            html.escape(meta['title']), html.escape(meta['author']), beta,
-           n_add, n_del, len(files), sum_rows, notes_caveat,
+           n_add, n_del, dl_html, len(files), sum_rows, notes_caveat,
            ''.join(sections)))
 
 
