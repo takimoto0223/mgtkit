@@ -433,7 +433,14 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         title = message.splitlines()[0][:70]
 
         if existing_branch:
-            # 既存 PR に修正版として積む (新規 PR は作らない)
+            # 既存 PR に修正版として積む (新規 PR は作らない)。
+            # 本文 (ファイル別説明を含む) は最新の提出内容で更新する
+            try:
+                ghcli.run_gh(['pr', 'edit', branch,
+                              '--repo', paths.repo_slug(config),
+                              '--body', body])
+            except ghcli.GhError:
+                log.warning('PR 本文の更新に失敗しました (提出自体は完了)')
             out = ghcli.run_gh([
                 'pr', 'list', '--repo', paths.repo_slug(config),
                 '--head', branch, '--state', 'open', '--json', 'url',
