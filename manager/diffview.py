@@ -162,8 +162,9 @@ table.diff td { padding: 0 6px; vertical-align: top;
 td.ln { color: #9ca3af; text-align: right; user-select: none;
         background: #fafbfc; border-right: 1px solid #eef1f5; }
 tr.same td.code { background: #fff; }
-tr.change td.code.l, tr.del td.code.l { background: #fecaca; }
-tr.change td.code.r, tr.add td.code.r { background: #bbf7d0; }
+tr.change td.code.l, tr.change td.code.r { background: #fef3c7; }
+tr.del td.code.l { background: #fecaca; }
+tr.add td.code.r { background: #bbf7d0; }
 tr.del td.code.r, tr.add td.code.l { background: #e5e7eb; }
 tr.gap td { background: #eef2f7; color: #6b7280; text-align: center;
             font-size: 11px; padding: 3px; }
@@ -546,6 +547,8 @@ def build_html(meta, base_ref, head_ref, workrepo):
         '<div class="card"><table class="sum">%s</table>'
         '<p class="note">ファイル名クリックでその場所へ移動します。'
         '左 = 変更前 (現在の正式版) / 右 = 変更後 (提出内容)。'
+        '<span style="background:#fef3c7">&nbsp;黄&nbsp;</span>'
+        '= 変更された行 (左が変更前・右が変更後)、'
         '<span style="background:#fecaca">&nbsp;赤&nbsp;</span>'
         '= 削除された行、'
         '<span style="background:#bbf7d0">&nbsp;緑&nbsp;</span>'
