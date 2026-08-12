@@ -1319,6 +1319,10 @@ def main(page: ft.Page):
                             '機能追加は取得した版のコピーで作業してください'
                             '(使い方ガイド 1 章)。', size=12,
                             color='#555555'),
+                    ft.Text('直した内容がみんなにも役立ちそうなら、ぜひ'
+                            '「更新版を提出」から共有してください '
+                            '(小さな改良でも大歓迎です)。', size=12,
+                            color='#047857'),
                 ], tight=True, width=560),
                 actions=[
                     ft.TextButton('詳細 (差分を見る)', on_click=open_detail),
