@@ -90,7 +90,7 @@ jobs:
                   ['git', 'diff-tree', '--no-commit-id', '--name-only',
                    '-r', c], text=True).split()
               bad += ['%s: %s' % (c[:8], f) for f in files
-                      if f.startswith('tests/')]
+                      if f.startswith(('tests/', 'manager/tests/'))]
           if bad:
               print('自動修正コミットが tests/ を変更しています:')
               print('\n'.join(bad))

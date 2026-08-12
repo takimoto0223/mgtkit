@@ -10,7 +10,7 @@ rem 注意: 個人アカウントの private リポジトリではブランチ�
 rem       有料プランが必要 (public リポジトリなら無料)。403/422 が返る場合は
 rem       プラン・リポジトリの公開設定を確認すること。
 setlocal
-cd /d "%~dp0.."
+cd /d "%~dp0..\.."
 
 where gh >nul 2>nul
 if errorlevel 1 (

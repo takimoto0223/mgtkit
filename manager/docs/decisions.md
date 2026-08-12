@@ -235,6 +235,26 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
   項目名 `anthropic_api_key` は技術的な固有名のため変更しない
   (項目名を変えると登録済みメンバーのキーが読めなくなる)。
 
+## フォルダ構成の整理 (2026-08)
+
+「mgtkit」は本体 + アプリマネージャー + 資料の**総称**、構造設計プログラム
+としての本体はルート直下、という整理に基づき、**アプリマネージャー関係の
+ファイルを `manager/` に完結**させた。
+
+- 移動したもの: 開発メモ (CLAUDE.md → manager/CLAUDE.md)、設計記録
+  (docs/ → manager/docs/decisions.md)、セットアップスクリプト
+  (scripts/ → manager/scripts/)、マネージャーの資料 PDF
+  (readme/ → manager/readme/)、マネージャーのテスト
+  (tests/test_manager_* → manager/tests/)。README も本体用とマネージャー用に分割
+- **本体プログラムのパスは動かさない**: 提出の差分は「基点コミット vs ZIP」の
+  比較で対象は配布対象ファイルのみのため、対象外のファイル移動なら
+  作業中のメンバーの提出に影響しない (本体を動かすと全ファイル移動扱いに
+  なり移行の谷が生じる — 見送りの理由)
+- ルートに残す例外: `.github/` (GitHub の仕様で固定)、`config.json`
+  (本体ポートも含む共通運用設定)、`pytest.ini` / `requirements-dev.txt` (開発共通)
+- 資料 PDF は クローン (mgtkit フォルダ) の起動時自動更新で配られる。
+  配布 ZIP (実行用コピー) には本体の操作マニュアルのみ入る
+
 ## リリース手順 (Phase 4 自動化までの暫定運用)
 
 - `.github/workflows/release.yml`(手動実行)で安定版/β版を Releases に登録する。

@@ -8,7 +8,7 @@
      差分に含めず、基点の内容を維持する)
   4. 安全チェック (サイズ/件数上限・秘密情報スキャン)
   5. feature ブランチ作成 → 上書き → commit → push → PR 作成
-を行う (docs/app-manager-decisions.md)。
+を行う (manager/docs/decisions.md)。
 
 削除ファイルの確認や秘密情報警告など、ユーザー判断が要る箇所で
 処理を分割している: prepare_submission() → (UI で確認) → finalize_submission()
