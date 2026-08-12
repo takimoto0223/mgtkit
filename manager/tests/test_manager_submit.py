@@ -160,6 +160,7 @@ class TestComputeChanges:
             **{'mgtkit_out/result.csv': 'a,b\n',
                'sub/mgtkit_out/fig.dxf': '0\n',
                '.git/config': '[core]\n',
+               'stash/20260812-100000/app.py': 'old\n',
                '__pycache__/app.cpython-311.pyc': 'xx'}))
         prep = submit.inspect_zip(z)
         try:

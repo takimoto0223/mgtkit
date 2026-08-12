@@ -57,9 +57,10 @@ DIST_EXCLUDE_FILES = ('.gitignore', 'pytest.ini', 'requirements-dev.txt',
 GENERATED_FILES = ('version.json', 'settings.json', 'usage.json')
 
 # 作業フォルダに混ざりがちな生成物・環境フォルダ。ZIP に入っていても
-# 差分対象にしない (「フォルダ丸ごと ZIP で OK」を成立させるため)
+# 差分対象にしない (「フォルダ丸ごと ZIP で OK」を成立させるため)。
+# stash は起動時の直接変更の退避フォルダ (manager/selfupdate.py)
 JUNK_DIRS = {'.git', '__pycache__', '.pytest_cache', 'mgtkit_out',
-             '.venv', 'venv', '.idea', '.vscode'}
+             '.venv', 'venv', '.idea', '.vscode', 'stash'}
 
 # 明確な認証情報は即ブロック (誤提出による流出を防ぐ)
 _SECRET_BLOCKER_PATTERNS = [
