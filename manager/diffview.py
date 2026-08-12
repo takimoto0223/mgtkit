@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 
 MAX_HUNK_CONTEXT = 3      # 変更行の前後に見せる行数
 MAX_CHANGED_LINES = 800   # これを超えるファイルは省略表示
-MAX_DL_MB = 20            # 更新データ ZIP の埋め込み上限 (超えたらボタン非表示)
+MAX_DL_MB = 20            # 確認用データ ZIP の埋め込み上限 (超えたらボタン非表示)
 
 BINARY_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip',
                '.xlsx', '.pyc', '.exe', '.dll'}
@@ -372,7 +372,7 @@ def _dl_readme(meta, changed, dl_deleted):
 
 
 def _download_link(meta, dl_files, dl_deleted, workrepo, head_ref):
-    """「更新データをダウンロード」ボタンとリスク確認モーダルの HTML.
+    """「β版データ (確認用) をダウンロード」ボタンとリスク確認モーダルの HTML.
 
     β版一覧に置くと誤って開発の土台にする人が出るため、差分ビューワの
     右上にだけ置き、クリック時に資料 4.2 の 3 リスクをイラスト付きで
@@ -399,7 +399,7 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, head_ref):
     changed = [p for p, _ in dl_files]
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('更新データについて.txt',
+        zf.writestr('確認用データについて.txt',
                     _dl_readme(meta, changed, dl_deleted))
         for path, data in full:
             zf.writestr('一式/%s/%s' % (DISPLAY_ROOT, path), data)
@@ -408,7 +408,7 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, head_ref):
     b64 = base64.b64encode(buf.getvalue()).decode('ascii')
 
     btn = ('<a class="dl" id="dlbtn" href="#">'
-           '⬇ 更新データをダウンロード</a>')
+           '⬇ β版データ (確認用) をダウンロード</a>')
     cards = ''.join(
         '<div class="rcard %s"><h3>%s</h3><div class="fig">%s</div>'
         '<p>%s</p></div>' % (cls, title, svg, text)
@@ -463,7 +463,7 @@ def build_html(meta, base_ref, head_ref, workrepo):
     n_add = n_del = 0
     for status, path in ((s[0], p) for s, p in files):
         jp, cls = _STATUS_JP.get(status, ('変更', 'tagM'))
-        # 更新データ ZIP 用に提出後の内容を控える (削除ファイルは一覧のみ)
+        # 確認用データ ZIP 用に提出後の内容を控える (削除ファイルは一覧のみ)
         if status == 'D':
             dl_deleted.append(path)
         else:

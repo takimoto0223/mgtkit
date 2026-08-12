@@ -127,7 +127,7 @@ class TestBuildHtml:
 
     def test_download_button_with_risk_modal(self, diff_repo):
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
-        assert '更新データをダウンロード' in page
+        assert 'β版データ (確認用) をダウンロード' in page
         assert 'data:application/zip;base64,' in page
         # クリックで資料 4.2 の 3 リスクをイラスト付きモーダルで確認する
         assert 'id="dlovl"' in page
@@ -157,7 +157,7 @@ class TestBuildHtml:
         assert 'line15 = 9999' in zf.read(
             '一式/mgtkit/calc.py').decode('utf-8')
         # 説明テキスト: 素性・構成・version.json を入れない理由・注意書き
-        readme = zf.read('更新データについて.txt').decode('utf-8')
+        readme = zf.read('確認用データについて.txt').decode('utf-8')
         assert '#33 の確認用データ' in readme.split('\n')[0]
         assert 'version.json' in readme
         assert '3 つのリスク' in readme
@@ -165,7 +165,7 @@ class TestBuildHtml:
     def test_download_hidden_when_too_large(self, diff_repo, monkeypatch):
         monkeypatch.setattr(diffview, 'MAX_DL_MB', 0)
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
-        assert '更新データをダウンロード' not in page
+        assert 'β版データ (確認用) をダウンロード' not in page
 
     def test_file_notes_are_shown(self, diff_repo):
         meta = dict(self.META,
