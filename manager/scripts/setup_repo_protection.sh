@@ -9,7 +9,7 @@
 #       有料プランが必要 (public リポジトリなら無料)。403/422 が返る場合は
 #       プラン・リポジトリの公開設定を確認すること。
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 CFG=config.json
 if ! command -v gh >/dev/null 2>&1; then
