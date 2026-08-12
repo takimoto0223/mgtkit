@@ -345,8 +345,8 @@ def _dl_readme(meta, changed, dl_deleted):
     lines += [
         '',
         '[フォルダ構成]',
-        ' 一式/%s      … β版まるごと。そのまま動作チェックに使えます'
-        % DISPLAY_ROOT,
+        ' 一式/%s      … β版まるごと (最新の正式版 + この提出の変更)。'
+        'そのまま動作チェックに使えます' % DISPLAY_ROOT,
         ' 変更のみ/%s  … この提出で追加・変更されたファイルだけ'
         ' (中身チェック用)' % DISPLAY_ROOT,
         '',
@@ -371,7 +371,7 @@ def _dl_readme(meta, changed, dl_deleted):
     return '\n'.join(lines)
 
 
-def _download_link(meta, dl_files, dl_deleted, workrepo, head_ref):
+def _download_link(meta, dl_files, dl_deleted, workrepo, base_ref):
     """「β版データ (確認用) をダウンロード」ボタンとリスク確認モーダルの HTML.
 
     β版一覧に置くと誤って開発の土台にする人が出るため、差分ビューワの
@@ -382,26 +382,34 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, head_ref):
     """
     if not dl_files:
         return '', ''
-    # 一式 = 提出後の配布相当ファイル全部 (version.json はあえて入れない
-    # ことで、この一式をそのまま提出の土台にできないようにする)
-    full = []
-    for p in run_git(['ls-tree', '-r', '--name-only', head_ref],
+    # 一式 = 「最新の正式版 + この提出の変更」(= β版の中身)。
+    # 提出ブランチの木をそのまま使うと、基点時点の古いファイル
+    # (その後 main 側で削除・移動されたもの) が紛れ込むため、
+    # 最新の正式版を土台に変更ファイルだけを重ねる。
+    # version.json はあえて入れない (この一式をそのまま提出の土台に
+    # できないようにするため)
+    full = {}
+    for p in run_git(['ls-tree', '-r', '--name-only', base_ref],
                      cwd=workrepo).splitlines():
         p = p.strip()
         if not p or not _is_dist_scope(p):
             continue
-        data = _git_bytes(workrepo, ['show', '%s:%s' % (head_ref, p)])
+        data = _git_bytes(workrepo, ['show', '%s:%s' % (base_ref, p)])
         if data is not None:
-            full.append((p, data))
-    if sum(len(d) for _, d in full) + sum(len(d) for _, d in dl_files) \
-            > MAX_DL_MB * 1024 * 1024:
+            full[p] = data
+    for path, data in dl_files:      # この提出で追加・変更されたファイル
+        full[path] = data
+    for p in dl_deleted:             # この提出で削除されたファイル
+        full.pop(p, None)
+    if sum(len(d) for d in full.values()) \
+            + sum(len(d) for _, d in dl_files) > MAX_DL_MB * 1024 * 1024:
         return '', ''
     changed = [p for p, _ in dl_files]
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('確認用データについて.txt',
                     _dl_readme(meta, changed, dl_deleted))
-        for path, data in full:
+        for path, data in sorted(full.items()):
             zf.writestr('一式/%s/%s' % (DISPLAY_ROOT, path), data)
         for path, data in dl_files:
             zf.writestr('変更のみ/%s/%s' % (DISPLAY_ROOT, path), data)
@@ -533,7 +541,7 @@ def build_html(meta, base_ref, head_ref, workrepo):
                     'ものです (その後の自動修正・統合は反映されません)。'
                     if notes else '')
     dl_html, dl_modal = _download_link(meta, dl_files, dl_deleted,
-                                       workrepo, head_ref)
+                                       workrepo, base_ref)
     beta = ('・ β版 %s ' % html.escape(meta['beta'])) if meta.get('beta') \
         else ''
     return (

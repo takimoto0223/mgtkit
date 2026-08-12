@@ -167,6 +167,50 @@ class TestBuildHtml:
         assert 'version.json' in readme
         assert '3 つのリスク' in readme
 
+    def test_full_set_follows_latest_main(self, tmp_path):
+        """一式 = 最新の正式版 + この提出の変更.
+
+        基点の後に main 側で削除されたファイルが紛れ込まず、
+        main 側で追加されたファイルは入る (実際のβ版と同じ中身)。
+        """
+        import base64
+        import io
+        import re
+        import zipfile
+        repo = tmp_path / 'repo2'
+        repo.mkdir()
+
+        def g(*args):
+            return run_git(list(args), cwd=str(repo))
+
+        g('init', '-b', 'main')
+        g('config', 'user.email', 't@example.com')
+        g('config', 'user.name', 'テスト')
+        (repo / 'calc.py').write_text('x = 1\n', encoding='utf-8')
+        (repo / 'obsolete-spec.md').write_text('# 旧仕様\n',
+                                               encoding='utf-8')
+        g('add', '-A')
+        g('commit', '-m', 'base')
+        # 基点から提出ブランチを切って calc.py を変更
+        g('checkout', '-b', 'feature')
+        (repo / 'calc.py').write_text('x = 2\n', encoding='utf-8')
+        g('add', '-A')
+        g('commit', '-m', 'change')
+        # main 側はその後、旧仕様を削除し新ファイルを追加
+        g('checkout', 'main')
+        g('rm', '-q', 'obsolete-spec.md')
+        (repo / 'newmod.py').write_text('y = 1\n', encoding='utf-8')
+        g('add', '-A')
+        g('commit', '-m', 'advance main')
+
+        page = diffview.build_html(self.META, 'main', 'feature', str(repo))
+        m = re.search(r'data:application/zip;base64,([A-Za-z0-9+/=]+)', page)
+        zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(m.group(1))))
+        names = zf.namelist()
+        assert '一式/mgtkit/obsolete-spec.md' not in names
+        assert '一式/mgtkit/newmod.py' in names
+        assert zf.read('一式/mgtkit/calc.py').decode('utf-8') == 'x = 2\n'
+
     def test_download_hidden_when_too_large(self, diff_repo, monkeypatch):
         monkeypatch.setattr(diffview, 'MAX_DL_MB', 0)
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
