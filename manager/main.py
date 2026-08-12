@@ -15,8 +15,8 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
-               localstate, paths, reviews, settings, submit, updater,
-               usage)
+               localstate, paths, reviews, selfupdate, settings, submit,
+               updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
@@ -1273,6 +1273,63 @@ def main(page: ft.Page):
             ], tight=True, width=480),
             actions=[ft.FilledButton('登録してはじめる', on_click=on_save,
                                      bgcolor=NAVY, color='#ffffff')]))
+
+    # ---------------- 起動時の自動最新化 (直接変更の退避つき) ----------------
+
+    def _tag(text, bg, fg):
+        return ft.Container(
+            bgcolor=bg, border_radius=4,
+            padding=ft.Padding.symmetric(vertical=2, horizontal=8),
+            content=ft.Text(text, size=11, weight=ft.FontWeight.BOLD,
+                            color=fg))
+
+    def check_selfupdate():
+        def work():
+            upd = selfupdate.auto_update()
+            if not upd.get('stashed'):
+                return
+
+            def open_detail(_):
+                webbrowser.open(
+                    'file:///' + upd['diff_html'].replace(os.sep, '/'),
+                    new=1)
+
+            done = ('最新版に更新しました'
+                    if upd.get('updated') else
+                    '退避しました (更新はネットワーク接続後の次回起動時に'
+                    '行われます)')
+            page.show_dialog(ft.AlertDialog(
+                modal=True,
+                title=ft.Row([
+                    _tag('注意', '#fef3c7', '#92400e'),
+                    _tag('要確認', '#fee2e2', '#b91c1c'),
+                    ft.Text('直接変更を退避しました', size=15,
+                            weight=ft.FontWeight.BOLD),
+                ], spacing=8),
+                content=ft.Column([
+                    ft.Text('自動バージョン更新されるフォルダ置き場所 (%s) '
+                            '内のファイルに直接変更があったため、退避領域 '
+                            '(%s) に移して%s。'
+                            % (paths.REPO_ROOT, upd['stash_dir'], done),
+                            size=13),
+                    ft.Text('対象: %s' % '、'.join(upd['stashed'][:8])
+                            + ('ほか' if len(upd['stashed']) > 8 else ''),
+                            size=12, color='#555555'),
+                    ft.Text('このフォルダ内のファイルは直接編集せず、'
+                            '機能追加は取得した版のコピーで作業してください'
+                            '(使い方ガイド 1 章)。', size=12,
+                            color='#555555'),
+                ], tight=True, width=560),
+                actions=[
+                    ft.TextButton('詳細 (差分を見る)', on_click=open_detail),
+                    ft.FilledButton('OK',
+                                    on_click=lambda _: page.pop_dialog(),
+                                    bgcolor=NAVY, color='#ffffff'),
+                ]))
+            page.update()
+        run_bg(work)
+
+    check_selfupdate()
 
     if settings.load_settings(config) is None:
         show_first_run_dialog()
