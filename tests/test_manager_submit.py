@@ -129,6 +129,14 @@ class TestComputeChanges:
         finally:
             submit.cleanup(prep)
 
+    def test_dev_files_are_out_of_dist_scope(self):
+        # アプリマネージャーの開発メモ等は配布・提出の対象外
+        assert not submit._is_dist_scope('CLAUDE.md')
+        assert not submit._is_dist_scope('.gitattributes')
+        assert not submit._is_dist_scope('manager/main.py')
+        assert submit._is_dist_scope('README.md')
+        assert submit._is_dist_scope('起動.bat')
+
     def test_settings_json_is_always_excluded(self, repo_env, tmp_path):
         # マネージャーの個人設定 (API キー入り) が ZIP に紛れても提出されない
         z = _make_zip(tmp_path, _dist_files(
