@@ -96,6 +96,8 @@ def diff_repo(tmp_path):
     lines.append('line30 = 30')
     (repo / 'calc.py').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     (repo / 'img.png').write_bytes(b'\x89PNG\r\n\x1a\n')
+    # 日本語ファイル名 (git の quotepath エスケープ対策の回帰確認用)
+    (repo / '集計表.csv').write_text('a,b\n1,2\n', encoding='utf-8')
     g('add', '-A')
     g('commit', '-m', 'change')
     return str(repo)
@@ -154,6 +156,9 @@ class TestBuildHtml:
         assert '変更のみ/mgtkit/calc.py' in names
         assert '変更のみ/mgtkit/img.png' in names
         assert '変更のみ/mgtkit/stable.py' not in names
+        # 日本語ファイル名もエスケープされず正しく入る
+        assert '一式/mgtkit/集計表.csv' in names
+        assert '変更のみ/mgtkit/集計表.csv' in names
         assert 'line15 = 9999' in zf.read(
             '一式/mgtkit/calc.py').decode('utf-8')
         # 説明テキスト: 素性・構成・version.json を入れない理由・注意書き

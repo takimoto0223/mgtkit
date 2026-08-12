@@ -48,7 +48,8 @@ DEFAULT_ALLOWED_EXTENSIONS = [
 # 配布 ZIP に含めない開発用ファイル (.github/workflows/release.yml の除外と同期)。
 # これらは提出の差分対象外とし、基点の内容を常に維持する。
 DIST_EXCLUDE_DIRS = ('.github/', 'tests/', 'docs/', 'scripts/', 'manager/')
-DIST_EXCLUDE_FILES = ('.gitignore', 'pytest.ini', 'requirements-dev.txt')
+DIST_EXCLUDE_FILES = ('.gitignore', 'pytest.ini', 'requirements-dev.txt',
+                      'CLAUDE.md', '.gitattributes')
 
 # version.json は配布時に生成、settings.json はマネージャーの個人設定
 # (名前・API キー)、usage.json は API 利用量の個人記録。

@@ -24,8 +24,12 @@ def _popen_kwargs():
 
 
 def run_git(args, cwd=None, timeout=120):
-    """git を実行し stdout を返す。失敗は GitError (詳細はログへ)."""
-    cmd = ['git'] + list(args)
+    """git を実行し stdout を返す。失敗は GitError (詳細はログへ).
+
+    core.quotepath=off で日本語ファイル名をそのまま出力させる
+    (既定ではエスケープ表記になり、パスの照合や再利用が壊れる)。
+    """
+    cmd = ['git', '-c', 'core.quotepath=off'] + list(args)
     try:
         proc = subprocess.run(
             cmd, cwd=cwd, capture_output=True, text=True, encoding='utf-8',

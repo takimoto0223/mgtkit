@@ -213,6 +213,13 @@ Level 1 スモークテストとした (`tests/test_smoke_routes.py`):
 
 ### その他
 
+- **git は常に `core.quotepath=off` で実行** (`gitcli.run_git`):
+  既定では日本語ファイル名がエスケープ表記 (`"\346..."`) で出力され、
+  パスの照合に失敗して差分表示や確認用 ZIP から日本語名ファイルが
+  静かに欠落するため。
+- **CLAUDE.md / .gitattributes は配布・提出対象外** (DIST_EXCLUDE_FILES
+  と release.yml / test.yml の zip 除外に追加)。開発用ファイルの除外は
+  3 箇所 (submit.py・release.yml・test.yml) の同期が必要。
 - **参加申請 Issue にオーナー @メンション**を必ず入れる
   (メンションがないと GitHub の通知メールが飛ばないため)。
 - **マネージャー起動.bat は起動前に `git pull --ff-only`**: 常に最新の

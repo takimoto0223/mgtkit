@@ -55,7 +55,8 @@ jobs:
           zip -r "../mgtkit-${VERSION}.zip" . \
             -x '.git/*' -x '.github/*' -x 'tests/*' -x 'docs/*' \
             -x 'scripts/*' -x 'manager/*' -x '.pytest_cache/*' \
-            -x 'pytest.ini' -x 'requirements-dev.txt' -x '.gitignore'
+            -x 'pytest.ini' -x 'requirements-dev.txt' -x '.gitignore' \
+            -x 'CLAUDE.md' -x '.gitattributes'
 
       - name: Releases へ登録
         working-directory: mgtkit
