@@ -167,7 +167,7 @@ def main(page: ft.Page):
         padding=ft.Padding.symmetric(vertical=6, horizontal=12),
         content=ft.Text('', size=13, weight=ft.FontWeight.BOLD,
                         color='#713f12'))
-    # いま使っている版の更新内容 (常設。何が入っている版かを後から確認できる)
+    # 現行版の更新内容 (常設。何が入っている版かを後から確認できる)
     t1_notes_head = ft.Text('', size=13, weight=ft.FontWeight.BOLD,
                             color='#374151')
     t1_notes_body = ft.Text('', size=13, selectable=True, color='#374151')
@@ -192,15 +192,18 @@ def main(page: ft.Page):
 
     page.update = _page_update
 
-    def refresh_local_version():
+    def refresh_local_version(latest=None):
+        """版の見出しを更新する。latest=True のときだけ「(最新)」を添える
+        (取り込み待ちで古い版のまま「最新」と出さないため)."""
         info = updater.local_version_info(stable)
         if info is None:
             t1_version.value = 'アプリはまだ取り込まれていません'
             t1_meta.value = ('初回はアプリの取り込みに数分かかります。'
                              '「起動」を押してそのままお待ちください。')
         else:
-            t1_version.value = ('いま使っている版 %s'
-                                % info.get('version', '?'))
+            t1_version.value = ('現行版 %s%s'
+                                % (info.get('version', '?'),
+                                   ' (最新)' if latest else ''))
             t1_meta.value = '配布日: %s' % info.get('distributed_at', '-')
         page.update()
 
@@ -218,7 +221,7 @@ def main(page: ft.Page):
         return '\n'.join(lines).strip()
 
     def _refresh_current_notes(releases=None):
-        """「いま使っている版の更新内容」の常設表示を最新化する."""
+        """「現行版の更新内容」の常設表示を最新化する."""
         if releases is None:
             cached = reviewcache.get() or reviewcache.load_from_disk(config)
             releases = (cached or {}).get('releases') or []
@@ -228,8 +231,7 @@ def main(page: ft.Page):
         if rel is None:
             t1_notes_box.visible = False
         else:
-            t1_notes_head.value = ('いま使っている版 (%s) の更新内容'
-                                   % rel['tag'])
+            t1_notes_head.value = '現行版 (%s) の更新内容' % rel['tag']
             t1_notes_body.value = (_clean_notes(rel['tag'],
                                                 rel.get('notes'))
                                    or '(更新内容の記載はありません)')
@@ -275,7 +277,7 @@ def main(page: ft.Page):
                                     on_progress=progress)
             _update_state['pending'] = None
             t1_status.value = ''
-            refresh_local_version()
+            refresh_local_version(latest=True)
             _show_updated(latest)
             ok = True
         except Exception:
@@ -316,7 +318,7 @@ def main(page: ft.Page):
                     updater.install_release(repo, pending, stable,
                                             on_progress=progress)
                     _update_state['pending'] = None
-                    refresh_local_version()
+                    refresh_local_version(latest=True)
                     _show_updated(pending)
                 if updater.local_version_info(stable) is None:
                     # 初回: 最新の正式版を自動で取得してから起動する
@@ -334,7 +336,7 @@ def main(page: ft.Page):
                     launcher.stop_app(paths.stable_port(config))
                     updater.install_release(repo, latest, stable,
                                             on_progress=progress)
-                    refresh_local_version()
+                    refresh_local_version(latest=True)
                     _refresh_current_notes()
                 _, url = launcher.launch_app(
                     stable, paths.stable_port(config), channel='stable')
@@ -432,7 +434,7 @@ def main(page: ft.Page):
                     ft.Text(r.get('published_at') or '', size=12,
                             color='#9ca3af')]
             if r['tag'] == local_v:
-                head.append(ft.Text('いま使っている版', size=11,
+                head.append(ft.Text('現行版', size=11,
                                     color='#15803d'))
             head.append(ft.Container(expand=True))
             head.append(ft.OutlinedButton(
@@ -1791,12 +1793,14 @@ def main(page: ft.Page):
                 else:
                     # 取り込み待ち中も「いつ確認したか」は残す
                     t1_fresh.value = '更新の確認: %s' % now_hm
+                    refresh_local_version(latest=False)
             elif time.time() >= _pending_release['until']:
                 # 最新の状態: 取り込み予約や古い案内が残っていれば消す
                 _update_state['pending'] = None
                 if t1_notice.value:
                     t1_notice.value = ''
                 t1_fresh.value = '最新の状態です (%s 確認)' % now_hm
+                refresh_local_version(latest=True)
             page.update()
         run_bg(work)
         if reschedule:
