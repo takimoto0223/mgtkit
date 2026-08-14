@@ -16,9 +16,10 @@ import flet as ft
 
 import webbrowser
 
-from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
-               localstate, paths, reviewcache, reviews, rocketfx,
-               selfupdate, settings, submit, updater, usage)
+from . import (autofix, conflicts, diffview, feedback, ghcli, history,
+               historyview, launcher, localstate, paths, reviewcache,
+               reviews, rocketfx, selfupdate, settings, submit, updater,
+               usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -186,9 +187,22 @@ def main(page: ft.Page):
     t1_notes_head = ft.Text('', size=13, weight=ft.FontWeight.BOLD,
                             color='#374151')
     t1_notes_body = ft.Text('', size=13, selectable=True, color='#374151')
+    # AI が自動で調整した箇所は琥珀色の枠で色分けして見せる
+    t1_notes_ai_body = ft.Text('', size=12.5, selectable=True,
+                               color='#78350f')
+    t1_notes_ai_box = ft.Container(
+        visible=False, bgcolor='#fffbeb', border_radius=8,
+        border=ft.Border.all(1.5, '#f59e0b'),
+        padding=ft.Padding.symmetric(vertical=10, horizontal=12),
+        content=ft.Column([
+            ft.Text('AI が自動で調整した箇所', size=12.5,
+                    weight=ft.FontWeight.BOLD, color='#92400e'),
+            t1_notes_ai_body,
+        ], spacing=6, tight=True))
     t1_notes_box = ft.Container(
         visible=False, bgcolor='#f5f7fa', border_radius=6, padding=12,
-        content=ft.Column([t1_notes_head, t1_notes_body], spacing=6))
+        content=ft.Column([t1_notes_head, t1_notes_body, t1_notes_ai_box],
+                          spacing=6))
     t1_launch_btn = ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
                                     bgcolor=NAVY, color='#ffffff')
     # installing: 自動更新の実行中 (二重実行と起動の衝突を防ぐ) /
@@ -247,9 +261,11 @@ def main(page: ft.Page):
             t1_notes_box.visible = False
         else:
             t1_notes_head.value = '現行版 (%s) の更新内容' % rel['tag']
-            t1_notes_body.value = (_clean_notes(rel['tag'],
-                                                rel.get('notes'))
-                                   or '(更新内容の記載はありません)')
+            normal, ai = history.split_ai_note(
+                _clean_notes(rel['tag'], rel.get('notes')))
+            t1_notes_body.value = normal or '(更新内容の記載はありません)'
+            t1_notes_ai_body.value = ai or ''
+            t1_notes_ai_box.visible = bool(ai)
             t1_notes_box.visible = True
         page.update()
 
@@ -445,79 +461,337 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
-    def _history_rows(releases, dlg_status):
-        """更新ログの版ごとの行。内容は 2 行に畳み、行タップで全文表示."""
-        local_v = (updater.local_version_info(stable) or {}).get('version')
-        rows = []
-        for r in [x for x in releases if not x['prerelease']]:
-            note = ft.Text(_clean_notes(r['tag'], r.get('notes'))
-                           or '(更新内容の記載はありません)',
-                           size=12, color='#555555', selectable=True,
-                           max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
+    def _person_dot(color):
+        return ft.Container(width=11, height=11, border_radius=6,
+                            bgcolor=color)
 
-            def toggle(_, note=note):
-                note.max_lines = None if note.max_lines else 2
-                page.update()
+    def _stable_summary(s):
+        """一覧行の 1 行概要 (提出タイトル。無ければノートの先頭行)."""
+        if s['pr']:
+            return s['pr'].get('title') or ''
+        note = _clean_notes(s['tag'],
+                            (s['release'].get('notes') or '')) or ''
+        first = note.strip().splitlines()
+        return (first[0].lstrip('-· ').strip() if first else '') or '配布'
 
-            head = [ft.Text(r['tag'], size=14, weight=ft.FontWeight.BOLD,
-                            color=NAVY),
-                    ft.Text(r.get('published_at') or '', size=12,
-                            color='#9ca3af')]
-            if r['tag'] == local_v:
-                head.append(ft.Text('現行版', size=11,
-                                    color='#15803d'))
-            head.append(ft.Container(expand=True))
-            head.append(ft.OutlinedButton(
+    # 過去の更新ログの「図へ戻る」用 (開いている図と一覧への参照)
+    _history_ctx = {'body_col': None, 'fig': None}
+
+    def _show_history_detail(kind, payload, tl):
+        """帯・ノード・一覧の行から開く更新内容 (リリースノート) の画面.
+
+        ZIP の保存ボタンはこの画面に置く (図の中には置かない)。
+        """
+        authors = tl['authors']
+        chip_by_target = {c['target_tag']: c for c in tl['chips']
+                          if not c['pending']}
+        st = ft.Text('', size=12, color='#555555', selectable=True)
+
+        if kind == 'chip' and payload['pending']:
+            c = payload
+            color = history.person_color(c['author'], authors)
+            meta = ('%s #%s · %s を基に作成 · %s 提出'
+                    % (c['author'], c['number'], c['base_tag'] or '?',
+                       history.fmt_date(c['start'], with_year=True)))
+            content = [
+                ft.Row([_person_dot(color),
+                        ft.Text(meta, size=12, color='#475569',
+                                expand=True)], spacing=8),
+                ft.Text(c['title'], size=13, color='#374151',
+                        selectable=True),
+                ft.Container(
+                    bgcolor='#fef3c7', border_radius=8,
+                    padding=ft.Padding.symmetric(vertical=6, horizontal=10),
+                    content=ft.Text('確認と承認の途中です。承認がそろって'
+                                    '取り込まれると、正式版として公開'
+                                    'されます。', size=12,
+                                    color='#92400e')),
+            ]
+            title = '提出 #%s の内容' % c['number']
+        else:
+            if kind == 'chip':
+                s = next((x for x in tl['stables']
+                          if x['tag'] == payload['target_tag']), None)
+                if s is None:
+                    return
+            else:
+                s = payload
+            c = chip_by_target.get(s['tag'])
+            rel = s['release']
+            title = '%s の更新内容' % s['tag']
+            if c:
+                color = history.person_color(c['author'], authors)
+                meta = ('%s #%s · %s を基に作成 · %s 提出 → %s 公開'
+                        % (c['author'], c['number'], c['base_tag'] or '?',
+                           history.fmt_date(c['start'], with_year=True),
+                           history.fmt_date(c['end'])))
+            else:
+                color = '#94a3b8'
+                meta = '%s 公開' % history.fmt_date(s['date'],
+                                                    with_year=True)
+            normal, ai = history.split_ai_note(
+                _clean_notes(s['tag'], rel.get('notes')))
+            content = [
+                ft.Row([_person_dot(color),
+                        ft.Text(meta, size=12, color='#475569',
+                                expand=True)], spacing=8),
+                ft.Text(normal or '(更新内容の記載はありません)',
+                        size=13, color='#374151', selectable=True),
+            ]
+            if ai:
+                # AI が自動で調整した箇所は琥珀色の枠で色分けして残す
+                content.append(ft.Container(
+                    bgcolor='#fffbeb', border_radius=8,
+                    border=ft.Border.all(1.5, '#f59e0b'),
+                    padding=ft.Padding.symmetric(vertical=10, horizontal=12),
+                    content=ft.Column([
+                        ft.Text('AI が自動で調整した箇所', size=12.5,
+                                weight=ft.FontWeight.BOLD,
+                                color='#92400e'),
+                        ft.Text(ai, size=12, color='#78350f',
+                                selectable=True),
+                    ], spacing=6, tight=True)))
+            content.append(ft.Row([
+                ft.OutlinedButton(
+                    'ZIP を保存', icon=ft.Icons.DOWNLOAD,
+                    on_click=_download_history_zip(rel, st)),
+                st,
+            ], spacing=10))
+            content.append(ft.Text(
+                '提出済みの計算書を当時の版で再現したいときは、この版の'
+                ' ZIP を保存して使ってください。', size=11,
+                color='#4b5563'))
+
+        def close_all(_):
+            page.pop_dialog()   # この画面
+            page.pop_dialog()   # 背後の過去の更新ログ
+            page.update()
+
+        def back_to_figure(_):
+            page.pop_dialog()
+            page.update()
+
+            async def back_scroll():
+                # 「図へ」の約束どおり、図 (現行版の位置) まで戻す
+                await asyncio.sleep(0.45)
+                try:
+                    body = _history_ctx.get('body_col')
+                    if body is not None:
+                        await body.scroll_to(offset=0, duration=10)
+                    fig = _history_ctx.get('fig')
+                    if fig:
+                        await fig['scroll_row'].scroll_to(
+                            offset=fig['initial_offset'], duration=10)
+                except Exception:
+                    log.debug('図へ戻るスクロールに失敗 (表示には影響'
+                              'なし)', exc_info=True)
+            page.run_task(back_scroll)
+
+        # 中身の量に高さを合わせる (長いノートだけスクロールにする)
+        def _est_lines(text):
+            return sum(max(1, len(line) // 40 + 1)
+                       for line in (text or '').splitlines() or [''])
+
+        if kind == 'chip' and payload['pending']:
+            est_h = 200
+        else:
+            est_h = 130 + _est_lines(normal) * 19
+            if ai:
+                est_h += 62 + _est_lines(ai) * 17
+        page.show_dialog(ft.AlertDialog(
+            title=ft.Text(title),
+            content=ft.Column(content, width=560, tight=True, spacing=10,
+                              height=min(430, est_h),
+                              scroll=ft.ScrollMode.AUTO),
+            actions=[
+                ft.TextButton('図へ戻る', on_click=back_to_figure),
+                ft.TextButton('閉じる', on_click=close_all),
+            ]))
+        page.update()
+
+    def _tl_rows(tl, local_v, dlg_status, open_detail):
+        """図の下の一覧 (公開済み + 確認と承認の途中)."""
+        authors = tl['authors']
+        chip_by_target = {c['target_tag']: c for c in tl['chips']
+                          if not c['pending']}
+        rows = [ft.Text('公開済み (新しい順)', size=11.5,
+                        weight=ft.FontWeight.BOLD, color='#4b5563')]
+
+        def row(children, bgcolor, on_click=None, border=None):
+            return ft.Container(
+                bgcolor=bgcolor, border_radius=8, on_click=on_click,
+                border=border or ft.Border.all(1, '#e5e7eb'),
+                padding=ft.Padding.symmetric(vertical=6, horizontal=10),
+                content=ft.Row(children, spacing=8))
+
+        for s in reversed(tl['stables']):
+            c = chip_by_target.get(s['tag'])
+            color = (history.person_color(c['author'], authors)
+                     if c else '#94a3b8')
+            cells = [
+                _person_dot(color),
+                ft.Text(c['author'] if c else '—', size=12,
+                        color='#374151', width=64, max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text(s['tag'], size=12.5, weight=ft.FontWeight.BOLD,
+                        color=NAVY, width=42),
+                ft.Text('#%s' % c['number'] if c else '—', size=12,
+                        color='#475569', width=38),
+                ft.Text(_stable_summary(s), size=12.5, color='#374151',
+                        expand=True, max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS),
+            ]
+            is_cur = s['tag'] == local_v
+            if is_cur:
+                cells.append(ft.Container(
+                    bgcolor='#fef08a', border_radius=8,
+                    padding=ft.Padding.symmetric(vertical=2, horizontal=7),
+                    content=ft.Text('現行版', size=10.5,
+                                    weight=ft.FontWeight.BOLD,
+                                    color='#713f12')))
+            if c:
+                dates = '%s → %s 公開' % (
+                    history.fmt_date(c['start'], with_year=True),
+                    history.fmt_date(c['end']))
+            else:
+                dates = '%s 公開' % history.fmt_date(s['date'],
+                                                     with_year=True)
+            cells.append(ft.Text(dates, size=11, color='#475569'))
+            cells.append(ft.OutlinedButton(
                 'ZIP を保存', icon=ft.Icons.DOWNLOAD,
-                on_click=_download_history_zip(r, dlg_status)))
-            rows.append(ft.Container(
-                bgcolor='#f5f7fa', border_radius=6, padding=12,
-                on_click=toggle,
-                content=ft.Column([ft.Row(head, spacing=10), note],
-                                  spacing=6)))
-        if not rows:
-            rows = [ft.Text('過去の更新ログはまだありません。', size=13,
-                            color='#555555')]
+                on_click=_download_history_zip(s['release'], dlg_status)))
+            side = ft.BorderSide(1, '#e5e7eb')
+            cur_border = ft.Border(left=ft.BorderSide(4, '#facc15'),
+                                   top=side, right=side, bottom=side)
+            rows.append(row(
+                cells, '#fefce8' if is_cur else '#ffffff',
+                on_click=(lambda _, s=s: open_detail('stable', s)),
+                border=(cur_border if is_cur else None)))
+
+        pend = [c for c in tl['chips'] if c['pending']]
+        if pend:
+            rows.append(ft.Text('確認と承認の途中 (まだ配れません)',
+                                size=11.5, weight=ft.FontWeight.BOLD,
+                                color='#4b5563'))
+        for c in pend:
+            color = history.person_color(c['author'], authors)
+            rows.append(row([
+                _person_dot(color),
+                ft.Text(c['author'], size=12, color='#374151', width=64,
+                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text('—', size=12.5, color='#9ca3af', width=42),
+                ft.Text('#%s' % c['number'], size=12, color='#475569',
+                        width=38),
+                ft.Text(c['title'], size=12.5, color='#374151',
+                        expand=True, max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Container(
+                    bgcolor='#fef3c7', border_radius=8,
+                    padding=ft.Padding.symmetric(vertical=2, horizontal=7),
+                    content=ft.Text('確認中', size=10.5,
+                                    weight=ft.FontWeight.BOLD,
+                                    color='#92400e')),
+                ft.Text('%s 提出' % history.fmt_date(c['start'],
+                                                     with_year=True),
+                        size=11, color='#475569'),
+                ft.OutlinedButton('ZIP を保存', icon=ft.Icons.DOWNLOAD,
+                                  disabled=True,
+                                  tooltip='正式版として公開されると'
+                                          '保存できます'),
+            ], '#fafafa', on_click=(lambda _, c=c:
+                                    open_detail('chip', c))))
         return rows
 
     def on_show_history(_):
-        """過去の更新ログ (正式版ごとのリリースノート + ZIP 保存)."""
+        """過去の更新ログ: 誰がどの版を基に作りどこで正式版になったかの
+        時系列図 + 一覧。行・帯を押すと更新内容 (ZIP 保存はそこ)."""
+        data = reviewcache.get() or reviewcache.load_from_disk(config)
+        if data is None or data.get('merged') is None:
+            # 手元に材料がない (または古い形式) → その場で一括取得
+            body = ft.Column([ft.Text('過去の更新ログを読み込んで'
+                                      'います...', size=13,
+                                      color='#555555')],
+                             width=640, height=120)
+            page.show_dialog(ft.AlertDialog(
+                title=ft.Text('過去の更新ログ'), content=body,
+                actions=[ft.TextButton(
+                    '閉じる', on_click=lambda _: page.pop_dialog())]))
+            page.update()
+
+            def work():
+                try:
+                    fresh = _fetch_review_snapshot()
+                except (reviews.ReviewError, ghcli.GhError) as e:
+                    body.controls = [ft.Text(str(e), size=13,
+                                             color='#b91c1c')]
+                    page.update()
+                    return
+                if fresh is not None:
+                    _open_history_dialog(fresh)
+            run_bg(work)
+            return
+        _open_history_dialog(data)
+
+    def _open_history_dialog(data):
+        today = datetime.date.today()
+        local_v = (updater.local_version_info(stable) or {}).get('version')
+        tl = history.build_timeline(data.get('releases') or [],
+                                    data.get('merged') or [],
+                                    data.get('pending') or [],
+                                    today=today)
         dlg_status = ft.Text('', size=12, color='#555555', selectable=True)
-        body = ft.Column([ft.Text('読み込んでいます...', size=13,
-                                  color='#555555')],
-                         height=330, scroll=ft.ScrollMode.AUTO, tight=True)
+
+        def open_detail(kind, payload):
+            _show_history_detail(kind, payload, tl)
+
+        fig = historyview.build_figure(
+            tl, local_v, today, open_detail,
+            font_family=getattr(page.theme, 'font_family', None))
+        controls = []
+        if fig:
+            controls.append(fig['control'])
+            controls.append(ft.Text(
+                '読み方: 本線の丸 = 正式版 (大きい丸 = 現行版) · 丸から'
+                '斜めの線が刺さる帯 = その版を基に提出された更新 (色 = '
+                '提出した人、左端 = 提出した日) · 帯から本線へ上がる矢印が'
+                '届いた点 = 正式版として公開 · 点線の帯 = まだ確認中 · '
+                '同じ時期の提出は上下に分かれます',
+                size=11, color='#4b5563'))
+            controls.append(ft.Text(
+                '操作: ◀▶ か横スクロールで過去の版へ · 帯や丸にマウスを'
+                '乗せると要約 · 押すと更新内容が開きます (ZIP 保存は'
+                'その画面から)',
+                size=11, color='#4b5563'))
+        else:
+            controls.append(ft.Text('過去の更新ログはまだありません。',
+                                    size=13, color='#555555'))
+        controls += _tl_rows(tl, local_v, dlg_status, open_detail)
+        controls.append(ft.Text(
+            '直近の 30 件までを表示しています。それより前の版が必要な'
+            'ときは管理者に相談してください。', size=11, color='#6b7280'))
+        controls.append(dlg_status)
+        body_col = ft.Column(controls, width=640, height=440, spacing=8,
+                             scroll=ft.ScrollMode.AUTO, tight=True)
+        _history_ctx['body_col'] = body_col
+        _history_ctx['fig'] = fig
         page.show_dialog(ft.AlertDialog(
             title=ft.Text('過去の更新ログ'),
-            content=ft.Column([
-                ft.Text('提出済みの計算書を当時の版で再現したいときなどに、'
-                        'その版の一式 (ZIP) を保存できます。', size=12,
-                        color='#555555'),
-                body,
-                ft.Text('直近の 30 件までを表示しています。それより前の版が'
-                        '必要なときは管理者に相談してください。', size=11,
-                        color='#9ca3af'),
-                dlg_status,
-            ], width=560, tight=True, spacing=8),
+            content=body_col,
             actions=[ft.TextButton('閉じる',
                                    on_click=lambda _: page.pop_dialog())]))
-        cached = reviewcache.get() or reviewcache.load_from_disk(config)
-        releases = (cached or {}).get('releases')
-        if releases is not None:
-            body.controls = _history_rows(releases, dlg_status)
-            page.update()
-            return
-
-        def work():
-            # 起動直後などでまだ手元に一覧がなければ、その場で取得する
-            try:
-                rel = ghcli.fetch_releases(repo)
-            except ghcli.GhError as e:
-                body.controls = [ft.Text(str(e), size=13, color='#b91c1c')]
-                page.update()
-                return
-            body.controls = _history_rows(rel, dlg_status)
-            page.update()
-        run_bg(work)
+        page.update()
+        if fig:
+            async def scroll_to_current():
+                # 描画が終わってから現行版が見える位置へスクロールする
+                # (scroll_to は async のためページのループで実行する)
+                await asyncio.sleep(0.25)
+                try:
+                    await fig['scroll_row'].scroll_to(
+                        offset=fig['initial_offset'], duration=100)
+                except Exception:
+                    log.debug('初期スクロールに失敗 (表示には影響なし)',
+                              exc_info=True)
+            page.run_task(scroll_to_current)
 
     # 並び: 版情報 → ボタン (位置固定) → 状態・通知 → 更新内容 (常設)。
     # 通知の有無で「起動」ボタンの位置が動かないようにする
@@ -1665,7 +1939,8 @@ def main(page: ft.Page):
         seq = reviewcache.next_seq()
         snap = reviews.fetch_snapshot(config, on_progress=on_progress)
         return reviewcache.put(snap['pending'], snap['releases'],
-                               snap['me'], seq=seq, config=config)
+                               snap['me'], seq=seq, config=config,
+                               merged=snap.get('merged'))
 
     def on_refresh_reviews(_):
         """一覧の再描画。手元にある前回の取得結果を即座に表示し、

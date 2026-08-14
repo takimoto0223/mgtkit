@@ -287,6 +287,18 @@ _GRAPHQL_SNAPSHOT = {
                  'reviews': {'nodes': []}, 'comments': {'nodes': []},
                  'commits': {'nodes': []}},
             ]},
+            'merged': {'nodes': [
+                {'number': 29, 'title': '合成梁の検討を追加',
+                 'headRefName': 'feature/yamada-20260801-1',
+                 'createdAt': '2026-08-01T09:00:00Z',
+                 'mergedAt': '2026-08-04T10:00:00Z',
+                 'author': {'login': 'yamada'}},
+                {'number': 30, 'title': 'マネージャー修正',
+                 'headRefName': 'claude/app-manager-y',
+                 'createdAt': '2026-08-02T09:00:00Z',
+                 'mergedAt': '2026-08-03T10:00:00Z',
+                 'author': {'login': 't'}},
+            ]},
             'releases': {'nodes': [
                 {'tagName': 'v1.1-beta.1', 'name': 'v1.1-beta.1',
                  'isPrerelease': True, 'isDraft': False,
@@ -344,6 +356,13 @@ class TestFetchSnapshot:
              'prerelease': True, 'notes': '提出 #33 の検証通過版です。',
              'published_at': '2026-08-05',
              'assets': [{'name': 'mgtkit.zip', 'url': 'http://x/z'}]}]
+        # 済み提出は feature/ ブランチのみ・図に必要な要約だけ
+        assert snap['merged'] == [
+            {'number': 29, 'title': '合成梁の検討を追加',
+             'author': 'yamada', 'created_at': '2026-08-01',
+             'merged_at': '2026-08-04'}]
+        # 承認待ちにも提出日が入る (図の帯の左端に使う)
+        assert 'created_at' in pr
 
     def test_falls_back_to_rest_on_graphql_error(self, monkeypatch):
         import json as _json
@@ -396,7 +415,8 @@ class TestFetchSnapshot:
 
         monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
         snap = reviews.fetch_snapshot({'repo': 'o/r'})
-        assert snap == {'pending': [], 'releases': [], 'me': 'yamada'}
+        assert snap == {'pending': [], 'releases': [], 'me': 'yamada',
+                        'merged': []}
 
 
 class TestRejectedFinal:
