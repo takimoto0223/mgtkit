@@ -20,7 +20,7 @@ from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
                submit, updater, usage)
 from .gitcli import GitError
 
-UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
+UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -64,6 +64,8 @@ def main(page: ft.Page):
     def set_badge(badge, count):
         badge.content.value = '99+' if count > 99 else str(count)
         badge.visible = count > 0
+        badge.bgcolor = '#facc15'
+        badge.tooltip = None
 
     def on_show_usage(_):
         """API 利用量ダイアログ (月小計 + 30日グラフ + 日別 + 通算合計)."""
@@ -797,14 +799,12 @@ def main(page: ft.Page):
             if not (state['anim'] and state['net']):
                 return
             if state['ok']:
-                # キラッのあと: 更新タブのバッジを立て、リリースの公開
-                # (数分かかる) を裏で見張って通知バナーも自動更新する
-                set_badge(update_badge, 1)
-                page.update()
+                # キラッのあと: バッジを「準備中」にし、リリースの公開
+                # (数分かかる) を裏で見張って公開されたら黄色に切り替える
                 _watch_new_release()
             on_refresh_reviews(None)
 
-        _play_launch(done=lambda: _finish('anim'))
+        _play_launch(pr_number, done=lambda: _finish('anim'))
         try:
             result = reviews.release(pr['number'], config,
                                      on_progress=_t5_progress)
@@ -819,26 +819,30 @@ def main(page: ft.Page):
         _finish('net')
         return True
 
-    # 発射・爆発の基点 = ボタン列末尾のロケット定位置 (1 枚目のカード。
-    # ボタン列は左詰めなのでウィンドウ幅に依存しない)
-    def _rocket_base():
-        return 472, 410
+    def _rocket_base(pr_number):
+        """発射・爆発の基点 = そのカードのボタン行右端のロケット位置.
+
+        一覧描画時にカードごとの推定 y を _rocket_pos に入れてある。
+        x はロケットが右寄せなのでウィンドウ幅から確定する。
+        """
+        w = int(page.width or 760)
+        return _rocket_pos.get(pr_number, (w - 49, 410))
 
     def _hide_zone(pr_number):
         zone = _rocket_zones.get(pr_number)
         if zone is not None:
             zone.visible = False
 
-    def _play_launch(done=None):
+    def _play_launch(pr_number, done=None):
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
         弧を描いて「更新」タブへ → ✨ と弾けて消える."""
-        sx, sy = _rocket_base()
+        sx, sy = _rocket_base(pr_number)
         rocketfx.play_launch(page, sx, sy, done=done)
 
-    def _play_crash(done=None):
+    def _play_crash(pr_number, done=None):
         """却下確定演出 (rocketfx): ぐらつき → 転倒 → 爆発と同時に
         パーツ分解 → 破片が放物線で散乱."""
-        sx, sy = _rocket_base()
+        sx, sy = _rocket_base(pr_number)
         rocketfx.play_crash(page, sx, sy, done=done)
 
     def on_cancel_review(pr):
@@ -847,6 +851,10 @@ def main(page: ft.Page):
             def work():
                 try:
                     reviews.cancel_my_review(pr['number'], config)
+                    # 却下確定が解けたときのため、非表示・自動畳みの記録を
+                    # 掃除する (再び確定したらまた自動で畳める)
+                    localstate.unhide_pr(pr['number'], config)
+                    localstate.unmark_auto_folded(pr['number'], config)
                     t5_status.value = ('#%d への承認・却下を取り消しました。'
                                        % pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
@@ -896,6 +904,7 @@ def main(page: ft.Page):
                                 >= reviews.required_approvals(config)):
                             _hide_zone(pr['number'])
                             _play_crash(
+                                pr['number'],
                                 done=lambda: on_refresh_reviews(None))
                         else:
                             on_refresh_reviews(None)
@@ -1026,6 +1035,10 @@ def main(page: ft.Page):
     _rocket_zones = {}
     # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
     _auto_release_tried = set()
+    # 発射・爆発の基点 (一覧描画時にカードごとの推定位置を入れる)
+    _rocket_pos = {}
+    # リリース公開待ちの期限 (この間は定期チェックが更新バッジを消さない)
+    _pending_release = {'until': 0.0}
 
     def _rocket_zone(pr, n_req):
         """ボタン列末尾の常駐ロケット。承認・却下の進み具合を演出で表す.
@@ -1045,9 +1058,8 @@ def main(page: ft.Page):
         if anim is not None:
             # 開いたときに一度だけ再生 (page.update を渡す)
             _rocket_anims.append(lambda fn=anim: fn(page.update))
-        # ボタンと少し間を空けて置く。演出中に隠せるよう登録しておく
-        wrapper = ft.Container(content=control,
-                               margin=ft.Margin.only(left=12))
+        # 演出中に隠せるよう登録しておく (操作ボタンとは spacer で分離)
+        wrapper = ft.Container(content=control)
         _rocket_zones[pr['number']] = wrapper
         return wrapper
 
@@ -1167,8 +1179,10 @@ def main(page: ft.Page):
             else:
                 buttons.append(ft.OutlinedButton('却下',
                                                  on_click=on_reject(pr)))
-        # ロケットはボタン列の末尾に常駐 (かつてのリリースボタンの位置。
-        # リリースは承認がそろった時点で自動実行されるためボタンは廃止)
+        # ロケットはボタン行の右端に常駐 (かつてのリリースボタン位置。
+        # リリースは承認がそろった時点で自動実行されるためボタンは廃止。
+        # 右寄せにすることで発射・爆発の基点座標が幅から確定する)
+        buttons.append(ft.Container(expand=True))
         buttons.append(_rocket_zone(pr, n_req))
         if locked:
             # カード情報は薄く、案内文だけ明るく表示する
@@ -1186,7 +1200,7 @@ def main(page: ft.Page):
             lines.append(ft.Row(buttons, spacing=8))
             content = ft.Column(lines, spacing=6)
         return ft.Container(bgcolor='#f5f7fa', border_radius=6, padding=12,
-                            opacity=0.55 if final else 1.0,
+                            opacity=0.72 if final else 1.0,
                             content=content)
 
     def _beta_for(pr_number, betas):
@@ -1231,13 +1245,26 @@ def main(page: ft.Page):
             if not visible:
                 t5_list.controls.append(
                     ft.Text('確認・承認待ちの提出はありません', size=14))
+            # カードごとの発射・爆発基点を推定 (行数からの概算で十分)
+            _rocket_pos.clear()
+            w = int(page.width or 760)
+            y = 268 + (22 if w < 900 else 0)   # 説明文の折り返しぶん
             for pr in visible:
+                extra = 0
+                if pr['approved'] and not pr.get('rejected_final'):
+                    extra += 1                  # 承認済み: ... の行
+                extra += len(pr['rejected'])    # 差し戻しコメントの行
+                if pr['conflicting'] and not pr.get('rejected_final'):
+                    extra += 2                  # 統合待ちの案内文
+                h = 121 + 24 * extra
+                _rocket_pos[pr['number']] = (w - 49, y + h - 33)
+                y += h + 10
                 t5_list.controls.append(
                     _review_row(pr, me, _beta_for(pr['number'], betas)))
             if folded:
                 # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
                 t5_list.controls.append(ft.Text(
-                    '非表示にした提出 (却下確定)', size=12,
+                    '却下が確定した提出 (自動で畳みました)', size=12,
                     color='#9ca3af'))
                 for pr in folded:
                     t5_list.controls.append(ft.Row([
@@ -1254,14 +1281,12 @@ def main(page: ft.Page):
             # 描画後にロケット演出 (点火・煙) を一度だけ再生
             anims = _rocket_anims[:]
             _rocket_anims.clear()
-            if anims:
-                def play():
-                    for fn in anims:
-                        try:
-                            fn()
-                        except Exception:
-                            log.debug('ロケット演出をスキップ',
-                                      exc_info=True)
+            for fn in anims:
+                def play(fn=fn):
+                    try:
+                        fn()
+                    except Exception:
+                        log.debug('ロケット演出をスキップ', exc_info=True)
                 run_bg(play)
             # リリースボタン廃止に伴い、承認がそろったまま未リリースの
             # 提出 (2 人目の承認時に自動リリースできなかったもの) は
@@ -1324,24 +1349,41 @@ def main(page: ft.Page):
         """リリース公開 (数分かかる) を見張り、公開されたら通知を更新する.
 
         リリース直後は Releases の公開処理が終わっておらず即時チェック
-        では「更新なし」になるため、20 秒間隔で最大 10 分確認する。
+        では「更新なし」になるため、バッジは「準備中」(グレーの…) で
+        すぐ反応を返し、公開を確認できたら黄色の件数に切り替える。
+        最初の 1 分は 10 秒間隔・以降 30 秒間隔で最大 10 分見張る。
         """
+        _pending_release['until'] = time.time() + 10 * 60
+        update_badge.content.value = '…'
+        update_badge.bgcolor = '#cbd5e1'
+        update_badge.tooltip = '新しい正式版を準備中です (数分かかります)'
+        update_badge.visible = True
+        page.update()
+
         def work():
-            deadline = time.time() + 10 * 60
-            while time.time() < deadline:
+            start = time.time()
+            while time.time() < _pending_release['until']:
+                time.sleep(10 if time.time() - start < 60 else 30)
                 try:
                     result = updater.check_update(repo, stable)
                 except Exception:
                     result = None
                 if (result and result['has_update']
                         and result['latest'] is not None):
+                    _pending_release['until'] = 0.0
                     t1_notice.value = ('新しい安定版 %s があります。'
                                        '「更新」タブから更新してください。'
                                        % result['latest']['tag'])
                     set_badge(update_badge, 1)
                     page.update()
                     return
-                time.sleep(20)
+            # 期限切れ: 黙って消さず、確認方法を案内する
+            _pending_release['until'] = 0.0
+            set_badge(update_badge, 0)
+            t1_notice.value = ('リリースの公開確認ができませんでした。'
+                               'しばらくしてから「更新」タブの'
+                               '「更新を確認」を押してください。')
+            page.update()
         run_bg(work)
 
     def check_update_notice(reschedule=True):
@@ -1356,7 +1398,7 @@ def main(page: ft.Page):
                                    'から更新してください。'
                                    % result['latest']['tag'])
                 set_badge(update_badge, 1)
-            else:
+            elif time.time() >= _pending_release['until']:
                 t1_notice.value = ''
                 set_badge(update_badge, 0)
             try:

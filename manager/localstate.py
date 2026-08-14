@@ -74,6 +74,15 @@ def mark_auto_folded(number, config=None):
     _save(data, config)
 
 
+def unmark_auto_folded(number, config=None):
+    """自動で畳んだ記録を消す (却下取り消しで確定が解けたとき用)."""
+    nums = auto_folded(config)
+    nums.discard(int(number))
+    data = _load(config)
+    data['auto_folded'] = sorted(nums)
+    _save(data, config)
+
+
 def prune_hidden(open_numbers, config=None):
     """クローズ済みの提出の非表示・自動畳み記録を掃除する."""
     open_set = {int(n) for n in open_numbers}

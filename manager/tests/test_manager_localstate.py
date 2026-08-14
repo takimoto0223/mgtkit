@@ -42,6 +42,15 @@ class TestHiddenPrs:
         localstate.prune_hidden([40], cfg)  # クローズされたら掃除
         assert localstate.auto_folded(cfg) == set()
 
+    def test_unmark_auto_folded(self, tmp_path):
+        # 却下取り消しで確定が解けたら記録を消し、再確定でまた畳める
+        cfg = _config(tmp_path)
+        localstate.mark_auto_folded(33, cfg)
+        localstate.unmark_auto_folded(33, cfg)
+        assert localstate.auto_folded(cfg) == set()
+        localstate.unmark_auto_folded(99, cfg)  # 記録がない番号は無視
+        assert localstate.auto_folded(cfg) == set()
+
     def test_broken_file_is_ignored(self, tmp_path):
         cfg = _config(tmp_path)
         (tmp_path / 'local_state.json').write_text('not json',
