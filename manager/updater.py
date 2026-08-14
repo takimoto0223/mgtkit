@@ -16,14 +16,17 @@ def local_version_info(instance_dir):
     return versions.read_version_json(paths.app_dir(instance_dir))
 
 
-def check_update(repo, instance_dir):
+def check_update(repo, instance_dir, releases=None):
     """更新確認。戻り値: dict(local, latest, has_update, releases).
 
     local: version.json の dict または None
     latest: 最新正式版リリース dict または None
     has_update: 取得すべき新しい正式版があるか
+    releases: 取得済みのリリース一覧。渡されたら再取得しない
+    (他の処理と同時に更新確認するときの二重取得を防ぐ)。
     """
-    releases = ghcli.fetch_releases(repo)
+    if releases is None:
+        releases = ghcli.fetch_releases(repo)
     latest = ghcli.latest_stable(releases)
     local = local_version_info(instance_dir)
     has_update = False

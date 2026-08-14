@@ -163,6 +163,17 @@ class TestCheckUpdate:
         assert r['latest'] is None
         assert r['has_update'] is False
 
+    def test_preloaded_releases_skip_fetch(self, monkeypatch, tmp_path):
+        """取得済みの一覧を渡したら GitHub へ取りに行かない."""
+        def boom(repo, limit=30):
+            raise AssertionError('fetch_releases が呼ばれた')
+        monkeypatch.setattr(ghcli, 'fetch_releases', boom)
+        r = updater.check_update('o/r', str(tmp_path), releases=[
+            {'tag': 'v1.2', 'name': 'v1.2', 'prerelease': False,
+             'notes': '', 'published_at': '2026-07-01', 'assets': []}])
+        assert r['has_update'] is True
+        assert r['latest']['tag'] == 'v1.2'
+
 
 def test_manager_main_compiles():
     # flet は CI に入れないため import はせず、構文チェックのみ行う
