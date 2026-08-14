@@ -16,8 +16,8 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
-               localstate, paths, reviews, rocketfx, selfupdate, settings,
-               submit, updater, usage)
+               localstate, paths, reviewcache, reviews, rocketfx,
+               selfupdate, settings, submit, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -752,10 +752,27 @@ def main(page: ft.Page):
 
     def on_approve(pr):
         def handler(_):
+            # 楽観的更新: 押した瞬間に承認済み表示 (バッジ・点火演出) へ
+            # 切り替え、送信は裏で行う。失敗したら取得し直して表示が戻る
+            data = reviewcache.get()
+            me = (data or {}).get('me')
+            optimistic = bool(data is not None and me
+                              and me != pr['author'])
+            if optimistic:
+                pr['approved'] = sorted(set(pr['approved']) | {me})
+                _render_reviews(data, stale=True, animate=True,
+                                status='#%d を承認しました (送信中...)。'
+                                       % pr['number'])
+
             def work():
                 released = False
                 try:
-                    reviews.approve(pr['number'], config)
+                    if not optimistic:
+                        _t5_progress('#%d の承認を送信しています...'
+                                     % pr['number'])
+                    # 提出者は一覧取得時に判明済み。渡して再取得を省く
+                    reviews.approve(pr['number'], config,
+                                    author=pr['author'])
                     t5_status.value = '#%d を承認しました。' % pr['number']
                     page.update()
                     # 必要数に達していたら自動リリース (ロケット発射)
@@ -778,6 +795,7 @@ def main(page: ft.Page):
         更新タブのバッジは ✨ が光ったあとに行う。
         """
         try:
+            _t5_progress('承認がそろったかどうか確認しています...')
             me = reviews.current_user()
             pending = reviews.list_pending(config)
         except (reviews.ReviewError, ghcli.GhError):
@@ -859,6 +877,8 @@ def main(page: ft.Page):
         def handler(_):
             def work():
                 try:
+                    _t5_progress('#%d の取り消しを送信しています...'
+                                 % pr['number'])
                     reviews.cancel_my_review(pr['number'], config)
                     # 却下確定が解けたときのため、非表示・自動畳みの記録を
                     # 掃除する (再び確定したらまた自動で畳める)
@@ -899,27 +919,58 @@ def main(page: ft.Page):
             err = ft.Text('', size=12, color='#b91c1c')
 
             def do_reject(_):
+                comment = (reason.value or '').strip()
+                if not comment:
+                    err.value = '却下には理由の入力が必要です。'
+                    page.update()
+                    return
+                page.pop_dialog()
+                # 楽観的更新: 閉じた瞬間に却下表示 (バッジ・煙/爆発演出)
+                # へ切り替え、送信は裏で行う。失敗したら表示が戻る
+                data = reviewcache.get()
+                me = (data or {}).get('me')
+                optimistic = bool(data is not None and me)
+                n_req = reviews.required_approvals(config)
+                if optimistic:
+                    at = (datetime.datetime.now(datetime.timezone.utc)
+                          .isoformat(timespec='seconds'))
+                    pr['rejected'] = (
+                        [r for r in pr['rejected'] if r['name'] != me]
+                        + [{'name': me, 'comment': comment, 'at': at}])
+                    pr['rejected_final'] = len(pr['rejected']) >= n_req
+                    _render_reviews(data, stale=True, animate=True,
+                                    status='#%d を差し戻しました '
+                                           '(送信中...)。' % pr['number'])
+                    if pr['rejected_final']:
+                        # 押した瞬間に爆発を再生 (畳むのは送信後の更新で)
+                        _hide_zone(pr['number'])
+                        _play_crash(pr['number'])
+
                 def work():
                     try:
-                        reviews.request_changes(pr['number'], reason.value,
+                        if not optimistic:
+                            _t5_progress('#%d の却下を送信しています...'
+                                         % pr['number'])
+                        reviews.request_changes(pr['number'], comment,
                                                 config)
-                        page.pop_dialog()
                         t5_status.value = ('#%d を差し戻しました。'
                                            % pr['number'])
                         page.update()
-                        # 自分の却下で必要数に達したら「転倒→爆発」演出。
-                        # 非表示エリアへ畳むのは爆発が終わってから
-                        if (len(pr['rejected']) + 1
-                                >= reviews.required_approvals(config)):
-                            _hide_zone(pr['number'])
-                            _play_crash(
-                                pr['number'],
-                                done=lambda: on_refresh_reviews(None))
-                        else:
-                            on_refresh_reviews(None)
                     except (reviews.ReviewError, ghcli.GhError) as e:
-                        err.value = str(e)
+                        t5_status.value = str(e)
                         page.update()
+                        on_refresh_reviews(None)  # 楽観的表示を元に戻す
+                        return
+                    # 自分の却下で必要数に達したら「転倒→爆発」演出。
+                    # 非表示エリアへ畳むのは爆発が終わってから
+                    # (楽観的更新のときは押した瞬間に再生済み)
+                    if (not optimistic
+                            and len(pr['rejected']) + 1 >= n_req):
+                        _hide_zone(pr['number'])
+                        _play_crash(pr['number'],
+                                    done=lambda: on_refresh_reviews(None))
+                    else:
+                        on_refresh_reviews(None)
                 run_bg(work)
 
             page.show_dialog(ft.AlertDialog(
@@ -1223,20 +1274,38 @@ def main(page: ft.Page):
                 return r
         return None
 
-    def on_refresh_reviews(_):
-        t5_status.value = '取得中...'
-        page.update()
+    def _fetched_hm(data):
+        """スナップショット取得時刻を「HH:MM」(この PC の時刻) で返す."""
+        try:
+            t = datetime.datetime.fromisoformat(
+                data.get('fetched_at') or '')
+        except (TypeError, ValueError):
+            return ''
+        if t.tzinfo is not None:
+            t = t.astimezone()
+        return t.strftime('%H:%M')
 
-        def work():
-            try:
-                pending = reviews.list_pending(config)
-                me = reviews.current_user()
-                releases = ghcli.fetch_releases(repo)
-            except (reviews.ReviewError, ghcli.GhError) as e:
-                t5_status.value = str(e)
-                page.update()
-                return
-            betas = ghcli.prereleases(releases)
+    # 描画は複数スレッド (ボタン操作・定期更新) から呼ばれるため直列化する
+    _render_lock = threading.Lock()
+
+    def _render_reviews(data, stale=False, animate=None, status=None):
+        """取得済みスナップショットで一覧を描画する.
+
+        stale=True は前回結果の即時表示 (裏の取得で差し替わる前提)。
+        ローカル記録の掃除・自動畳みは最新データの描画 (stale=False) の
+        ときだけ行う。animate はロケット演出の再生 (省略時は最新データの
+        描画のみ再生。楽観的更新の即時描画では True を渡す)。
+        status は状態行の文言の上書き (楽観的更新の「送信中...」など)。
+        """
+        if animate is None:
+            animate = not stale
+        with _render_lock:
+            _render_reviews_locked(data, stale, animate, status)
+
+    def _render_reviews_locked(data, stale, animate, status):
+        pending, me = data['pending'], data['me']
+        betas = ghcli.prereleases(data.get('releases') or [])
+        if not stale:
             # 「非表示」にした却下確定の提出は自分の画面から除く
             # (クローズ済みの記録は掃除する)
             localstate.prune_hidden([p['number'] for p in pending], config)
@@ -1247,58 +1316,69 @@ def main(page: ft.Page):
                 if p.get('rejected_final') and p['number'] not in auto_done:
                     localstate.hide_pr(p['number'], config)
                     localstate.mark_auto_folded(p['number'], config)
-            hidden = localstate.hidden_prs(config)
-            folded = [p for p in pending
-                      if p.get('rejected_final') and p['number'] in hidden]
-            visible = [p for p in pending if p not in folded]
-            set_badge(review_badge, len(visible))
-            _rocket_anims.clear()
-            _rocket_zones.clear()
-            _card_buttons.clear()
-            t5_list.controls.clear()
-            if not visible:
-                t5_list.controls.append(
-                    ft.Text('確認・承認待ちの提出はありません', size=14))
-            # カードごとの発射・爆発基点を推定 (行数からの概算で十分)
-            _rocket_pos.clear()
-            w = int(page.width or 760)
-            # 一覧先頭の y。タブ上部の説明文の行数に依存するため、
-            # 説明文の文言を変えたらこの値も見直すこと
-            y = 283 + (22 if w < 900 else 0)
-            for pr in visible:
-                extra = 0
-                if pr['approved'] and not pr.get('rejected_final'):
-                    extra += 1                  # 承認済み: ... の行
-                extra += len(pr['rejected'])    # 差し戻しコメントの行
-                if pr['conflicting'] and not pr.get('rejected_final'):
-                    extra += 2                  # 統合待ちの案内文
-                h = 104 + 24 * extra            # カード実測からの係数
-                # スクロールで画面外になっても、せめて画面内から発射する
-                by = min(y + h - 33, int(page.height or 640) - 90)
-                _rocket_pos[pr['number']] = (w - 49, by)
-                y += h + 10
-                t5_list.controls.append(
-                    _review_row(pr, me, _beta_for(pr['number'], betas)))
-            if folded:
-                # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
-                t5_list.controls.append(ft.Text(
-                    '却下が確定した提出 (自動で畳みました)', size=12,
-                    color='#9ca3af'))
-                for pr in folded:
-                    t5_list.controls.append(ft.Row([
-                        ft.Image(src=rocketfx.WRECK, width=30, height=13),
-                        ft.Text('#%d %s' % (pr['number'], pr['title']),
-                                size=12, color='#9ca3af', expand=True),
-                        ft.TextButton('一覧に戻す',
-                                      on_click=on_unhide_pr(pr)),
-                    ], spacing=8))
-            # 提出に対応しないβ版はリリース・取り下げ・却下確定の時点で
-            # 自動削除されるため、ここでは表示しない
-            t5_status.value = ''
-            page.update()
-            # 描画後にロケット演出 (点火・煙) を一度だけ再生
-            anims = _rocket_anims[:]
-            _rocket_anims.clear()
+        hidden = localstate.hidden_prs(config)
+        folded = [p for p in pending
+                  if p.get('rejected_final') and p['number'] in hidden]
+        visible = [p for p in pending if p not in folded]
+        set_badge(review_badge, len(visible))
+        _rocket_anims.clear()
+        _rocket_zones.clear()
+        _card_buttons.clear()
+        t5_list.controls.clear()
+        if not visible:
+            t5_list.controls.append(
+                ft.Text('確認・承認待ちの提出はありません', size=14))
+        # カードごとの発射・爆発基点を推定 (行数からの概算で十分)
+        _rocket_pos.clear()
+        w = int(page.width or 760)
+        # 一覧先頭の y。タブ上部の説明文の行数に依存するため、
+        # 説明文の文言を変えたらこの値も見直すこと
+        y = 283 + (22 if w < 900 else 0)
+        for pr in visible:
+            extra = 0
+            if pr['approved'] and not pr.get('rejected_final'):
+                extra += 1                  # 承認済み: ... の行
+            extra += len(pr['rejected'])    # 差し戻しコメントの行
+            if pr['conflicting'] and not pr.get('rejected_final'):
+                extra += 2                  # 統合待ちの案内文
+            h = 104 + 24 * extra            # カード実測からの係数
+            # スクロールで画面外になっても、せめて画面内から発射する
+            by = min(y + h - 33, int(page.height or 640) - 90)
+            _rocket_pos[pr['number']] = (w - 49, by)
+            y += h + 10
+            t5_list.controls.append(
+                _review_row(pr, me, _beta_for(pr['number'], betas)))
+        if folded:
+            # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
+            t5_list.controls.append(ft.Text(
+                '却下が確定した提出 (自動で畳みました)', size=12,
+                color='#9ca3af'))
+            for pr in folded:
+                t5_list.controls.append(ft.Row([
+                    ft.Image(src=rocketfx.WRECK, width=30, height=13),
+                    ft.Text('#%d %s' % (pr['number'], pr['title']),
+                            size=12, color='#9ca3af', expand=True),
+                    ft.TextButton('一覧に戻す',
+                                  on_click=on_unhide_pr(pr)),
+                ], spacing=8))
+        # 提出に対応しないβ版はリリース・取り下げ・却下確定の時点で
+        # 自動削除されるため、ここでは表示しない
+        if status is not None:
+            t5_status.value = status
+        elif stale:
+            age = reviewcache.age_minutes(data)
+            t5_status.value = ('前回の内容を表示中%s。最新を確認して'
+                               'います...'
+                               % (' (%d 分前の取得)' % age if age else ''))
+        else:
+            hm = _fetched_hm(data)
+            t5_status.value = ('最新の状態です'
+                               + (' (%s 取得)' % hm if hm else ''))
+        page.update()
+        # 描画後にロケット演出 (点火・煙) を一度だけ再生
+        anims = _rocket_anims[:]
+        _rocket_anims.clear()
+        if animate:
             for fn in anims:
                 def play(fn=fn):
                     try:
@@ -1306,13 +1386,48 @@ def main(page: ft.Page):
                     except Exception:
                         log.debug('ロケット演出をスキップ', exc_info=True)
                 run_bg(play)
+
+    def _fetch_review_snapshot(on_progress=None):
+        """一覧とリリース一覧を一括取得してスナップショットへ保存する.
+
+        取得は reviews.fetch_snapshot (1 回の一括取得。失敗時は従来経路へ
+        自動フォールバック)。on_progress で進行状況を画面に流せる。
+        戻り値: 採用されたスナップショット。より新しい取得に追い越されて
+        破棄されたときは None。取得失敗は ReviewError / GhError を送出。
+        """
+        seq = reviewcache.next_seq()
+        snap = reviews.fetch_snapshot(config, on_progress=on_progress)
+        return reviewcache.put(snap['pending'], snap['releases'],
+                               snap['me'], seq=seq, config=config)
+
+    def on_refresh_reviews(_):
+        """一覧の再描画。手元にある前回の取得結果を即座に表示し、
+        裏で最新を取得して差し替える (取得を待たせない)。"""
+        cached = reviewcache.get() or reviewcache.load_from_disk(config)
+        if cached is not None:
+            _render_reviews(cached, stale=True)
+        else:
+            _t5_progress('最新の提出状況とβ版・リリースの一覧を確認して'
+                         'います...')
+
+        def work():
+            try:
+                data = _fetch_review_snapshot(on_progress=_t5_progress)
+            except (reviews.ReviewError, ghcli.GhError) as e:
+                t5_status.value = str(e)
+                page.update()
+                return
+            if data is None:
+                return  # より新しい取得に追い越された
+            _render_reviews(data)
             # リリースボタン廃止に伴い、承認がそろったまま未リリースの
             # 提出 (2 人目の承認時に自動リリースできなかったもの) は
-            # タブを開いたときに自動でリリースする (発射演出つき)
-            for p in visible:
+            # 最新の取得結果に基づき自動でリリースする (発射演出つき)。
+            # 楽観的表示 (stale 描画) からは発火しない
+            for p in data['pending']:
                 if (p['number'] not in _auto_release_tried
                         and not p.get('rejected_final')
-                        and reviews.can_release(p, config, me)):
+                        and reviews.can_release(p, config, data['me'])):
                     _auto_release_tried.add(p['number'])
                     _try_auto_release(p['number'])
                     break
@@ -1328,7 +1443,7 @@ def main(page: ft.Page):
         ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
                 'ため、通常の作業には影響しません。', size=12,
                 color='#555555'),
-        ft.OutlinedButton('一覧を取得', icon=ft.Icons.REFRESH,
+        ft.OutlinedButton('最新の状態に更新', icon=ft.Icons.REFRESH,
                           on_click=on_refresh_reviews),
         t5_list,
         t5_status,
@@ -1339,10 +1454,16 @@ def main(page: ft.Page):
     update_label, update_badge = tab_label('更新')
     review_label, review_badge = tab_label('β版の確認と承認')
 
+    def on_tab_change(e):
+        # β版タブを開いた瞬間: 手元の内容を即表示し、裏で最新へ更新する
+        if getattr(e.control, 'selected_index', None) == 3:
+            on_refresh_reviews(None)
+
     page.add(
         header(),
         ft.Tabs(
             length=4, selected_index=0, animation_duration=150, expand=True,
+            on_change=on_tab_change,
             content=ft.Column([
                 ft.TabBar(tabs=[
                     ft.Tab(label='起動'),
@@ -1406,30 +1527,49 @@ def main(page: ft.Page):
         run_bg(work)
 
     def check_update_notice(reschedule=True):
+        """起動時と定期的なバックグラウンド更新.
+
+        承認待ち一覧 + リリース一覧を 1 回のスナップショット取得に
+        まとめ、更新バナー・タブバッジ・承認タブの表示をすべて同じ
+        結果から更新する (タブを開いた瞬間に新しい内容が出せる)。
+        """
         def work():
             try:
-                result = updater.check_update(repo, stable)
+                data = _fetch_review_snapshot()
             except Exception:
                 log.info('更新チェックをスキップしました (オフライン等)')
                 return
-            if result['has_update'] and result['latest'] is not None:
-                t1_notice.value = ('新しい安定版 %s があります。「更新」タブ'
-                                   'から更新してください。'
-                                   % result['latest']['tag'])
-                set_badge(update_badge, 1)
-            elif time.time() >= _pending_release['until']:
-                t1_notice.value = ''
-                set_badge(update_badge, 0)
+            if data is None:
+                return  # より新しい取得が反映済み
             try:
-                set_badge(review_badge, reviews.count_pending(config))
+                result = updater.check_update(repo, stable,
+                                              releases=data['releases'])
             except Exception:
-                log.info('承認待ち件数の取得をスキップしました')
-            page.update()
+                log.info('更新チェックをスキップしました (オフライン等)')
+                result = None
+            if result is not None:
+                if result['has_update'] and result['latest'] is not None:
+                    t1_notice.value = ('新しい安定版 %s があります。'
+                                       '「更新」タブから更新してください。'
+                                       % result['latest']['tag'])
+                    set_badge(update_badge, 1)
+                elif time.time() >= _pending_release['until']:
+                    # リリース公開待ちの「準備中」バッジは消さない
+                    t1_notice.value = ''
+                    set_badge(update_badge, 0)
+            # 承認タブの一覧・バッジも同じ取得結果で最新化しておく
+            _render_reviews(data, animate=False)
         run_bg(work)
         if reschedule:
             timer = threading.Timer(UPDATE_POLL_SECONDS, check_update_notice)
             timer.daemon = True
             timer.start()
+
+    # 起動時: 前回のスナップショットがあれば先に描画しておき、直後の
+    # 定期更新が最新へ差し替える (初回からタブを開いた瞬間に表示される)
+    _startup_snapshot = reviewcache.load_from_disk(config)
+    if _startup_snapshot is not None:
+        _render_reviews(_startup_snapshot, stale=True, animate=False)
 
     check_update_notice()
 
@@ -1463,6 +1603,9 @@ def main(page: ft.Page):
         run_bg(work)
 
     check_membership()
+
+    # キャッシュの事前取得は check_update_notice のスナップショット取得が
+    # 兼ねる (ログイン名・メンバー一覧・一覧・リリース一覧が一度に温まる)
 
     # ---------------- 初回セットアップ (名前と API キーの登録) ----------------
 
