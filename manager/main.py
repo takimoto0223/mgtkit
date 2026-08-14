@@ -247,7 +247,12 @@ def main(page: ft.Page):
                 _latest['release'] = latest
                 t2_update_btn.disabled = False
             else:
-                t2_info.value = '最新の安定版です (%s)' % local_v
+                if time.time() < _pending_release['until']:
+                    t2_info.value = ('新しい正式版を準備中です (数分かかり'
+                                     'ます)。公開されると自動でお知らせ'
+                                     'します。')
+                else:
+                    t2_info.value = '最新の安定版です (%s)' % local_v
                 t2_notes.value = ''
             t2_status.value = ''
             page.update()
@@ -829,9 +834,13 @@ def main(page: ft.Page):
         return _rocket_pos.get(pr_number, (w - 49, 410))
 
     def _hide_zone(pr_number):
+        """演出中: 常駐ロケットを隠し、カードのボタンも無効化する
+        (発射中の二度押し・飛行中の却下を防ぐ。次の一覧更新で戻る)."""
         zone = _rocket_zones.get(pr_number)
         if zone is not None:
             zone.visible = False
+        for b in _card_buttons.get(pr_number, []):
+            b.disabled = True
 
     def _play_launch(pr_number, done=None):
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
@@ -1033,6 +1042,8 @@ def main(page: ft.Page):
     _rocket_anims = []
     # 表示中の常駐ロケット (発射・爆発の演出中は隠して二重表示を防ぐ)
     _rocket_zones = {}
+    # カードごとの操作ボタン (演出中に無効化するための控え)
+    _card_buttons = {}
     # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
     _auto_release_tried = set()
     # 発射・爆発の基点 (一覧描画時にカードごとの推定位置を入れる)
@@ -1179,6 +1190,8 @@ def main(page: ft.Page):
             else:
                 buttons.append(ft.OutlinedButton('却下',
                                                  on_click=on_reject(pr)))
+        # 演出中の無効化用に操作ボタンを控えておく (spacer・ロケットは除く)
+        _card_buttons[pr['number']] = list(buttons)
         # ロケットはボタン行の右端に常駐 (かつてのリリースボタン位置。
         # リリースは承認がそろった時点で自動実行されるためボタンは廃止。
         # 右寄せにすることで発射・爆発の基点座標が幅から確定する)
@@ -1241,6 +1254,7 @@ def main(page: ft.Page):
             set_badge(review_badge, len(visible))
             _rocket_anims.clear()
             _rocket_zones.clear()
+            _card_buttons.clear()
             t5_list.controls.clear()
             if not visible:
                 t5_list.controls.append(
@@ -1248,7 +1262,9 @@ def main(page: ft.Page):
             # カードごとの発射・爆発基点を推定 (行数からの概算で十分)
             _rocket_pos.clear()
             w = int(page.width or 760)
-            y = 268 + (22 if w < 900 else 0)   # 説明文の折り返しぶん
+            # 一覧先頭の y。タブ上部の説明文の行数に依存するため、
+            # 説明文の文言を変えたらこの値も見直すこと
+            y = 283 + (22 if w < 900 else 0)
             for pr in visible:
                 extra = 0
                 if pr['approved'] and not pr.get('rejected_final'):
@@ -1256,8 +1272,10 @@ def main(page: ft.Page):
                 extra += len(pr['rejected'])    # 差し戻しコメントの行
                 if pr['conflicting'] and not pr.get('rejected_final'):
                     extra += 2                  # 統合待ちの案内文
-                h = 121 + 24 * extra
-                _rocket_pos[pr['number']] = (w - 49, y + h - 33)
+                h = 104 + 24 * extra            # カード実測からの係数
+                # スクロールで画面外になっても、せめて画面内から発射する
+                by = min(y + h - 33, int(page.height or 640) - 90)
+                _rocket_pos[pr['number']] = (w - 49, by)
                 y += h + 10
                 t5_list.controls.append(
                     _review_row(pr, me, _beta_for(pr['number'], betas)))
@@ -1268,7 +1286,7 @@ def main(page: ft.Page):
                     color='#9ca3af'))
                 for pr in folded:
                     t5_list.controls.append(ft.Row([
-                        ft.Image(src=rocketfx.WRECK, width=26, height=12),
+                        ft.Image(src=rocketfx.WRECK, width=30, height=13),
                         ft.Text('#%d %s' % (pr['number'], pr['title']),
                                 size=12, color='#9ca3af', expand=True),
                         ft.TextButton('一覧に戻す',
@@ -1380,9 +1398,10 @@ def main(page: ft.Page):
             # 期限切れ: 黙って消さず、確認方法を案内する
             _pending_release['until'] = 0.0
             set_badge(update_badge, 0)
-            t1_notice.value = ('リリースの公開確認ができませんでした。'
-                               'しばらくしてから「更新」タブの'
-                               '「更新を確認」を押してください。')
+            msg = ('リリースの公開確認ができませんでした。しばらく'
+                   'してから「更新」タブの「更新を確認」を押してください。')
+            t1_notice.value = msg
+            t5_status.value = msg
             page.update()
         run_bg(work)
 
