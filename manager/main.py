@@ -6,6 +6,7 @@ Git / GitHub の用語はユーザーに見せず、平易な日本語のみ表�
 """
 import asyncio
 import datetime
+import json
 import logging
 import os
 import threading
@@ -378,12 +379,6 @@ def main(page: ft.Page):
 
     t1_launch_btn.on_click = on_launch_stable
 
-    def on_check_now(_):
-        """手動の更新確認 (定期チェックと同じ処理をその場で実行する)."""
-        t1_fresh.value = '新しい版がないか確認しています...'
-        page.update()
-        check_update_notice(reschedule=False)
-
     def _download_history_zip(rel, dlg_status):
         """過去の正式版の ZIP をダウンロードフォルダへ保存する."""
         def handler(e):
@@ -499,11 +494,8 @@ def main(page: ft.Page):
         t1_meta,
         ft.Row([
             t1_launch_btn,
-            ft.OutlinedButton('最新の状態に更新', icon=ft.Icons.REFRESH,
-                              on_click=on_check_now),
             ft.OutlinedButton(
-                '過去の更新ログ', icon=ft.Icons.HISTORY,
-                on_click=on_show_history,
+                '過去の更新ログ', on_click=on_show_history,
                 style=ft.ButtonStyle(color='#6b7280')),
         ], spacing=12),
         t1_fresh,
@@ -743,8 +735,7 @@ def main(page: ft.Page):
         ft.Row([
             ft.Text('提出済みの検証状況', size=14,
                     weight=ft.FontWeight.BOLD),
-            ft.OutlinedButton('確認', icon=ft.Icons.REFRESH,
-                              on_click=on_refresh_prs),
+            ft.OutlinedButton('確認', on_click=on_refresh_prs),
         ], spacing=12),
         t4_pr_list,
         t4_fix_status,
@@ -1446,8 +1437,7 @@ def main(page: ft.Page):
                 buttons.append(ft.OutlinedButton(
                     '取り下げ', on_click=on_withdraw(pr)))
             buttons.append(ft.OutlinedButton(
-                '非表示', icon=ft.Icons.VISIBILITY_OFF,
-                on_click=on_hide_pr(pr)))
+                '非表示', on_click=on_hide_pr(pr)))
         elif pr['author'] == me:
             buttons.append(ft.OutlinedButton('取り下げ',
                                              on_click=on_withdraw(pr)))
@@ -1513,6 +1503,8 @@ def main(page: ft.Page):
 
     # 描画は複数スレッド (ボタン操作・定期更新) から呼ばれるため直列化する
     _render_lock = threading.Lock()
+    # 前回描画した内容の指紋 (同じ内容なら一覧を作り直さないための記録)
+    _render_state = {'key': None}
 
     def _render_reviews(data, stale=False, animate=None, status=None):
         """取得済みスナップショットで一覧を描画する.
@@ -1527,6 +1519,20 @@ def main(page: ft.Page):
             animate = not stale
         with _render_lock:
             _render_reviews_locked(data, stale, animate, status)
+
+    def _review_status_line(data, stale, status):
+        """一覧下の状態行の文言を決めて反映する."""
+        if status is not None:
+            t5_status.value = status
+        elif stale:
+            age = reviewcache.age_minutes(data)
+            t5_status.value = ('前回の内容を表示中%s。最新を確認して'
+                               'います...'
+                               % (' (%d 分前の取得)' % age if age else ''))
+        else:
+            hm = _fetched_hm(data)
+            t5_status.value = ('最新の状態です'
+                               + (' (%s 取得)' % hm if hm else ''))
 
     def _render_reviews_locked(data, stale, animate, status):
         pending, me = data['pending'], data['me']
@@ -1543,6 +1549,17 @@ def main(page: ft.Page):
                     localstate.hide_pr(p['number'], config)
                     localstate.mark_auto_folded(p['number'], config)
         hidden = localstate.hidden_prs(config)
+        # 表示内容が前回の描画と同じなら一覧を作り直さない。
+        # 作り直すとボタンが別のコントロールに差し替わり、差し替え直前の
+        # クリックが取りこぼされる (裏の更新とクリックの競合防止)
+        render_key = json.dumps(
+            [pending, me, sorted(b['tag'] for b in betas), sorted(hidden)],
+            ensure_ascii=False, sort_keys=True, default=str)
+        if render_key == _render_state.get('key'):
+            _review_status_line(data, stale, status)
+            page.update()
+            return
+        _render_state['key'] = render_key
         folded = [p for p in pending
                   if p.get('rejected_final') and p['number'] in hidden]
         visible = [p for p in pending if p not in folded]
@@ -1559,7 +1576,8 @@ def main(page: ft.Page):
         w = int(page.width or 760)
         # 一覧先頭の y。タブ上部の説明文の行数に依存するため、
         # 説明文の文言を変えたらこの値も見直すこと
-        y = 283 + (22 if w < 900 else 0)
+        # (「最新の状態に更新」ボタン廃止でボタン行 1 段分上がった)
+        y = 227 + (22 if w < 900 else 0)
         for pr in visible:
             extra = 0
             if pr['approved'] and not pr.get('rejected_final'):
@@ -1589,17 +1607,7 @@ def main(page: ft.Page):
                 ], spacing=8))
         # 提出に対応しないβ版はリリース・取り下げ・却下確定の時点で
         # 自動削除されるため、ここでは表示しない
-        if status is not None:
-            t5_status.value = status
-        elif stale:
-            age = reviewcache.age_minutes(data)
-            t5_status.value = ('前回の内容を表示中%s。最新を確認して'
-                               'います...'
-                               % (' (%d 分前の取得)' % age if age else ''))
-        else:
-            hm = _fetched_hm(data)
-            t5_status.value = ('最新の状態です'
-                               + (' (%s 取得)' % hm if hm else ''))
+        _review_status_line(data, stale, status)
         page.update()
         # 描画後にロケット演出 (点火・煙) を一度だけ再生
         anims = _rocket_anims[:]
@@ -1670,8 +1678,6 @@ def main(page: ft.Page):
         ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
                 'ため、通常の作業には影響しません。', size=12,
                 color='#555555'),
-        ft.OutlinedButton('最新の状態に更新', icon=ft.Icons.REFRESH,
-                          on_click=on_refresh_reviews),
         t5_list,
         t5_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
@@ -1681,8 +1687,12 @@ def main(page: ft.Page):
     review_label, review_badge = tab_label('β版の確認と承認')
 
     def on_tab_change(e):
-        # β版タブを開いた瞬間: 手元の内容を即表示し、裏で最新へ更新する
-        if getattr(e.control, 'selected_index', None) == 2:
+        # タブに来る = 最新の情報が見たいとき。手動の更新ボタンは置かず、
+        # タブを開いた瞬間に手元の内容を即表示し、裏で最新へ更新する
+        idx = getattr(e.control, 'selected_index', None)
+        if idx == 0:
+            check_update_notice(reschedule=False)
+        elif idx == 2:
             on_refresh_reviews(None)
 
     page.add(
