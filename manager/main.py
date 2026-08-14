@@ -189,6 +189,9 @@ def main(page: ft.Page):
                                            '管理者に確認してください。')
                         page.update()
                         return
+                    # 前回の残骸のサーバーが動いているとフォルダを
+                    # 置き換えられないため、先に終了させる
+                    launcher.stop_app(paths.stable_port(config))
                     updater.install_release(repo, latest, stable,
                                             on_progress=progress)
                     refresh_local_version()
@@ -196,6 +199,7 @@ def main(page: ft.Page):
                     stable, paths.stable_port(config), channel='stable')
                 t1_status.value = 'ブラウザで開きます: %s' % url
             except (ghcli.GhError, launcher.LaunchError, Exception) as e:
+                log.exception('起動に失敗しました')
                 t1_status.value = str(e) or '起動に失敗しました。'
             page.update()
         run_bg(work)
@@ -270,6 +274,10 @@ def main(page: ft.Page):
                 t2_status.value = msg
                 page.update()
             try:
+                # アプリが起動したままだとフォルダが「使用中」になり
+                # 置き換えられない (更新後の再起動にも必要) ため先に終了する
+                progress('起動中のアプリを終了しています...')
+                launcher.stop_app(paths.stable_port(config))
                 updater.install_release(repo, rel, stable,
                                         on_progress=progress)
                 refresh_local_version()
@@ -277,6 +285,7 @@ def main(page: ft.Page):
                     stable, paths.stable_port(config), channel='stable')
                 t2_status.value = '更新して起動しました: %s' % url
             except (ghcli.GhError, launcher.LaunchError, Exception) as e:
+                log.exception('更新に失敗しました')
                 t2_status.value = str(e) or '更新に失敗しました。'
             page.update()
         run_bg(work)
@@ -549,6 +558,9 @@ def main(page: ft.Page):
                 beta = paths.beta_dir(release['tag'], config)
                 try:
                     if updater.local_version_info(beta) is None:
+                        # 別のβ版が起動中だとフォルダの置き換えや
+                        # 新しい版の起動ができないため先に終了する
+                        launcher.stop_app(paths.beta_port(config))
                         updater.install_release(repo, release, beta,
                                                 on_progress=progress)
                     _, url = launcher.launch_app(
@@ -558,6 +570,7 @@ def main(page: ft.Page):
                                        % (release['tag'], url))
                 except (ghcli.GhError, launcher.LaunchError,
                         Exception) as e:
+                    log.exception('β版の起動に失敗しました')
                     t5_status.value = str(e) or 'β版の起動に失敗しました。'
                 page.update()
             run_bg(work)

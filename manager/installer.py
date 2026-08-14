@@ -15,6 +15,39 @@ class InstallError(Exception):
     """展開・インストール失敗。str() はユーザー向けの平易な日本語メッセージ."""
 
 
+def _replace_dir(src, install_dir):
+    """src の内容で install_dir を置き換える (失敗しても元の内容を残す).
+
+    実行中のアプリに使われているフォルダを直接消すと、Windows では途中まで
+    消えた壊れた状態で止まる。そこで同じドライブ上に新しい内容を先に用意し、
+    フォルダ名の付け替えだけで入れ替える。付け替えできない場合は元のまま
+    InstallError にする。
+    """
+    parent = os.path.dirname(install_dir) or '.'
+    os.makedirs(parent, exist_ok=True)
+    work = tempfile.mkdtemp(prefix='mgtkit_swap_', dir=parent)
+    staging = os.path.join(work, 'new')
+    backup = os.path.join(work, 'old')
+    try:
+        shutil.copytree(src, staging)
+        try:
+            if os.path.isdir(install_dir):
+                os.rename(install_dir, backup)
+            os.rename(staging, install_dir)
+        except OSError:
+            if not os.path.isdir(install_dir) and os.path.isdir(backup):
+                try:
+                    os.rename(backup, install_dir)
+                except OSError:
+                    pass
+            raise InstallError('アプリのフォルダが使用中のため、新しい版に'
+                               '置き換えられませんでした。アプリの画面を'
+                               '閉じて再試行し、直らない場合はパソコンを'
+                               '再起動してからお試しください。')
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def extract_zip(zip_path, install_dir):
     """ZIP を install_dir へ展開する (既存の中身は置き換え).
 
@@ -34,10 +67,7 @@ def extract_zip(zip_path, install_dir):
             src = os.path.join(tmp, entries[0])
         else:
             src = tmp
-        if os.path.isdir(install_dir):
-            shutil.rmtree(install_dir)
-        os.makedirs(os.path.dirname(install_dir) or '.', exist_ok=True)
-        shutil.copytree(src, install_dir)
+        _replace_dir(src, install_dir)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return install_dir
