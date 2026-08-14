@@ -797,10 +797,11 @@ def main(page: ft.Page):
             if not (state['anim'] and state['net']):
                 return
             if state['ok']:
-                # キラッのあと: 更新タブのバッジを立てて通知も更新
+                # キラッのあと: 更新タブのバッジを立て、リリースの公開
+                # (数分かかる) を裏で見張って通知バナーも自動更新する
                 set_badge(update_badge, 1)
                 page.update()
-                check_update_notice(reschedule=False)
+                _watch_new_release()
             on_refresh_reviews(None)
 
         _play_launch(done=lambda: _finish('anim'))
@@ -1029,12 +1030,12 @@ def main(page: ft.Page):
     def _rocket_zone(pr, n_req):
         """ボタン列末尾の常駐ロケット。承認・却下の進み具合を演出で表す.
 
-        却下確定 (一覧に戻した表示) にはもうロケットは出さない。却下が
-        期日内に取り消されれば状態が変わり、煙付きで再表示される。
+        却下確定 (一覧に戻した表示) は残骸の静止画のみ (演出はない)。
+        却下が期日内に取り消されれば状態が変わり、煙付きで再表示される。
         """
         if pr.get('rejected_final'):
-            return ft.Container(width=0, height=0)
-        if pr['rejected']:
+            state = 'wreck'          # 却下確定: 散らばった残骸
+        elif pr['rejected']:
             state = 'smoking'        # 却下 1 つ: 煙
         elif len(pr['approved']) >= max(1, n_req - 1):
             state = 'ignited'        # 承認 1 つ: 点火
@@ -1318,6 +1319,30 @@ def main(page: ft.Page):
     refresh_local_version()
 
     # ------- 通知の更新 (起動時 + 定期ポーリング): 更新バナーとタブバッジ -------
+
+    def _watch_new_release():
+        """リリース公開 (数分かかる) を見張り、公開されたら通知を更新する.
+
+        リリース直後は Releases の公開処理が終わっておらず即時チェック
+        では「更新なし」になるため、20 秒間隔で最大 10 分確認する。
+        """
+        def work():
+            deadline = time.time() + 10 * 60
+            while time.time() < deadline:
+                try:
+                    result = updater.check_update(repo, stable)
+                except Exception:
+                    result = None
+                if (result and result['has_update']
+                        and result['latest'] is not None):
+                    t1_notice.value = ('新しい安定版 %s があります。'
+                                       '「更新」タブから更新してください。'
+                                       % result['latest']['tag'])
+                    set_badge(update_badge, 1)
+                    page.update()
+                    return
+                time.sleep(20)
+        run_bg(work)
 
     def check_update_notice(reschedule=True):
         def work():
