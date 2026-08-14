@@ -16,11 +16,11 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
-               localstate, paths, reviewcache, reviews, selfupdate,
-               settings, submit, updater, usage)
+               localstate, paths, reviewcache, reviews, rocketfx,
+               selfupdate, settings, submit, updater, usage)
 from .gitcli import GitError
 
-UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
+UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -64,6 +64,8 @@ def main(page: ft.Page):
     def set_badge(badge, count):
         badge.content.value = '99+' if count > 99 else str(count)
         badge.visible = count > 0
+        badge.bgcolor = '#facc15'
+        badge.tooltip = None
 
     def on_show_usage(_):
         """API 利用量ダイアログ (月小計 + 30日グラフ + 日別 + 通算合計)."""
@@ -245,7 +247,12 @@ def main(page: ft.Page):
                 _latest['release'] = latest
                 t2_update_btn.disabled = False
             else:
-                t2_info.value = '最新の安定版です (%s)' % local_v
+                if time.time() < _pending_release['until']:
+                    t2_info.value = ('新しい正式版を準備中です (数分かかり'
+                                     'ます)。公開されると自動でお知らせ'
+                                     'します。')
+                else:
+                    t2_info.value = '最新の安定版です (%s)' % local_v
                 t2_notes.value = ''
             t2_status.value = ''
             page.update()
@@ -758,7 +765,7 @@ def main(page: ft.Page):
                                        % pr['number'])
 
             def work():
-                preloaded = None
+                released = False
                 try:
                     if not optimistic:
                         _t5_progress('#%d の承認を送信しています...'
@@ -768,37 +775,59 @@ def main(page: ft.Page):
                                     author=pr['author'])
                     t5_status.value = '#%d を承認しました。' % pr['number']
                     page.update()
-                    # 必要数に達していたら自動リリース (ロケット発射)。
-                    # 判定に取得した一覧はそのまま再描画に使い回す
-                    preloaded = _try_auto_release(pr['number'])
+                    # 必要数に達していたら自動リリース (ロケット発射)
+                    released = _try_auto_release(pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
                     t5_status.value = str(e)
                 page.update()
-                on_refresh_reviews(None, preloaded=preloaded)
+                if not released:
+                    # 発射したときは ✨ のあとに _try_auto_release 側で
+                    # 一覧を更新する (演出前にカードが消えないように)
+                    on_refresh_reviews(None)
             run_bg(work)
         return handler
 
     def _try_auto_release(pr_number):
         """承認が必要数そろい条件が整っていれば、その場でリリースする.
 
-        検証NG・却下あり・衝突中・権限なしのときは何もしない
-        (従来どおりリリースボタンが出るのを待つ)。
-        戻り値: リリースしなかったときは判定に使った (pending, me)
-        (呼び出し側が再描画に使い回す)。リリース実行・取得失敗時は
-        None (画面は取り直しが必要)。
+        検証NG・却下あり・衝突中・権限なしのときは何もしない。
+        発射演出を始めたら True を返す。カードの削除 (一覧更新) と
+        更新タブのバッジは ✨ が光ったあとに行う。
         """
         try:
             _t5_progress('承認がそろったかどうか確認しています...')
             me = reviews.current_user()
             pending = reviews.list_pending(config)
         except (reviews.ReviewError, ghcli.GhError):
-            return None
+            return False
         pr = next((p for p in pending if p['number'] == pr_number), None)
         if pr is None or pr.get('rejected_final'):
-            return (pending, me)
+            return False
         if not reviews.can_release(pr, config, me):
-            return (pending, me)
-        _play_launch()
+            return False
+        # ブランチが最新の正式版より古い場合はここで取り込み直して検証を
+        # 待つ (時間がかかる工程は発射演出の前に済ませる)
+        try:
+            reviews.ensure_branch_current(pr['number'], config,
+                                          on_progress=_t5_progress)
+        except (reviews.ReviewError, ghcli.GhError) as e:
+            t5_status.value = str(e)
+            page.update()
+            return False
+        _hide_zone(pr_number)     # 常駐機は overlay の機体と入れ替える
+        state = {'anim': False, 'net': False, 'ok': False}
+
+        def _finish(key):
+            state[key] = True
+            if not (state['anim'] and state['net']):
+                return
+            if state['ok']:
+                # キラッのあと: バッジを「準備中」にし、リリースの公開
+                # (数分かかる) を裏で見張って公開されたら黄色に切り替える
+                _watch_new_release()
+            on_refresh_reviews(None)
+
+        _play_launch(pr_number, done=lambda: _finish('anim'))
         try:
             result = reviews.release(pr['number'], config,
                                      on_progress=_t5_progress)
@@ -806,154 +835,42 @@ def main(page: ft.Page):
                                'しました。%s'
                                % (reviews.required_approvals(config),
                                   result['message']))
+            state['ok'] = True
         except (reviews.ReviewError, ghcli.GhError) as e:
             t5_status.value = str(e)
         page.update()
-        return None
+        _finish('net')
+        return True
 
-    # 🚀 の絵文字は素の状態で右上 45° を向いているため -0.79rad で垂直になる
-    _UPRIGHT = -0.79
+    def _rocket_base(pr_number):
+        """発射・爆発の基点 = そのカードのボタン行右端のロケット位置.
 
-    def _play_launch():
-        """自動リリース演出: 点火 → 機体が震える → 加速しながら離陸 →
-        機体を傾けて「更新」タブへ → ✨ と弾けて消える.
-
-        始点はカード右端のロケット位置・終点は「更新」タブ付近。
-        offset は自身のサイズ比なので、機体を固定サイズの Container に
-        入れて px 換算を確定させる。
+        一覧描画時にカードごとの推定 y を _rocket_pos に入れてある。
+        x はロケットが右寄せなのでウィンドウ幅から確定する。
         """
-        body_w, body_h = 54.0, 64.0
-        start_x = int(page.width or 760) - 90   # カード右端のロケット位置
-        start_y = 268
-        tab_x, tab_y = 82, 56                   # 「更新」タブのあたり
-        rocket = ft.Text('🚀', size=34, rotate=ft.Rotate(_UPRIGHT),
-                         animate_rotation=ft.Animation(
-                             500, ft.AnimationCurve.EASE_IN_OUT))
-        fire = ft.Text('🔥', size=16, scale=0.5,
-                       animate_scale=ft.Animation(
-                           180, ft.AnimationCurve.EASE_OUT))
-        body = ft.Container(
-            width=int(body_w), height=int(body_h),
-            content=ft.Column(
-                [rocket, fire], spacing=0,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            offset=ft.Offset(0, 0),
-            animate_offset=ft.Animation(
-                60, ft.AnimationCurve.EASE_IN_OUT),
-            animate_opacity=ft.Animation(250))
-        holder = ft.Container(padding=ft.Padding.only(left=start_x,
-                                                      top=start_y),
-                              content=body)
-        trail = ft.Text('💨', size=18, opacity=0.0, scale=0.6,
-                        animate_opacity=ft.Animation(700),
-                        animate_scale=ft.Animation(
-                            700, ft.AnimationCurve.EASE_OUT))
-        trail_holder = ft.Container(padding=ft.Padding.only(
-            left=start_x + 4, top=start_y + 38), content=trail)
-        spark = ft.Text('✨', size=34, opacity=0.0, scale=0.4,
-                        animate_opacity=ft.Animation(150),
-                        animate_scale=ft.Animation(
-                            320, ft.AnimationCurve.EASE_OUT_BACK))
-        spark_holder = ft.Container(padding=ft.Padding.only(left=tab_x,
-                                                            top=tab_y),
-                                    content=spark)
-        page.overlay.extend([trail_holder, holder, spark_holder])
-        page.update()
+        w = int(page.width or 760)
+        return _rocket_pos.get(pr_number, (w - 49, 410))
 
-        def fly():
-            time.sleep(0.1)
-            fire.scale = 1.9              # 点火: 炎がふくらみ
-            page.update()
-            for dx in (0.07, -0.07, 0.09, -0.06, 0.0):   # 機体が震える
-                body.offset = ft.Offset(dx, 0)
-                page.update()
-                time.sleep(0.07)
-            # 離陸: 加速しながらまっすぐ上へ (発射地点に煙が残る)
-            body.animate_offset = ft.Animation(
-                700, ft.AnimationCurve.EASE_IN)
-            body.offset = ft.Offset(0, -2.6)
-            trail.opacity = 0.7
-            trail.scale = 1.7
-            page.update()
-            time.sleep(0.7)
-            trail.opacity = 0.0
-            # 機体を進行方向へ傾けて「更新」タブへ (ゆるい弧を描く)
-            body.animate_offset = ft.Animation(
-                750, ft.AnimationCurve.EASE_OUT)
-            rocket.rotate = ft.Rotate(_UPRIGHT - 0.75)
-            body.offset = ft.Offset((tab_x - start_x) / body_w,
-                                    (tab_y - start_y) / body_h)
-            page.update()
-            time.sleep(0.75)
-            body.opacity = 0.0            # 到達: ✨ がポンと弾ける
-            spark.opacity = 1.0
-            spark.scale = 1.5
-            page.update()
-            time.sleep(0.35)
-            spark.scale = 1.0
-            spark.opacity = 0.0
-            page.update()
-            time.sleep(0.3)
-            for h in (holder, spark_holder, trail_holder):
-                try:
-                    page.overlay.remove(h)
-                except ValueError:
-                    pass
-            page.update()
-        run_bg(fly)
+    def _hide_zone(pr_number):
+        """演出中: 常駐ロケットを隠し、カードのボタンも無効化する
+        (発射中の二度押し・飛行中の却下を防ぐ。次の一覧更新で戻る)."""
+        zone = _rocket_zones.get(pr_number)
+        if zone is not None:
+            zone.visible = False
+        for b in _card_buttons.get(pr_number, []):
+            b.disabled = True
 
-    def _play_crash():
-        """却下確定演出: ぐらついて倒れ、爆発して煙が残る."""
-        rocket = ft.Text('🚀', size=36, rotate=ft.Rotate(_UPRIGHT),
-                         animate_rotation=ft.Animation(
-                             120, ft.AnimationCurve.EASE_IN_OUT),
-                         animate_opacity=ft.Animation(400))
-        boom = ft.Text('💥', size=46, opacity=0.0, scale=0.3,
-                       animate_opacity=ft.Animation(120),
-                       animate_scale=ft.Animation(
-                           320, ft.AnimationCurve.EASE_OUT_BACK))
-        smoke = ft.Text('💨', size=22, opacity=0.0,
-                        offset=ft.Offset(0, 0),
-                        animate_opacity=ft.Animation(350),
-                        animate_offset=ft.Animation(
-                            900, ft.AnimationCurve.EASE_OUT))
-        holder = ft.Container(
-            padding=ft.Padding.only(left=int(page.width or 760) // 2 - 60,
-                                    top=280),
-            content=ft.Row([rocket, boom, smoke], spacing=2))
-        page.overlay.append(holder)
-        page.update()
+    def _play_launch(pr_number, done=None):
+        """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
+        弧を描いて「更新」タブへ → ✨ と弾けて消える."""
+        sx, sy = _rocket_base(pr_number)
+        rocketfx.play_launch(page, sx, sy, done=done)
 
-        def run():
-            time.sleep(0.1)
-            for rot in (0.12, -0.15, 0.2):              # ぐらつく
-                rocket.rotate = ft.Rotate(_UPRIGHT + rot)
-                page.update()
-                time.sleep(0.13)
-            rocket.animate_rotation = ft.Animation(
-                650, ft.AnimationCurve.BOUNCE_OUT)
-            rocket.rotate = ft.Rotate(_UPRIGHT + 1.6)   # 横倒しに
-            page.update()
-            time.sleep(0.65)
-            boom.opacity = 1.0                # 💥 がはじける
-            boom.scale = 1.25
-            page.update()
-            time.sleep(0.55)
-            boom.opacity = 0.0
-            rocket.opacity = 0.25
-            smoke.opacity = 0.8               # 煙がのぼって残る
-            smoke.offset = ft.Offset(0.2, -0.7)
-            page.update()
-            time.sleep(0.9)
-            smoke.opacity = 0.0
-            page.update()
-            time.sleep(0.4)
-            try:
-                page.overlay.remove(holder)
-            except ValueError:
-                pass
-            page.update()
-        run_bg(run)
+    def _play_crash(pr_number, done=None):
+        """却下確定演出 (rocketfx): ぐらつき → 転倒 → 爆発と同時に
+        パーツ分解 → 破片が放物線で散乱."""
+        sx, sy = _rocket_base(pr_number)
+        rocketfx.play_crash(page, sx, sy, done=done)
 
     def on_cancel_review(pr):
         """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
@@ -963,6 +880,10 @@ def main(page: ft.Page):
                     _t5_progress('#%d の取り消しを送信しています...'
                                  % pr['number'])
                     reviews.cancel_my_review(pr['number'], config)
+                    # 却下確定が解けたときのため、非表示・自動畳みの記録を
+                    # 掃除する (再び確定したらまた自動で畳める)
+                    localstate.unhide_pr(pr['number'], config)
+                    localstate.unmark_auto_folded(pr['number'], config)
                     t5_status.value = ('#%d への承認・却下を取り消しました。'
                                        % pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
@@ -1021,7 +942,9 @@ def main(page: ft.Page):
                                     status='#%d を差し戻しました '
                                            '(送信中...)。' % pr['number'])
                     if pr['rejected_final']:
-                        _play_crash()
+                        # 押した瞬間に爆発を再生 (畳むのは送信後の更新で)
+                        _hide_zone(pr['number'])
+                        _play_crash(pr['number'])
 
                 def work():
                     try:
@@ -1033,14 +956,21 @@ def main(page: ft.Page):
                         t5_status.value = ('#%d を差し戻しました。'
                                            % pr['number'])
                         page.update()
-                        # 自分の却下で必要数に達したら「転倒→爆発」演出
-                        if (not optimistic
-                                and len(pr['rejected']) + 1 >= n_req):
-                            _play_crash()
                     except (reviews.ReviewError, ghcli.GhError) as e:
                         t5_status.value = str(e)
                         page.update()
-                    on_refresh_reviews(None)
+                        on_refresh_reviews(None)  # 楽観的表示を元に戻す
+                        return
+                    # 自分の却下で必要数に達したら「転倒→爆発」演出。
+                    # 非表示エリアへ畳むのは爆発が終わってから
+                    # (楽観的更新のときは押した瞬間に再生済み)
+                    if (not optimistic
+                            and len(pr['rejected']) + 1 >= n_req):
+                        _hide_zone(pr['number'])
+                        _play_crash(pr['number'],
+                                    done=lambda: on_refresh_reviews(None))
+                    else:
+                        on_refresh_reviews(None)
                 run_bg(work)
 
             page.show_dialog(ft.AlertDialog(
@@ -1073,20 +1003,6 @@ def main(page: ft.Page):
                     log.exception('diff viewer failed')
                     t5_status.value = '差分を開けませんでした: %s' % e
                 page.update()
-            run_bg(work)
-        return handler
-
-    def on_release(pr):
-        def handler(_):
-            def work():
-                try:
-                    result = reviews.release(pr['number'], config,
-                                             on_progress=_t5_progress)
-                    t5_status.value = result['message']
-                except (reviews.ReviewError, ghcli.GhError) as e:
-                    t5_status.value = str(e)
-                page.update()
-                on_refresh_reviews(None)
             run_bg(work)
         return handler
 
@@ -1175,57 +1091,39 @@ def main(page: ft.Page):
 
     # 一覧描画後に一度だけ再生するロケット演出 (飾り。操作はできない)
     _rocket_anims = []
+    # 表示中の常駐ロケット (発射・爆発の演出中は隠して二重表示を防ぐ)
+    _rocket_zones = {}
+    # カードごとの操作ボタン (演出中に無効化するための控え)
+    _card_buttons = {}
+    # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
+    _auto_release_tried = set()
+    # 発射・爆発の基点 (一覧描画時にカードごとの推定位置を入れる)
+    _rocket_pos = {}
+    # リリース公開待ちの期限 (この間は定期チェックが更新バッジを消さない)
+    _pending_release = {'until': 0.0}
 
     def _rocket_zone(pr, n_req):
-        """カード右上のロケット (垂直)。承認・却下の進み具合を演出で表す."""
+        """ボタン列末尾の常駐ロケット。承認・却下の進み具合を演出で表す.
+
+        却下確定 (一覧に戻した表示) は残骸の静止画のみ (演出はない)。
+        却下が期日内に取り消されれば状態が変わり、煙付きで再表示される。
+        """
         if pr.get('rejected_final'):
-            # 却下確定: 倒れたロケット + 爆発跡
-            return ft.Row([ft.Text('💥', size=18, opacity=0.8),
-                           ft.Text('🚀', size=20, opacity=0.6,
-                                   rotate=ft.Rotate(_UPRIGHT + 1.6))],
-                          spacing=0)
-        rocket = ft.Text('🚀', size=20, rotate=ft.Rotate(_UPRIGHT),
-                         opacity=1.0 if pr['approved'] else 0.45)
-        if pr['rejected']:
-            # 却下 1 つ: 煙が立ちのぼる (開いたときに一度だけ)
-            smoke = ft.Text('💨', size=14, opacity=0.0,
-                            offset=ft.Offset(0, 0),
-                            animate_opacity=ft.Animation(500),
-                            animate_offset=ft.Animation(
-                                1200, ft.AnimationCurve.EASE_OUT))
-
-            def puff(s=smoke):
-                s.opacity = 0.9
-                s.offset = ft.Offset(0.4, -0.5)
-                page.update()
-                time.sleep(1.2)
-                s.opacity = 0.45
-                page.update()
-            _rocket_anims.append(puff)
-            return ft.Column(
-                [smoke, rocket], spacing=0,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        if len(pr['approved']) >= max(1, n_req - 1):
-            # 承認 1 つ: 真下に着火 (まだ発射しない。開いたときに一度だけ)
-            fire = ft.Text('🔥', size=13, opacity=0.0, scale=0.4,
-                           animate_opacity=ft.Animation(200),
-                           animate_scale=ft.Animation(
-                               200, ft.AnimationCurve.EASE_OUT))
-
-            def ignite(f=fire):
-                f.opacity = 1.0
-                f.scale = 1.5               # ボッと着火
-                page.update()
-                time.sleep(0.3)
-                for sc in (0.9, 1.35, 1.0, 1.2, 1.05):   # 炎が揺らめく
-                    f.scale = sc
-                    page.update()
-                    time.sleep(0.22)
-            _rocket_anims.append(ignite)
-            return ft.Column(
-                [rocket, fire], spacing=0,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        return ft.Column([rocket], spacing=0)
+            state = 'wreck'          # 却下確定: 散らばった残骸
+        elif pr['rejected']:
+            state = 'smoking'        # 却下 1 つ: 煙
+        elif len(pr['approved']) >= max(1, n_req - 1):
+            state = 'ignited'        # 承認 1 つ: 点火
+        else:
+            state = 'idle'
+        control, anim = rocketfx.zone(state)
+        if anim is not None:
+            # 開いたときに一度だけ再生 (page.update を渡す)
+            _rocket_anims.append(lambda fn=anim: fn(page.update))
+        # 演出中に隠せるよう登録しておく (操作ボタンとは spacer で分離)
+        wrapper = ft.Container(content=control)
+        _rocket_zones[pr['number']] = wrapper
+        return wrapper
 
     def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
@@ -1265,10 +1163,8 @@ def main(page: ft.Page):
         }[pr['checks']]
 
         lines = [
-            ft.Row([ft.Text('#%d %s' % (pr['number'], pr['title']),
-                            weight=ft.FontWeight.BOLD, size=13,
-                            expand=True),
-                    _rocket_zone(pr, n_req)]),
+            ft.Text('#%d %s' % (pr['number'], pr['title']),
+                    weight=ft.FontWeight.BOLD, size=13),
             ft.Row(badges + [ft.Text(checks_label, size=12,
                                      color=checks_color),
                              ft.Text('提出者: %s' % pr['author'], size=12,
@@ -1345,10 +1241,13 @@ def main(page: ft.Page):
             else:
                 buttons.append(ft.OutlinedButton('却下',
                                                  on_click=on_reject(pr)))
-        if not final and reviews.can_release(pr, config, me):
-            buttons.append(ft.FilledButton(
-                'リリース', icon=ft.Icons.ROCKET_LAUNCH,
-                on_click=on_release(pr), bgcolor=NAVY, color='#ffffff'))
+        # 演出中の無効化用に操作ボタンを控えておく (spacer・ロケットは除く)
+        _card_buttons[pr['number']] = list(buttons)
+        # ロケットはボタン行の右端に常駐 (かつてのリリースボタン位置。
+        # リリースは承認がそろった時点で自動実行されるためボタンは廃止。
+        # 右寄せにすることで発射・爆発の基点座標が幅から確定する)
+        buttons.append(ft.Container(expand=True))
+        buttons.append(_rocket_zone(pr, n_req))
         if locked:
             # カード情報は薄く、案内文だけ明るく表示する
             content = ft.Column([
@@ -1365,7 +1264,7 @@ def main(page: ft.Page):
             lines.append(ft.Row(buttons, spacing=8))
             content = ft.Column(lines, spacing=6)
         return ft.Container(bgcolor='#f5f7fa', border_radius=6, padding=12,
-                            opacity=0.55 if final else 1.0,
+                            opacity=0.72 if final else 1.0,
                             content=content)
 
     def _beta_for(pr_number, betas):
@@ -1423,21 +1322,41 @@ def main(page: ft.Page):
         visible = [p for p in pending if p not in folded]
         set_badge(review_badge, len(visible))
         _rocket_anims.clear()
+        _rocket_zones.clear()
+        _card_buttons.clear()
         t5_list.controls.clear()
         if not visible:
             t5_list.controls.append(
                 ft.Text('確認・承認待ちの提出はありません', size=14))
+        # カードごとの発射・爆発基点を推定 (行数からの概算で十分)
+        _rocket_pos.clear()
+        w = int(page.width or 760)
+        # 一覧先頭の y。タブ上部の説明文の行数に依存するため、
+        # 説明文の文言を変えたらこの値も見直すこと
+        y = 283 + (22 if w < 900 else 0)
         for pr in visible:
+            extra = 0
+            if pr['approved'] and not pr.get('rejected_final'):
+                extra += 1                  # 承認済み: ... の行
+            extra += len(pr['rejected'])    # 差し戻しコメントの行
+            if pr['conflicting'] and not pr.get('rejected_final'):
+                extra += 2                  # 統合待ちの案内文
+            h = 104 + 24 * extra            # カード実測からの係数
+            # スクロールで画面外になっても、せめて画面内から発射する
+            by = min(y + h - 33, int(page.height or 640) - 90)
+            _rocket_pos[pr['number']] = (w - 49, by)
+            y += h + 10
             t5_list.controls.append(
                 _review_row(pr, me, _beta_for(pr['number'], betas)))
         if folded:
             # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
             t5_list.controls.append(ft.Text(
-                '非表示にした提出 (却下確定)', size=12,
+                '却下が確定した提出 (自動で畳みました)', size=12,
                 color='#9ca3af'))
             for pr in folded:
                 t5_list.controls.append(ft.Row([
-                    ft.Text('💥 #%d %s' % (pr['number'], pr['title']),
+                    ft.Image(src=rocketfx.WRECK, width=30, height=13),
+                    ft.Text('#%d %s' % (pr['number'], pr['title']),
                             size=12, color='#9ca3af', expand=True),
                     ft.TextButton('一覧に戻す',
                                   on_click=on_unhide_pr(pr)),
@@ -1459,15 +1378,14 @@ def main(page: ft.Page):
         # 描画後にロケット演出 (点火・煙) を一度だけ再生
         anims = _rocket_anims[:]
         _rocket_anims.clear()
-        if anims and animate:
-            def play():
-                for fn in anims:
+        if animate:
+            for fn in anims:
+                def play(fn=fn):
                     try:
                         fn()
                     except Exception:
-                        log.debug('ロケット演出をスキップ',
-                                  exc_info=True)
-            run_bg(play)
+                        log.debug('ロケット演出をスキップ', exc_info=True)
+                run_bg(play)
 
     def _fetch_review_snapshot(on_progress=None):
         """一覧とリリース一覧を一括取得してスナップショットへ保存する.
@@ -1482,17 +1400,11 @@ def main(page: ft.Page):
         return reviewcache.put(snap['pending'], snap['releases'],
                                snap['me'], seq=seq, config=config)
 
-    def on_refresh_reviews(_, preloaded=None):
+    def on_refresh_reviews(_):
         """一覧の再描画。手元にある前回の取得結果を即座に表示し、
-        裏で最新を取得して差し替える (取得を待たせない)。
-        preloaded=(pending, me) は承認直後などの取得済み一覧
-        (リリース一覧だけ取り直して確定表示する)。"""
+        裏で最新を取得して差し替える (取得を待たせない)。"""
         cached = reviewcache.get() or reviewcache.load_from_disk(config)
-        if preloaded is not None and cached is not None:
-            # 取得済みの最新一覧 + 手元のリリース一覧でまず即時表示
-            _render_reviews(dict(cached, pending=preloaded[0],
-                                 me=preloaded[1]), stale=True)
-        elif cached is not None:
+        if cached is not None:
             _render_reviews(cached, stale=True)
         else:
             _t5_progress('最新の提出状況とβ版・リリースの一覧を確認して'
@@ -1500,26 +1412,30 @@ def main(page: ft.Page):
 
         def work():
             try:
-                if preloaded is not None:
-                    seq = reviewcache.next_seq()
-                    pending, me = preloaded
-                    _t5_progress('β版とリリースの一覧を確認しています...')
-                    data = reviewcache.put(pending,
-                                           ghcli.fetch_releases(repo),
-                                           me, seq=seq, config=config)
-                else:
-                    data = _fetch_review_snapshot(on_progress=_t5_progress)
+                data = _fetch_review_snapshot(on_progress=_t5_progress)
             except (reviews.ReviewError, ghcli.GhError) as e:
                 t5_status.value = str(e)
                 page.update()
                 return
-            if data is not None:  # None = より新しい取得に追い越された
-                _render_reviews(data)
+            if data is None:
+                return  # より新しい取得に追い越された
+            _render_reviews(data)
+            # リリースボタン廃止に伴い、承認がそろったまま未リリースの
+            # 提出 (2 人目の承認時に自動リリースできなかったもの) は
+            # 最新の取得結果に基づき自動でリリースする (発射演出つき)。
+            # 楽観的表示 (stale 描画) からは発火しない
+            for p in data['pending']:
+                if (p['number'] not in _auto_release_tried
+                        and not p.get('rejected_final')
+                        and reviews.can_release(p, config, data['me'])):
+                    _auto_release_tried.add(p['number'])
+                    _try_auto_release(p['number'])
+                    break
         run_bg(work)
 
     tab_beta_review = ft.Container(padding=24, content=ft.Column([
         ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
-                'ます。β版を試して問題なければ承認してください。%d 人の'
+                'ます。β版を確認したら、問題なければ承認してください。%d 人の'
                 '承認がそろうと自動で正式版としてリリースされます 🚀。'
                 '自分の提出は自分では承認できません。'
                 % reviews.required_approvals(config),
@@ -1568,6 +1484,48 @@ def main(page: ft.Page):
 
     # ------- 通知の更新 (起動時 + 定期ポーリング): 更新バナーとタブバッジ -------
 
+    def _watch_new_release():
+        """リリース公開 (数分かかる) を見張り、公開されたら通知を更新する.
+
+        リリース直後は Releases の公開処理が終わっておらず即時チェック
+        では「更新なし」になるため、バッジは「準備中」(グレーの…) で
+        すぐ反応を返し、公開を確認できたら黄色の件数に切り替える。
+        最初の 1 分は 10 秒間隔・以降 30 秒間隔で最大 10 分見張る。
+        """
+        _pending_release['until'] = time.time() + 10 * 60
+        update_badge.content.value = '…'
+        update_badge.bgcolor = '#cbd5e1'
+        update_badge.tooltip = '新しい正式版を準備中です (数分かかります)'
+        update_badge.visible = True
+        page.update()
+
+        def work():
+            start = time.time()
+            while time.time() < _pending_release['until']:
+                time.sleep(10 if time.time() - start < 60 else 30)
+                try:
+                    result = updater.check_update(repo, stable)
+                except Exception:
+                    result = None
+                if (result and result['has_update']
+                        and result['latest'] is not None):
+                    _pending_release['until'] = 0.0
+                    t1_notice.value = ('新しい安定版 %s があります。'
+                                       '「更新」タブから更新してください。'
+                                       % result['latest']['tag'])
+                    set_badge(update_badge, 1)
+                    page.update()
+                    return
+            # 期限切れ: 黙って消さず、確認方法を案内する
+            _pending_release['until'] = 0.0
+            set_badge(update_badge, 0)
+            msg = ('リリースの公開確認ができませんでした。しばらく'
+                   'してから「更新」タブの「更新を確認」を押してください。')
+            t1_notice.value = msg
+            t5_status.value = msg
+            page.update()
+        run_bg(work)
+
     def check_update_notice(reschedule=True):
         """起動時と定期的なバックグラウンド更新.
 
@@ -1595,7 +1553,8 @@ def main(page: ft.Page):
                                        '「更新」タブから更新してください。'
                                        % result['latest']['tag'])
                     set_badge(update_badge, 1)
-                else:
+                elif time.time() >= _pending_release['until']:
+                    # リリース公開待ちの「準備中」バッジは消さない
                     t1_notice.value = ''
                     set_badge(update_badge, 0)
             # 承認タブの一覧・バッジも同じ取得結果で最新化しておく
