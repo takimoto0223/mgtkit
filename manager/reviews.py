@@ -12,6 +12,7 @@
 import json
 import logging
 import re
+import time
 
 from . import claude_helper, feedback, ghcli, paths
 from .autofix import AUTOFIX_PREFIX, _summarize_checks
@@ -378,6 +379,47 @@ def can_release(pr, config=None, me=None):
             and can_operate_release(me, config))
 
 
+def ensure_branch_current(pr_number, config=None, on_progress=None):
+    """提出ブランチが最新の正式版より古ければ取り込み直し、検証を待つ.
+
+    ブランチ保護が「最新の状態でのみマージ可」(strict_status_checks)
+    のため、古いままでは正式版として取り込めない。取り込み直すと
+    検証 (CI) が走り直すので、完了までここで待つ (最大約 8 分)。
+    """
+    def progress(msg):
+        log.info('%s', msg)
+        if on_progress:
+            on_progress(msg)
+
+    repo = paths.repo_slug(config)
+    out = ghcli.run_gh(['pr', 'view', str(pr_number), '--repo', repo,
+                        '--json', 'mergeStateStatus'])
+    try:
+        state = (json.loads(out).get('mergeStateStatus') or '').upper()
+    except ValueError:
+        state = ''
+    if state != 'BEHIND':
+        return
+    progress('提出内容に最新の正式版を取り込み直しています...')
+    ghcli.run_gh(['api', '-X', 'PUT',
+                  'repos/%s/pulls/%d/update-branch' % (repo, pr_number)],
+                 timeout=120)
+    progress('取り込み直し後の検証を待っています (数分かかります)...')
+    deadline = time.time() + 8 * 60
+    while time.time() < deadline:
+        time.sleep(10)
+        detail = _pr_detail(pr_number, config)
+        checks = _summarize_checks(detail.get('statusCheckRollup') or [])
+        if checks == 'failure':
+            raise ReviewError('取り込み直し後の検証で問題が見つかりました。'
+                              '提出者に修正を依頼してください。')
+        if checks == 'success':
+            progress('検証を通過しました。')
+            return
+    raise ReviewError('検証の完了を待ちきれませんでした。しばらくして'
+                      'から、もう一度承認タブを開いてください。')
+
+
 def next_stable_version(config=None):
     """次の正式版バージョン (最新安定版 vX.Y の次のマイナー)."""
     releases = ghcli.fetch_releases(paths.repo_slug(config))
@@ -416,6 +458,8 @@ def release(pr_number, config=None, on_progress=None):
         raise ReviewError('リリース操作は管理者のみ実行できます '
                           '(config.json の manager.admins で設定)。')
 
+    # ブランチが古いと保護設定 (strict) でマージが拒否されるため先に最新化
+    ensure_branch_current(pr_number, config, on_progress=on_progress)
     progress('正式版として取り込んでいます...')
     ghcli.run_gh(['pr', 'merge', str(pr_number), '--repo',
                   paths.repo_slug(config), '--squash'], timeout=120)

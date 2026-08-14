@@ -780,6 +780,15 @@ def main(page: ft.Page):
             return False
         if not reviews.can_release(pr, config, me):
             return False
+        # ブランチが最新の正式版より古い場合はここで取り込み直して検証を
+        # 待つ (時間がかかる工程は発射演出の前に済ませる)
+        try:
+            reviews.ensure_branch_current(pr['number'], config,
+                                          on_progress=_t5_progress)
+        except (reviews.ReviewError, ghcli.GhError) as e:
+            t5_status.value = str(e)
+            page.update()
+            return False
         _hide_zone(pr_number)     # 常駐機は overlay の機体と入れ替える
         state = {'anim': False, 'net': False, 'ok': False}
 
@@ -1267,7 +1276,7 @@ def main(page: ft.Page):
 
     tab_beta_review = ft.Container(padding=24, content=ft.Column([
         ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
-                'ます。β版を試して問題なければ承認してください。%d 人の'
+                'ます。β版を確認したら、問題なければ承認してください。%d 人の'
                 '承認がそろうと自動で正式版としてリリースされます 🚀。'
                 '自分の提出は自分では承認できません。'
                 % reviews.required_approvals(config),
