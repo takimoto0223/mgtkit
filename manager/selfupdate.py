@@ -96,18 +96,21 @@ def _build_diff_html(root, files, stamp):
             '<col style="width:48px"><col>'
             '<col style="width:48px"><col></colgroup>%s</table></div>'
             % (title, ''.join(body)))
+    # 凡例は紺のヘッダー内だと白文字と色チップが潰れて読めないため、
+    # ヘッダーの下 (白地) に置く
     return (
         '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">'
         '<title>退避した直接変更 (%s)</title><style>%s</style></head><body>'
-        '<header><div><h1>退避した直接変更 (%s)</h1>'
-        '<div class="meta">左 = リポジトリの内容 (最新版に更新済み) / '
+        '<header><div><h1>退避した直接変更 (%s)</h1></div></header>'
+        '<div class="wrap">'
+        '<p class="note">左 = リポジトリの内容 (最新版に更新済み) / '
         '右 = 退避した直接変更。'
         '<span style="background:#fecaca">&nbsp;赤&nbsp;</span>= 変更前、'
         '<span style="background:#bbf7d0">&nbsp;緑&nbsp;</span>'
         '= 変更後・追加、'
         '<span style="background:#d3ddee; text-decoration:line-through">'
-        '&nbsp;紺&nbsp;</span>= 削除された行</div></div></header>'
-        '<div class="wrap">%s</div></body></html>'
+        '&nbsp;紺&nbsp;</span>= 削除された行</p>'
+        '%s</div></body></html>'
         % (stamp, diffview._CSS, stamp, ''.join(sections)))
 
 
