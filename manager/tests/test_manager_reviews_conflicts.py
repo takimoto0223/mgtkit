@@ -181,14 +181,6 @@ class TestSubmissionFilter:
         assert not reviews._is_submission({'headRefName': 'main'})
         assert not reviews._is_submission({})
 
-    def test_count_pending_excludes_manager_updates(self, monkeypatch):
-        monkeypatch.setattr(
-            reviews.ghcli, 'run_gh',
-            lambda args, timeout=60:
-            '[{"headRefName": "feature/yamada-20260808-1"},'
-            ' {"headRefName": "claude/app-manager-update"}]')
-        assert reviews.count_pending({'repo': 'o/r'}) == 1
-
     def test_list_pending_excludes_manager_updates(self, monkeypatch):
         import json as _json
 

@@ -16,8 +16,8 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
-               localstate, paths, reviews, selfupdate, settings, submit,
-               updater, usage)
+               localstate, paths, reviewcache, reviews, selfupdate,
+               settings, submit, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
@@ -1330,25 +1330,24 @@ def main(page: ft.Page):
                 return r
         return None
 
-    def on_refresh_reviews(_, preloaded=None):
-        """一覧の取得と再描画。preloaded=(pending, me) が渡されたときは
-        一覧を取り直さない (承認直後などの取得済みデータを使い回す)."""
-        t5_status.value = '取得中...'
-        page.update()
+    # 描画は複数スレッド (ボタン操作・定期更新) から呼ばれるため直列化する
+    _render_lock = threading.Lock()
 
-        def work():
-            try:
-                if preloaded is not None:
-                    pending, me = preloaded
-                else:
-                    pending = reviews.list_pending(config)
-                    me = reviews.current_user()
-                releases = ghcli.fetch_releases(repo)
-            except (reviews.ReviewError, ghcli.GhError) as e:
-                t5_status.value = str(e)
-                page.update()
-                return
-            betas = ghcli.prereleases(releases)
+    def _render_reviews(data, stale=False, animate=True):
+        """取得済みスナップショットで一覧を描画する.
+
+        stale=True は前回結果の即時表示 (裏の取得で差し替わる前提)。
+        ローカル記録の掃除・自動畳みは最新データの描画 (stale=False) の
+        ときだけ行う。animate=False は定期更新など画面を見ていない
+        可能性が高いときのロケット演出の抑止。
+        """
+        with _render_lock:
+            _render_reviews_locked(data, stale, animate)
+
+    def _render_reviews_locked(data, stale, animate):
+        pending, me = data['pending'], data['me']
+        betas = ghcli.prereleases(data.get('releases') or [])
+        if not stale:
             # 「非表示」にした却下確定の提出は自分の画面から除く
             # (クローズ済みの記録は掃除する)
             localstate.prune_hidden([p['number'] for p in pending], config)
@@ -1359,47 +1358,118 @@ def main(page: ft.Page):
                 if p.get('rejected_final') and p['number'] not in auto_done:
                     localstate.hide_pr(p['number'], config)
                     localstate.mark_auto_folded(p['number'], config)
-            hidden = localstate.hidden_prs(config)
-            folded = [p for p in pending
-                      if p.get('rejected_final') and p['number'] in hidden]
-            visible = [p for p in pending if p not in folded]
-            set_badge(review_badge, len(visible))
-            _rocket_anims.clear()
-            t5_list.controls.clear()
-            if not visible:
-                t5_list.controls.append(
-                    ft.Text('確認・承認待ちの提出はありません', size=14))
-            for pr in visible:
-                t5_list.controls.append(
-                    _review_row(pr, me, _beta_for(pr['number'], betas)))
-            if folded:
-                # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
-                t5_list.controls.append(ft.Text(
-                    '非表示にした提出 (却下確定)', size=12,
-                    color='#9ca3af'))
-                for pr in folded:
-                    t5_list.controls.append(ft.Row([
-                        ft.Text('💥 #%d %s' % (pr['number'], pr['title']),
-                                size=12, color='#9ca3af', expand=True),
-                        ft.TextButton('一覧に戻す',
-                                      on_click=on_unhide_pr(pr)),
-                    ], spacing=8))
-            # 提出に対応しないβ版はリリース・取り下げ・却下確定の時点で
-            # 自動削除されるため、ここでは表示しない
+        hidden = localstate.hidden_prs(config)
+        folded = [p for p in pending
+                  if p.get('rejected_final') and p['number'] in hidden]
+        visible = [p for p in pending if p not in folded]
+        set_badge(review_badge, len(visible))
+        _rocket_anims.clear()
+        t5_list.controls.clear()
+        if not visible:
+            t5_list.controls.append(
+                ft.Text('確認・承認待ちの提出はありません', size=14))
+        for pr in visible:
+            t5_list.controls.append(
+                _review_row(pr, me, _beta_for(pr['number'], betas)))
+        if folded:
+            # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
+            t5_list.controls.append(ft.Text(
+                '非表示にした提出 (却下確定)', size=12,
+                color='#9ca3af'))
+            for pr in folded:
+                t5_list.controls.append(ft.Row([
+                    ft.Text('💥 #%d %s' % (pr['number'], pr['title']),
+                            size=12, color='#9ca3af', expand=True),
+                    ft.TextButton('一覧に戻す',
+                                  on_click=on_unhide_pr(pr)),
+                ], spacing=8))
+        # 提出に対応しないβ版はリリース・取り下げ・却下確定の時点で
+        # 自動削除されるため、ここでは表示しない
+        if stale:
+            age = reviewcache.age_minutes(data)
+            t5_status.value = ('前回の内容を表示中%s。最新を確認して'
+                               'います...'
+                               % (' (%d 分前の取得)' % age if age else ''))
+        else:
             t5_status.value = ''
+        page.update()
+        # 最新データの描画後にロケット演出 (点火・煙) を一度だけ再生
+        anims = _rocket_anims[:]
+        _rocket_anims.clear()
+        if anims and not stale and animate:
+            def play():
+                for fn in anims:
+                    try:
+                        fn()
+                    except Exception:
+                        log.debug('ロケット演出をスキップ',
+                                  exc_info=True)
+            run_bg(play)
+
+    def _fetch_review_snapshot():
+        """一覧とリリース一覧を並列に取得してスナップショットへ保存する.
+
+        戻り値: 採用されたスナップショット。より新しい取得に追い越されて
+        破棄されたときは None。取得失敗は ReviewError / GhError を送出。
+        """
+        seq = reviewcache.next_seq()
+        results, errors = {}, []
+
+        def fetch(name, fn):
+            def run():
+                try:
+                    results[name] = fn()
+                except (reviews.ReviewError, ghcli.GhError) as e:
+                    errors.append(e)
+            return threading.Thread(target=run, daemon=True)
+
+        threads = [
+            fetch('pending', lambda: (reviews.list_pending(config),
+                                      reviews.current_user())),
+            fetch('releases', lambda: ghcli.fetch_releases(repo)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if errors:
+            raise errors[0]
+        pending, me = results['pending']
+        return reviewcache.put(pending, results['releases'], me,
+                               seq=seq, config=config)
+
+    def on_refresh_reviews(_, preloaded=None):
+        """一覧の再描画。手元にある前回の取得結果を即座に表示し、
+        裏で最新を取得して差し替える (取得を待たせない)。
+        preloaded=(pending, me) は承認直後などの取得済み一覧
+        (リリース一覧だけ取り直して確定表示する)。"""
+        cached = reviewcache.get() or reviewcache.load_from_disk(config)
+        if preloaded is not None and cached is not None:
+            # 取得済みの最新一覧 + 手元のリリース一覧でまず即時表示
+            _render_reviews(dict(cached, pending=preloaded[0],
+                                 me=preloaded[1]), stale=True)
+        elif cached is not None:
+            _render_reviews(cached, stale=True)
+        else:
+            t5_status.value = '取得中...'
             page.update()
-            # 描画後にロケット演出 (点火・煙) を一度だけ再生
-            anims = _rocket_anims[:]
-            _rocket_anims.clear()
-            if anims:
-                def play():
-                    for fn in anims:
-                        try:
-                            fn()
-                        except Exception:
-                            log.debug('ロケット演出をスキップ',
-                                      exc_info=True)
-                run_bg(play)
+
+        def work():
+            try:
+                if preloaded is not None:
+                    seq = reviewcache.next_seq()
+                    pending, me = preloaded
+                    data = reviewcache.put(pending,
+                                           ghcli.fetch_releases(repo),
+                                           me, seq=seq, config=config)
+                else:
+                    data = _fetch_review_snapshot()
+            except (reviews.ReviewError, ghcli.GhError) as e:
+                t5_status.value = str(e)
+                page.update()
+                return
+            if data is not None:  # None = より新しい取得に追い越された
+                _render_reviews(data)
         run_bg(work)
 
     tab_beta_review = ft.Container(padding=24, content=ft.Column([
@@ -1412,7 +1482,7 @@ def main(page: ft.Page):
         ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
                 'ため、通常の作業には影響しません。', size=12,
                 color='#555555'),
-        ft.OutlinedButton('一覧を取得', icon=ft.Icons.REFRESH,
+        ft.OutlinedButton('最新の状態に更新', icon=ft.Icons.REFRESH,
                           on_click=on_refresh_reviews),
         t5_list,
         t5_status,
@@ -1423,10 +1493,16 @@ def main(page: ft.Page):
     update_label, update_badge = tab_label('更新')
     review_label, review_badge = tab_label('β版の確認と承認')
 
+    def on_tab_change(e):
+        # β版タブを開いた瞬間: 手元の内容を即表示し、裏で最新へ更新する
+        if getattr(e.control, 'selected_index', None) == 3:
+            on_refresh_reviews(None)
+
     page.add(
         header(),
         ft.Tabs(
             length=4, selected_index=0, animation_duration=150, expand=True,
+            on_change=on_tab_change,
             content=ft.Column([
                 ft.TabBar(tabs=[
                     ft.Tab(label='起動'),
@@ -1448,30 +1524,48 @@ def main(page: ft.Page):
     # ------- 通知の更新 (起動時 + 定期ポーリング): 更新バナーとタブバッジ -------
 
     def check_update_notice(reschedule=True):
+        """起動時と定期的なバックグラウンド更新.
+
+        承認待ち一覧 + リリース一覧を 1 回のスナップショット取得に
+        まとめ、更新バナー・タブバッジ・承認タブの表示をすべて同じ
+        結果から更新する (タブを開いた瞬間に新しい内容が出せる)。
+        """
         def work():
             try:
-                result = updater.check_update(repo, stable)
+                data = _fetch_review_snapshot()
             except Exception:
                 log.info('更新チェックをスキップしました (オフライン等)')
                 return
-            if result['has_update'] and result['latest'] is not None:
-                t1_notice.value = ('新しい安定版 %s があります。「更新」タブ'
-                                   'から更新してください。'
-                                   % result['latest']['tag'])
-                set_badge(update_badge, 1)
-            else:
-                t1_notice.value = ''
-                set_badge(update_badge, 0)
+            if data is None:
+                return  # より新しい取得が反映済み
             try:
-                set_badge(review_badge, reviews.count_pending(config))
+                result = updater.check_update(repo, stable,
+                                              releases=data['releases'])
             except Exception:
-                log.info('承認待ち件数の取得をスキップしました')
-            page.update()
+                log.info('更新チェックをスキップしました (オフライン等)')
+                result = None
+            if result is not None:
+                if result['has_update'] and result['latest'] is not None:
+                    t1_notice.value = ('新しい安定版 %s があります。'
+                                       '「更新」タブから更新してください。'
+                                       % result['latest']['tag'])
+                    set_badge(update_badge, 1)
+                else:
+                    t1_notice.value = ''
+                    set_badge(update_badge, 0)
+            # 承認タブの一覧・バッジも同じ取得結果で最新化しておく
+            _render_reviews(data, animate=False)
         run_bg(work)
         if reschedule:
             timer = threading.Timer(UPDATE_POLL_SECONDS, check_update_notice)
             timer.daemon = True
             timer.start()
+
+    # 起動時: 前回のスナップショットがあれば先に描画しておき、直後の
+    # 定期更新が最新へ差し替える (初回からタブを開いた瞬間に表示される)
+    _startup_snapshot = reviewcache.load_from_disk(config)
+    if _startup_snapshot is not None:
+        _render_reviews(_startup_snapshot, stale=True, animate=False)
 
     check_update_notice()
 
@@ -1506,20 +1600,8 @@ def main(page: ft.Page):
 
     check_membership()
 
-    # ---- キャッシュの事前取得 ----
-    # 自分のログイン名とメンバー一覧は起動中ほぼ変わらないため、起動時に
-    # 裏で取得しておく (承認タブの各操作から往復が減り体感が軽くなる)
-
-    def warm_review_cache():
-        def work():
-            try:
-                reviews.current_user()
-                reviews.collaborators(config)
-            except Exception:
-                log.info('キャッシュの事前取得をスキップしました (オフライン等)')
-        run_bg(work)
-
-    warm_review_cache()
+    # キャッシュの事前取得は check_update_notice のスナップショット取得が
+    # 兼ねる (ログイン名・メンバー一覧・一覧・リリース一覧が一度に温まる)
 
     # ---------------- 初回セットアップ (名前と API キーの登録) ----------------
 

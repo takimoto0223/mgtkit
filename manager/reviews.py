@@ -205,21 +205,6 @@ def list_pending(config=None):
     return result
 
 
-def count_pending(config=None):
-    """承認待ちの提出件数のみを軽量に取得する (タブバッジ用).
-
-    list_pending と同じく feature/ ブランチの提出のみ数える。
-    """
-    out = ghcli.run_gh([
-        'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
-        '--json', 'headRefName'])
-    try:
-        prs = json.loads(out)
-    except ValueError:
-        return 0
-    return sum(1 for pr in prs if _is_submission(pr))
-
-
 def _pr_detail(pr_number, config=None):
     out = ghcli.run_gh([
         'pr', 'view', str(pr_number), '--repo', paths.repo_slug(config),

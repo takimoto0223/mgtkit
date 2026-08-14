@@ -26,9 +26,12 @@ import pytest  # noqa: E402  (sys.path 設定後に import する)
 
 @pytest.fixture(autouse=True)
 def _clear_reviews_cache():
-    """reviews のセッションキャッシュ (ログイン名等) をテスト間で
-    持ち越さない (各テストが run_gh を独自にモックするため)."""
-    from manager import reviews
+    """reviews のセッションキャッシュ (ログイン名等) と reviewcache の
+    スナップショットをテスト間で持ち越さない
+    (各テストが run_gh を独自にモックするため)."""
+    from manager import reviewcache, reviews
     reviews.clear_cache()
+    reviewcache.clear()
     yield
     reviews.clear_cache()
+    reviewcache.clear()
