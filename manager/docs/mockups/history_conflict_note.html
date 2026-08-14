@@ -1,0 +1,120 @@
+<!-- 更新の詳細 (リリースノート) モック: 変更が重なったときの見せ方 (実装なし)
+     今後の方向性の見た目確認用。一覧の行 (詳細バー) をクリックすると開く想定。
+     ◆ = 変更の重なりを AI が自動調整した点。図と文章 (琥珀色の枠) の両方で説明する -->
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: rgba(30,41,59,.45);
+         font-family: "Yu Gothic UI", "Meiryo", "IPAPGothic", sans-serif; }
+  .dialog { width: 700px; margin: 14px auto; background: #f1f2f6; border-radius: 14px;
+            padding: 18px 22px 12px; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+  .dtitle { font-size: 19px; font-weight: bold; color: #1f2937; margin: 0 0 10px; }
+  .figure { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; }
+  .caption { font-size: 11px; color: #4b5563; margin: 5px 2px 12px; }
+  .note { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px;
+          padding: 12px 14px; font-size: 12.5px; color: #374151; }
+  .nhead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .nver { font-size: 15px; font-weight: bold; color: #2b4a6f; }
+  .nwho { width: 11px; height: 11px; border-radius: 6px; background: #be185d; flex: none; }
+  .nmeta { flex: 1; font-size: 11.5px; color: #475569; }
+  .dl { display: inline-flex; align-items: center; gap: 5px; color: #2b4a6f;
+        border: 1.5px solid #2b4a6f; border-radius: 15px; padding: 4px 11px;
+        font-size: 12px; white-space: nowrap; flex: none; }
+  .nbody { margin: 0 0 10px; padding-left: 4px; }
+  .nbody li { margin: 3px 0 3px 16px; }
+  .aibox { background: #fffbeb; border: 1.5px solid #f59e0b; border-radius: 8px;
+           padding: 10px 12px; }
+  .aititle { display: flex; align-items: center; gap: 7px; font-weight: bold;
+             color: #92400e; font-size: 12.5px; margin-bottom: 6px; }
+  .aidia { width: 11px; height: 11px; background: #fef3c7; border: 1.5px solid #d97706;
+           transform: rotate(45deg); flex: none; }
+  .aibox p { margin: 0 0 6px; color: #78350f; font-size: 12px; line-height: 1.55; }
+  .aibox li { margin: 2px 0 2px 16px; color: #92400e; font-size: 12px; line-height: 1.5; }
+  .aifoot { font-size: 11px; color: #6b7280; margin: 8px 0 0; }
+  .close { text-align: right; color: #2b4a6f; font-size: 14px; font-weight: bold; padding: 6px 6px 0; }
+</style>
+
+<svg width="0" height="0"><defs>
+  <g id="dlicon">
+    <path d="M6.5 0 v7 M3.2 4 l3.3 3.3 L9.8 4" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1 10.5 h11" stroke-width="1.8" stroke-linecap="round"/>
+  </g>
+</defs></svg>
+
+<div class="dialog">
+  <p class="dtitle">v1.7 の更新内容</p>
+
+  <div class="figure">
+    <svg width="656" height="228" viewBox="0 0 656 228">
+      <!-- 本線 (正式版) -->
+      <line x1="60" y1="110" x2="616" y2="110" stroke="#94a3b8" stroke-width="3.5" stroke-linecap="round"/>
+
+      <!-- 派生: v1.5 → 佐藤 #35 (下レーン) -->
+      <path d="M120,110 L140.8,146 C144.8,152.9 145,170 153,170 L171,170" stroke="#0f766e" stroke-width="3" fill="none"/>
+      <path d="M180,170 L171,164.8 L171,175.2 z" fill="#0f766e"/>
+      <rect x="180" y="155" rx="8" width="125" height="30" fill="#0f766e14" stroke="#0f766e" stroke-width="1.5"/>
+      <text x="242" y="174" font-size="11.5" fill="#0f5f57" text-anchor="middle" font-weight="bold">佐藤 #35</text>
+      <text x="182" y="200" font-size="10.5" fill="#0f5f57">検定比の丸め処理を修正</text>
+      <!-- 合流: → v1.6 -->
+      <path d="M305,170 L330,127.3" stroke="#0f766e" stroke-width="3" fill="none"/>
+      <path d="M334.5,119.5 L333,129.1 L327,125.6 z" fill="#0f766e"/>
+
+      <!-- 派生: v1.5 → 高橋 #38 (上レーン) -->
+      <path d="M120,110 L140.8,74 C144.8,67.1 145,50 153,50 L191,50" stroke="#be185d" stroke-width="3" fill="none"/>
+      <path d="M200,50 L191,44.8 L191,55.2 z" fill="#be185d"/>
+      <rect x="200" y="35" rx="8" width="325" height="30" fill="#be185d14" stroke="#be185d" stroke-width="1.5"/>
+      <text x="212" y="54" font-size="11.5" fill="#9d174d"><tspan font-weight="bold">高橋 #38</tspan> 保有耐力横補剛の追加検討</text>
+      <!-- 合流: → v1.7 -->
+      <path d="M525,50 L545.7,85.4" stroke="#be185d" stroke-width="3" fill="none"/>
+      <path d="M550.2,93.2 L548.7,83.6 L542.7,87.1 z" fill="#be185d"/>
+
+      <!-- 変更の重なり: 同じ計算部分を変更していた組み合わせ (点線) -->
+      <line x1="243" y1="65" x2="243" y2="155" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4 4"/>
+      <text x="236" y="99" font-size="10.5" fill="#92400e" text-anchor="end">同じ計算部分を変更</text>
+
+      <!-- 自動調整の点 (合流の矢印上の ◆) -->
+      <rect x="529.5" y="62" width="13" height="13" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"
+            transform="rotate(45 536 68.5)"/>
+      <text x="520" y="80" font-size="10.5" fill="#92400e" text-anchor="end">重なりを AI が自動調整</text>
+
+      <!-- 駅ノード (最後に描く) -->
+      <circle cx="120" cy="110" r="9" fill="#ffffff" stroke="#2b4a6f" stroke-width="3"/>
+      <circle cx="340" cy="110" r="9" fill="#ffffff" stroke="#2b4a6f" stroke-width="3"/>
+      <circle cx="560" cy="110" r="14" fill="#2b4a6f" stroke="#f59e0b" stroke-width="6"/>
+      <g font-size="12.5" fill="#2b4a6f" font-weight="bold">
+        <text x="110" y="94" text-anchor="end">v1.5</text>
+        <text x="340" y="94" text-anchor="middle">v1.6</text>
+      </g>
+      <rect x="512" y="128" rx="7" width="96" height="24" fill="#fef08a" stroke="#a16207" stroke-width="1"/>
+      <text x="560" y="145" font-size="12.5" fill="#713f12" text-anchor="middle" font-weight="bold">v1.7 現行版</text>
+      <g font-size="10.5" fill="#475569" text-anchor="middle">
+        <text x="120" y="132">2026/8/10</text>
+        <text x="340" y="132">2026/8/14</text>
+        <text x="560" y="172">2026/8/18</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption"><b>読み方:</b> 点線 = 同じ計算部分を変更していた組み合わせ · ◆ = 合流のときに変更の重なりを AI が自動調整した点 (くわしくは下の琥珀色の枠)</p>
+
+  <div class="note">
+    <div class="nhead">
+      <span class="nwho"></span>
+      <span class="nver">v1.7</span>
+      <span class="nmeta">高橋 #38 · v1.5 を基に作成 · 2026/8/15 提出 → 8/18 公開</span>
+      <span class="dl"><svg width="13" height="12"><use href="#dlicon" stroke="#2b4a6f" fill="none"/></svg>ZIP を保存</span>
+    </div>
+    <ul class="nbody">
+      <li>保有耐力横補剛の検討に、追加の検討ケースを対応しました。</li>
+    </ul>
+    <div class="aibox">
+      <div class="aititle"><span class="aidia"></span>AI が自動で調整した箇所</div>
+      <p>先に公開された v1.6 (佐藤さん「検定比の丸め処理を修正」) と、この更新が同じ計算部分を
+         変更していたため、そのままでは重なってしまう状態でした。両方の変更が生きる形に
+         AI が組み合わせています。</p>
+      <ul>
+        <li>横補剛の検定比の計算 — 丸め処理は v1.6 の方式を採用し、追加検討の計算式はこの更新の内容を反映</li>
+      </ul>
+      <p class="aifoot">自動調整した結果は「β版の確認と承認」でチェックを受けてから公開されています。</p>
+    </div>
+  </div>
+  <div class="close">閉じる</div>
+</div>
