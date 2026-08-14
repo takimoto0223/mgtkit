@@ -40,5 +40,10 @@ dist/
 .env
 *.db
 
+# Claude Code をローカルで使うときの個人ファイル
+CLAUDE.local.md
+.claude/settings.local.json
+*.bak-*
+
 # テスト用フィクスチャは業務ファイル除外の例外として追跡する
 !tests/fixtures/**
