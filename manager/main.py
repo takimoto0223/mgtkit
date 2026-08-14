@@ -155,18 +155,24 @@ def main(page: ft.Page):
     # ---------------- タブ1: 起動 ----------------
 
     t1_version = ft.Text('', size=16, weight=ft.FontWeight.BOLD)
-    t1_status = status_text()
+    t1_meta = ft.Text('', size=12, color='#555555')   # 恒久情報 (配布日)
+    t1_fresh = ft.Text('', size=12, color='#9ca3af')  # 確認状態の常時表示
+    t1_status = status_text()                          # 進捗・エラー専用
     t1_notice = ft.Text('', size=13, weight=ft.FontWeight.BOLD, color=AMBER)
     join_notice = ft.Text('', size=12, color='#555555')
-    # 自動更新の完了通知: 黄色いタグ + 更新内容 (更新タブ廃止に伴う導線)
+    # 自動更新の完了通知: 黄色いタグ (更新タブ廃止に伴う導線)
     t1_update_tag = ft.Container(
         visible=False, bgcolor='#fef08a', border_radius=6,
         padding=ft.Padding.symmetric(vertical=6, horizontal=12),
         content=ft.Text('', size=13, weight=ft.FontWeight.BOLD,
                         color='#713f12'))
-    t1_update_notes = ft.Container(
+    # いま使っている版の更新内容 (常設。何が入っている版かを後から確認できる)
+    t1_notes_head = ft.Text('', size=13, weight=ft.FontWeight.BOLD,
+                            color='#374151')
+    t1_notes_body = ft.Text('', size=13, selectable=True, color='#374151')
+    t1_notes_box = ft.Container(
         visible=False, bgcolor='#f5f7fa', border_radius=6, padding=12,
-        content=ft.Text('', size=13, selectable=True, color='#374151'))
+        content=ft.Column([t1_notes_head, t1_notes_body], spacing=6))
     t1_launch_btn = ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
                                     bgcolor=NAVY, color='#ffffff')
     # installing: 自動更新の実行中 (二重実行と起動の衝突を防ぐ) /
@@ -174,26 +180,69 @@ def main(page: ft.Page):
     # (次回「起動」時に取り込む)
     _update_state = {'installing': False, 'pending': None}
 
+    # 空の案内 Text が行として残ると余白がガタつくため、描画のたびに
+    # 空なら行ごと畳む (起動タブの案内は設定箇所が多いため一括処理)
+    _page_update_orig = page.update
+
+    def _page_update(*args, **kwargs):
+        for c in (t1_fresh, t1_status, t1_notice, join_notice):
+            c.visible = bool(c.value)
+        return _page_update_orig(*args, **kwargs)
+
+    page.update = _page_update
+
     def refresh_local_version():
         info = updater.local_version_info(stable)
         if info is None:
-            t1_version.value = '安定版は未取得です'
-            t1_status.value = ('「起動」を押すと最新の安定版を自動で取得して'
-                               '開きます。')
+            t1_version.value = 'アプリはまだ取り込まれていません'
+            t1_meta.value = ('初回はアプリの取り込みに数分かかります。'
+                             '「起動」を押してそのままお待ちください。')
         else:
-            t1_version.value = '安定版 %s' % info.get('version', '?')
-            t1_status.value = '配布日: %s' % info.get('distributed_at', '-')
+            t1_version.value = ('いま使っている版 %s'
+                                % info.get('version', '?'))
+            t1_meta.value = '配布日: %s' % info.get('distributed_at', '-')
+        page.update()
+
+    def _clean_notes(tag, notes):
+        """更新内容の表示用整形: 版名と重複する先頭行を取り除く.
+
+        リリースノートは「vX.Y リリース。」で始まる書式が多く、版名の
+        見出しと並べると重複するため表示時だけ落とす (原文は変えない)。
+        """
+        lines = (notes or '').strip().splitlines()
+        while lines and (not lines[0].strip()
+                         or lines[0].strip().rstrip('。.') in
+                         (tag, '%s リリース' % tag, '%sリリース' % tag)):
+            lines.pop(0)
+        return '\n'.join(lines).strip()
+
+    def _refresh_current_notes(releases=None):
+        """「いま使っている版の更新内容」の常設表示を最新化する."""
+        if releases is None:
+            cached = reviewcache.get() or reviewcache.load_from_disk(config)
+            releases = (cached or {}).get('releases') or []
+        local_v = (updater.local_version_info(stable) or {}).get('version')
+        rel = next((r for r in releases
+                    if not r['prerelease'] and r['tag'] == local_v), None)
+        if rel is None:
+            t1_notes_box.visible = False
+        else:
+            t1_notes_head.value = ('いま使っている版 (%s) の更新内容'
+                                   % rel['tag'])
+            t1_notes_body.value = (_clean_notes(rel['tag'],
+                                                rel.get('notes'))
+                                   or '(更新内容の記載はありません)')
+            t1_notes_box.visible = True
         page.update()
 
     def _show_updated(release):
-        """自動更新の完了を黄色いタグ + 更新内容で知らせる."""
-        t1_update_tag.content.value = ('バージョンが更新されました (%s)。'
-                                       % release['tag'])
+        """自動更新の完了を黄色いタグで知らせ、更新内容の常設欄も更新する."""
+        t1_update_tag.content.value = ('アプリを %s に更新しました。'
+                                       'このまま「起動」してお使い'
+                                       'いただけます。' % release['tag'])
         t1_update_tag.visible = True
-        t1_update_notes.content.value = (release.get('notes')
-                                         or '(更新内容の記載はありません)')
-        t1_update_notes.visible = True
         t1_notice.value = ''
+        _refresh_current_notes()
         page.update()
 
     def _auto_update(latest):
@@ -207,8 +256,10 @@ def main(page: ft.Page):
             return False
         if launcher.port_in_use(paths.stable_port(config)):
             _update_state['pending'] = latest
-            t1_notice.value = ('新しい安定版 %s があります。次回の「起動」で'
-                               '自動的に更新されます。' % latest['tag'])
+            t1_notice.value = ('新しい版 %s があります。いまはアプリを使用中'
+                               'のため更新していません。アプリを閉じてから'
+                               '「起動」を押すと更新されます。'
+                               % latest['tag'])
             page.update()
             return False
         _update_state['installing'] = True
@@ -216,12 +267,13 @@ def main(page: ft.Page):
         page.update()
         try:
             def progress(msg):
-                t1_status.value = ('新しい安定版 %s を取り込んでいます... %s'
+                t1_status.value = ('新しい版 %s を取り込んでいます... %s'
                                    % (latest['tag'], msg))
                 page.update()
             updater.install_release(repo, latest, stable,
                                     on_progress=progress)
             _update_state['pending'] = None
+            t1_status.value = ''
             refresh_local_version()
             _show_updated(latest)
             ok = True
@@ -237,8 +289,16 @@ def main(page: ft.Page):
         page.update()
         return ok
 
-    def on_launch_stable(_):
+    def _launch(update_first=True):
+        """起動する。update_first=True なら取り込み待ちの版を先に取り込む."""
+        if _update_state['installing']:
+            t1_status.value = ('新しい版の取り込み中です。'
+                               '完了までお待ちください。')
+            page.update()
+            return
+        t1_update_tag.visible = False   # 更新完了の通知は一度見たら畳む
         t1_status.value = '起動しています...'
+        t1_launch_btn.disabled = True   # 取り込み中の二度押しを防ぐ
         page.update()
 
         def work():
@@ -248,8 +308,8 @@ def main(page: ft.Page):
             try:
                 # 取り込み待ちの新しい正式版があれば起動前に取り込む
                 pending = _update_state['pending']
-                if pending is not None and not _update_state['installing']:
-                    progress('新しい安定版 %s に更新しています...'
+                if update_first and pending is not None:
+                    progress('新しい版 %s に更新しています...'
                              % pending['tag'])
                     launcher.stop_app(paths.stable_port(config))
                     updater.install_release(repo, pending, stable,
@@ -258,13 +318,14 @@ def main(page: ft.Page):
                     refresh_local_version()
                     _show_updated(pending)
                 if updater.local_version_info(stable) is None:
-                    # 初回: 最新の安定版を自動で取得してから起動する
-                    progress('最新の安定版を確認しています...')
+                    # 初回: 最新の正式版を自動で取得してから起動する
+                    progress('最新の版を確認しています...')
                     latest = ghcli.latest_stable(
                         ghcli.fetch_releases(repo))
                     if latest is None:
-                        t1_status.value = ('配布された安定版がまだありません。'
+                        t1_status.value = ('配布された正式版がまだありません。'
                                            '管理者に確認してください。')
+                        t1_launch_btn.disabled = False
                         page.update()
                         return
                     # 前回の残骸のサーバーが動いているとフォルダを
@@ -273,20 +334,61 @@ def main(page: ft.Page):
                     updater.install_release(repo, latest, stable,
                                             on_progress=progress)
                     refresh_local_version()
+                    _refresh_current_notes()
                 _, url = launcher.launch_app(
                     stable, paths.stable_port(config), channel='stable')
                 t1_status.value = 'ブラウザで開きます: %s' % url
             except (ghcli.GhError, launcher.LaunchError, Exception) as e:
                 log.exception('起動に失敗しました')
                 t1_status.value = str(e) or '起動に失敗しました。'
+            t1_launch_btn.disabled = False
             page.update()
         run_bg(work)
 
+    def on_launch_stable(_):
+        # 取り込み待ちの版があり、かつアプリを使用中なら、黙って終了させず
+        # 確認してから更新する (入力中の内容を失わせないため)
+        pending = _update_state['pending']
+        if (pending is not None
+                and launcher.port_in_use(paths.stable_port(config))):
+            def do_update(_):
+                page.pop_dialog()
+                _launch(update_first=True)
+
+            def later(_):
+                page.pop_dialog()
+                _launch(update_first=False)
+
+            page.show_dialog(ft.AlertDialog(
+                modal=True,
+                title=ft.Text('%s に更新して開き直しますか?'
+                              % pending['tag']),
+                content=ft.Text('更新するには、いま開いているアプリを'
+                                'いったん終了する必要があります。入力中の'
+                                '内容があれば保存してから「更新して開く」を'
+                                '押してください。', size=13, width=440),
+                actions=[
+                    ft.TextButton('あとにする (このまま開く)',
+                                  on_click=later),
+                    ft.FilledButton('更新して開く', on_click=do_update,
+                                    bgcolor=NAVY, color='#ffffff'),
+                ]))
+            return
+        _launch(update_first=True)
+
     t1_launch_btn.on_click = on_launch_stable
+
+    def on_check_now(_):
+        """手動の更新確認 (定期チェックと同じ処理をその場で実行する)."""
+        t1_fresh.value = '新しい版がないか確認しています...'
+        page.update()
+        check_update_notice(reschedule=False)
 
     def _download_history_zip(rel, dlg_status):
         """過去の正式版の ZIP をダウンロードフォルダへ保存する."""
-        def handler(_):
+        def handler(e):
+            btn = e.control
+            btn.disabled = True     # 反応が見えず二度押しされるのを防ぐ
             dlg_status.value = '%s を取得しています...' % rel['tag']
             page.update()
 
@@ -305,25 +407,31 @@ def main(page: ft.Page):
                                         'mgtkit-%s.zip' % rel['tag'])
                     shutil.copyfile(path, dest)
                     dlg_status.value = 'ZIP を保存しました: %s' % dest
-                except Exception as e:
+                except Exception as e2:
                     log.exception('過去の版の取得に失敗しました')
-                    dlg_status.value = (str(e)
+                    dlg_status.value = (str(e2)
                                         or 'ダウンロードに失敗しました。')
                 finally:
                     shutil.rmtree(tmp, ignore_errors=True)
-                page.update()
+                    btn.disabled = False
+                    page.update()
             run_bg(work)
         return handler
 
-    def on_show_history(_):
-        """過去の更新ログ (正式版ごとのリリースノート + ZIP 保存)."""
-        cached = reviewcache.get() or reviewcache.load_from_disk(config)
-        stables = [r for r in (cached or {}).get('releases') or []
-                   if not r['prerelease']]
-        dlg_status = ft.Text('', size=12, color='#555555', selectable=True)
+    def _history_rows(releases, dlg_status):
+        """更新ログの版ごとの行。内容は 2 行に畳み、行タップで全文表示."""
         local_v = (updater.local_version_info(stable) or {}).get('version')
         rows = []
-        for r in stables:
+        for r in [x for x in releases if not x['prerelease']]:
+            note = ft.Text(_clean_notes(r['tag'], r.get('notes'))
+                           or '(更新内容の記載はありません)',
+                           size=12, color='#555555', selectable=True,
+                           max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
+
+            def toggle(_, note=note):
+                note.max_lines = None if note.max_lines else 2
+                page.update()
+
             head = [ft.Text(r['tag'], size=14, weight=ft.FontWeight.BOLD,
                             color=NAVY),
                     ft.Text(r.get('published_at') or '', size=12,
@@ -337,37 +445,74 @@ def main(page: ft.Page):
                 on_click=_download_history_zip(r, dlg_status)))
             rows.append(ft.Container(
                 bgcolor='#f5f7fa', border_radius=6, padding=12,
-                content=ft.Column([
-                    ft.Row(head, spacing=10),
-                    ft.Text(r.get('notes')
-                            or '(更新内容の記載はありません)',
-                            size=12, color='#555555', selectable=True),
-                ], spacing=6)))
+                on_click=toggle,
+                content=ft.Column([ft.Row(head, spacing=10), note],
+                                  spacing=6)))
         if not rows:
             rows = [ft.Text('過去の更新ログはまだありません。', size=13,
                             color='#555555')]
+        return rows
+
+    def on_show_history(_):
+        """過去の更新ログ (正式版ごとのリリースノート + ZIP 保存)."""
+        dlg_status = ft.Text('', size=12, color='#555555', selectable=True)
+        body = ft.Column([ft.Text('読み込んでいます...', size=13,
+                                  color='#555555')],
+                         height=330, scroll=ft.ScrollMode.AUTO, tight=True)
         page.show_dialog(ft.AlertDialog(
             title=ft.Text('過去の更新ログ'),
-            content=ft.Column(rows + [dlg_status], width=560, height=380,
-                              scroll=ft.ScrollMode.AUTO, tight=True),
+            content=ft.Column([
+                ft.Text('提出済みの計算書を当時の版で再現したいときなどに、'
+                        'その版の一式 (ZIP) を保存できます。', size=12,
+                        color='#555555'),
+                body,
+                ft.Text('直近の 30 件までを表示しています。それより前の版が'
+                        '必要なときは管理者に相談してください。', size=11,
+                        color='#9ca3af'),
+                dlg_status,
+            ], width=560, tight=True, spacing=8),
             actions=[ft.TextButton('閉じる',
                                    on_click=lambda _: page.pop_dialog())]))
+        cached = reviewcache.get() or reviewcache.load_from_disk(config)
+        releases = (cached or {}).get('releases')
+        if releases is not None:
+            body.controls = _history_rows(releases, dlg_status)
+            page.update()
+            return
 
+        def work():
+            # 起動直後などでまだ手元に一覧がなければ、その場で取得する
+            try:
+                rel = ghcli.fetch_releases(repo)
+            except ghcli.GhError as e:
+                body.controls = [ft.Text(str(e), size=13, color='#b91c1c')]
+                page.update()
+                return
+            body.controls = _history_rows(rel, dlg_status)
+            page.update()
+        run_bg(work)
+
+    # 並び: 版情報 → ボタン (位置固定) → 状態・通知 → 更新内容 (常設)。
+    # 通知の有無で「起動」ボタンの位置が動かないようにする
     tab_launch = ft.Container(padding=24, content=ft.Column([
-        t1_update_tag,
-        t1_update_notes,
-        t1_notice,
-        join_notice,
         t1_version,
+        t1_meta,
         ft.Row([
             t1_launch_btn,
+            ft.OutlinedButton('最新の状態に更新', icon=ft.Icons.REFRESH,
+                              on_click=on_check_now),
             ft.OutlinedButton(
                 '過去の更新ログ', icon=ft.Icons.HISTORY,
                 on_click=on_show_history,
                 style=ft.ButtonStyle(color='#6b7280')),
         ], spacing=12),
+        t1_fresh,
         t1_status,
-    ], spacing=16, scroll=ft.ScrollMode.AUTO))
+        t1_update_tag,
+        t1_notice,
+        join_notice,
+        t1_notes_box,
+    ], spacing=12, scroll=ft.ScrollMode.AUTO))
 
     # ---------------- タブ2: 更新版を提出 ----------------
     # (旧・更新タブは廃止: 新しい正式版は自動で取り込み、起動タブの
@@ -1517,7 +1662,8 @@ def main(page: ft.Page):
     tab_beta_review = ft.Container(padding=24, content=ft.Column([
         ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
                 'ます。β版を確認したら、問題なければ承認してください。%d 人の'
-                '承認がそろうと自動で正式版としてリリースされます 🚀。'
+                '承認がそろうと自動で正式版になり、みなさんのマネージャーに'
+                '自動で取り込まれます 🚀。'
                 '自分の提出は自分では承認できません。'
                 % reviews.required_approvals(config),
                 size=13, color='#555555'),
@@ -1609,28 +1755,39 @@ def main(page: ft.Page):
                 data = _fetch_review_snapshot()
             except Exception:
                 log.info('更新チェックをスキップしました (オフライン等)')
+                t1_fresh.value = ('確認できませんでした。ネットワーク接続を'
+                                  'ご確認ください。')
+                page.update()
                 return
             if data is None:
                 return  # より新しい取得が反映済み
             # 承認タブの一覧・バッジを先に最新化する (自動更新の
             # ダウンロードで画面の反映を待たせない)
             _render_reviews(data, animate=False)
+            _refresh_current_notes(data['releases'])
             try:
                 result = updater.check_update(repo, stable,
                                               releases=data['releases'])
             except Exception:
                 log.info('更新チェックをスキップしました (オフライン等)')
                 result = None
-            if result is not None:
-                if result['has_update'] and result['latest'] is not None:
-                    _pending_release['until'] = 0.0
-                    _auto_update(result['latest'])
-                elif time.time() >= _pending_release['until']:
-                    # 最新の状態: 取り込み予約や古い案内が残っていれば消す
-                    _update_state['pending'] = None
-                    if t1_notice.value:
-                        t1_notice.value = ''
-                        page.update()
+            if result is None:
+                return
+            now_hm = datetime.datetime.now().strftime('%H:%M')
+            if result['has_update'] and result['latest'] is not None:
+                _pending_release['until'] = 0.0
+                if _auto_update(result['latest']):
+                    t1_fresh.value = '最新の状態です (%s 確認)' % now_hm
+                else:
+                    # 取り込み待ち中も「いつ確認したか」は残す
+                    t1_fresh.value = '更新の確認: %s' % now_hm
+            elif time.time() >= _pending_release['until']:
+                # 最新の状態: 取り込み予約や古い案内が残っていれば消す
+                _update_state['pending'] = None
+                if t1_notice.value:
+                    t1_notice.value = ''
+                t1_fresh.value = '最新の状態です (%s 確認)' % now_hm
+            page.update()
         run_bg(work)
         if reschedule:
             timer = threading.Timer(UPDATE_POLL_SECONDS, check_update_notice)
@@ -1642,6 +1799,7 @@ def main(page: ft.Page):
     _startup_snapshot = reviewcache.load_from_disk(config)
     if _startup_snapshot is not None:
         _render_reviews(_startup_snapshot, stale=True, animate=False)
+        _refresh_current_notes(_startup_snapshot.get('releases'))
 
     check_update_notice()
 
