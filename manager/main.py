@@ -9,6 +9,7 @@ import datetime
 import logging
 import os
 import threading
+import time
 
 import flet as ft
 
@@ -748,12 +749,102 @@ def main(page: ft.Page):
                 try:
                     reviews.approve(pr['number'], config)
                     t5_status.value = '#%d を承認しました。' % pr['number']
+                    page.update()
+                    # 必要数に達していたら自動リリース (ロケット発射)
+                    _try_auto_release(pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
                     t5_status.value = str(e)
                 page.update()
                 on_refresh_reviews(None)
             run_bg(work)
         return handler
+
+    def _try_auto_release(pr_number):
+        """承認が必要数そろい条件が整っていれば、その場でリリースする.
+
+        検証NG・却下あり・衝突中・権限なしのときは何もしない
+        (従来どおりリリースボタンが出るのを待つ)。
+        """
+        try:
+            me = reviews.current_user()
+            pending = reviews.list_pending(config)
+        except (reviews.ReviewError, ghcli.GhError):
+            return
+        pr = next((p for p in pending if p['number'] == pr_number), None)
+        if pr is None or pr.get('rejected_final'):
+            return
+        if not reviews.can_release(pr, config, me):
+            return
+        _play_launch()
+        try:
+            result = reviews.release(pr['number'], config,
+                                     on_progress=_t5_progress)
+            t5_status.value = ('承認が %d 人そろったため自動でリリース'
+                               'しました。%s'
+                               % (reviews.required_approvals(config),
+                                  result['message']))
+        except (reviews.ReviewError, ghcli.GhError) as e:
+            t5_status.value = str(e)
+        page.update()
+
+    def _play_launch():
+        """自動リリース演出: ロケットが画面を縦断して「更新」タブ方向へ."""
+        rocket = ft.Text('🚀', size=36, rotate=ft.Rotate(-0.8),
+                         offset=ft.Offset(0, 0),
+                         animate_offset=ft.Animation(
+                             1500, ft.AnimationCurve.EASE_IN),
+                         animate_opacity=ft.Animation(400))
+        holder = ft.Container(padding=ft.Padding.only(left=560, top=520),
+                              content=rocket)
+        page.overlay.append(holder)
+        page.update()
+
+        def fly():
+            time.sleep(0.1)
+            rocket.offset = ft.Offset(-14, -14)   # 左上 (更新タブ) へ縦断
+            page.update()
+            time.sleep(1.6)
+            rocket.opacity = 0.0
+            page.update()
+            time.sleep(0.4)
+            try:
+                page.overlay.remove(holder)
+            except ValueError:
+                pass
+            page.update()
+        run_bg(fly)
+
+    def _play_crash():
+        """却下確定演出: ロケットが倒れて爆発."""
+        rocket = ft.Text('🚀', size=36, rotate=ft.Rotate(-0.8),
+                         animate_rotation=ft.Animation(
+                             700, ft.AnimationCurve.BOUNCE_OUT),
+                         animate_opacity=ft.Animation(400))
+        boom = ft.Text('💥', size=46, opacity=0.0,
+                       animate_opacity=ft.Animation(250))
+        holder = ft.Container(padding=ft.Padding.only(left=340, top=280),
+                              content=ft.Row([rocket, boom], spacing=2))
+        page.overlay.append(holder)
+        page.update()
+
+        def run():
+            time.sleep(0.1)
+            rocket.rotate = ft.Rotate(1.9)        # 倒れる
+            page.update()
+            time.sleep(0.9)
+            boom.opacity = 1.0
+            page.update()
+            time.sleep(0.9)
+            boom.opacity = 0.0
+            rocket.opacity = 0.25
+            page.update()
+            time.sleep(0.5)
+            try:
+                page.overlay.remove(holder)
+            except ValueError:
+                pass
+            page.update()
+        run_bg(run)
 
     def on_cancel_review(pr):
         """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
@@ -804,6 +895,10 @@ def main(page: ft.Page):
                         t5_status.value = ('#%d を差し戻しました。'
                                            % pr['number'])
                         page.update()
+                        # 自分の却下で必要数に達したら「転倒→爆発」演出
+                        if (len(pr['rejected']) + 1
+                                >= reviews.required_approvals(config)):
+                            _play_crash()
                         on_refresh_reviews(None)
                     except (reviews.ReviewError, ghcli.GhError) as e:
                         err.value = str(e)
@@ -940,6 +1035,49 @@ def main(page: ft.Page):
         passed = (datetime.datetime.utcnow() - t).days
         return max(0, reviews.rejected_cleanup_days(config) - max(0, passed))
 
+    # 一覧描画後に一度だけ再生するロケット演出 (飾り。操作はできない)
+    _rocket_anims = []
+
+    def _rocket_zone(pr, n_req):
+        """カード右上のロケット。承認・却下の進み具合を演出で表す."""
+        if pr.get('rejected_final'):
+            # 却下確定: 倒れたロケット + 爆発跡
+            return ft.Row([ft.Text('💥', size=18, opacity=0.8),
+                           ft.Text('🚀', size=20, opacity=0.6,
+                                   rotate=ft.Rotate(1.9))], spacing=0)
+        items = [ft.Text('🚀', size=22,
+                         opacity=1.0 if pr['approved'] else 0.45)]
+        if pr['rejected']:
+            # 却下 1 つ: 煙が立ちのぼる (開いたときに一度だけ)
+            smoke = ft.Text('💨', size=16, opacity=0.0,
+                            offset=ft.Offset(0, 0),
+                            animate_opacity=ft.Animation(500),
+                            animate_offset=ft.Animation(
+                                1200, ft.AnimationCurve.EASE_OUT))
+
+            def puff(s=smoke):
+                s.opacity = 0.9
+                s.offset = ft.Offset(0.3, -0.9)
+                page.update()
+                time.sleep(1.2)
+                s.opacity = 0.45
+                page.update()
+            _rocket_anims.append(puff)
+            items.append(smoke)
+        elif len(pr['approved']) >= max(1, n_req - 1):
+            # 承認 1 つ: 点火 (まだ発射しない。開いたときに一度だけ)
+            fire = ft.Text('🔥', size=16, opacity=0.0,
+                           animate_opacity=ft.Animation(300))
+
+            def ignite(f=fire):
+                for op in (1.0, 0.5, 1.0, 0.6, 1.0):
+                    f.opacity = op
+                    page.update()
+                    time.sleep(0.3)
+            _rocket_anims.append(ignite)
+            items.append(fire)
+        return ft.Row(items, spacing=2)
+
     def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
         final = pr.get('rejected_final')
@@ -980,7 +1118,8 @@ def main(page: ft.Page):
         lines = [
             ft.Row([ft.Text('#%d %s' % (pr['number'], pr['title']),
                             weight=ft.FontWeight.BOLD, size=13,
-                            expand=True)]),
+                            expand=True),
+                    _rocket_zone(pr, n_req)]),
             ft.Row(badges + [ft.Text(checks_label, size=12,
                                      color=checks_color),
                              ft.Text('提出者: %s' % pr['author'], size=12,
@@ -1109,6 +1248,7 @@ def main(page: ft.Page):
                       if p.get('rejected_final') and p['number'] in hidden]
             visible = [p for p in pending if p not in folded]
             set_badge(review_badge, len(visible))
+            _rocket_anims.clear()
             t5_list.controls.clear()
             if not visible:
                 t5_list.controls.append(
@@ -1132,13 +1272,25 @@ def main(page: ft.Page):
             # 自動削除されるため、ここでは表示しない
             t5_status.value = ''
             page.update()
+            # 描画後にロケット演出 (点火・煙) を一度だけ再生
+            anims = _rocket_anims[:]
+            _rocket_anims.clear()
+            if anims:
+                def play():
+                    for fn in anims:
+                        try:
+                            fn()
+                        except Exception:
+                            log.debug('ロケット演出をスキップ',
+                                      exc_info=True)
+                run_bg(play)
         run_bg(work)
 
     tab_beta_review = ft.Container(padding=24, content=ft.Column([
         ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
                 'ます。β版を試して問題なければ承認してください。%d 人の'
-                '承認がそろうと正式版としてリリースできます。自分の提出は'
-                '自分では承認できません。'
+                '承認がそろうと自動で正式版としてリリースされます 🚀。'
+                '自分の提出は自分では承認できません。'
                 % reviews.required_approvals(config),
                 size=13, color='#555555'),
         ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
