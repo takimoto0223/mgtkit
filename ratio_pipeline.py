@@ -74,7 +74,9 @@ from .s_check import (
     TBOX_analysis, TBOX_analysis_text,
     TP_analysis, TP_analysis_text,
     TC_analysis, TC_analysis_text,
+    TC2_analysis, TC2_analysis_text,
     TL_analysis, TL_analysis_text,
+    TL2_analysis, TL2_analysis_text,
     TSB_analysis, TSB_analysis_text,
     TSR_analysis, TSR_analysis_text,
     TSR_SIGN_FIX,
@@ -1448,6 +1450,26 @@ def S_truss_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
             maxratios_text = TL_analysis_text(
                 sectionsize[0:n - 2], Truss_times * stress, timecase, SN,
                 ele_no, section_no, Lminus, LOAS_CASE_NAME, pick_section_name)
+    elif code == 18000:  # 二丁溝形鋼(2C)断面の検定 (mgtkit独自拡張)
+        ratio_output = TC2_analysis(sectionsize[0:n - 2], buck_length,
+                                    Truss_times * stress, timecase, SN, Lminus)
+        if np.max(np.max(ratio_output)) > max(np.atleast_1d(maxratios[1])):
+            maxratios[0] = ele_no
+            maxratios[1] = float(np.max(np.max(ratio_output)))
+            maxratios_text = TC2_analysis_text(
+                sectionsize[0:n - 2], buck_length, Truss_times * stress,
+                timecase, SN, ele_no, section_no, Lminus, LOAS_CASE_NAME,
+                pick_section_name)
+    elif code == 19000:  # 二丁山形鋼(2L)断面の検定 (mgtkit独自拡張)
+        ratio_output = TL2_analysis(sectionsize[0:n - 2], buck_length,
+                                    Truss_times * stress, timecase, SN, Lminus)
+        if np.max(np.max(ratio_output)) > max(np.atleast_1d(maxratios[1])):
+            maxratios[0] = ele_no
+            maxratios[1] = float(np.max(np.max(ratio_output)))
+            maxratios_text = TL2_analysis_text(
+                sectionsize[0:n - 2], buck_length, Truss_times * stress,
+                timecase, SN, ele_no, section_no, Lminus, LOAS_CASE_NAME,
+                pick_section_name)
     # 該当コードなし → MATLAB同様 ratio_output 未定義エラー
     return ratio_output, maxratios, maxratios_text
 
