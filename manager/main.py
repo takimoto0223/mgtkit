@@ -792,33 +792,46 @@ def main(page: ft.Page):
 
     def _play_launch():
         """自動リリース演出: 点火 → 機体が震える → 加速しながら離陸 →
-        機体を傾けて「更新」タブへ → ✨ と弾けて消える."""
+        機体を傾けて「更新」タブへ → ✨ と弾けて消える.
+
+        始点はカード右端のロケット位置・終点は「更新」タブ付近。
+        offset は自身のサイズ比なので、機体を固定サイズの Container に
+        入れて px 換算を確定させる。
+        """
+        body_w, body_h = 54.0, 64.0
+        start_x = int(page.width or 760) - 90   # カード右端のロケット位置
+        start_y = 268
+        tab_x, tab_y = 82, 56                   # 「更新」タブのあたり
         rocket = ft.Text('🚀', size=34, rotate=ft.Rotate(_UPRIGHT),
                          animate_rotation=ft.Animation(
                              500, ft.AnimationCurve.EASE_IN_OUT))
         fire = ft.Text('🔥', size=16, scale=0.5,
                        animate_scale=ft.Animation(
                            180, ft.AnimationCurve.EASE_OUT))
-        body = ft.Column([rocket, fire], spacing=0,
-                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                         offset=ft.Offset(0, 0),
-                         animate_offset=ft.Animation(
-                             60, ft.AnimationCurve.EASE_IN_OUT),
-                         animate_opacity=ft.Animation(250))
-        holder = ft.Container(padding=ft.Padding.only(left=600, top=430),
+        body = ft.Container(
+            width=int(body_w), height=int(body_h),
+            content=ft.Column(
+                [rocket, fire], spacing=0,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            offset=ft.Offset(0, 0),
+            animate_offset=ft.Animation(
+                60, ft.AnimationCurve.EASE_IN_OUT),
+            animate_opacity=ft.Animation(250))
+        holder = ft.Container(padding=ft.Padding.only(left=start_x,
+                                                      top=start_y),
                               content=body)
         trail = ft.Text('💨', size=18, opacity=0.0, scale=0.6,
                         animate_opacity=ft.Animation(700),
                         animate_scale=ft.Animation(
                             700, ft.AnimationCurve.EASE_OUT))
-        trail_holder = ft.Container(padding=ft.Padding.only(left=596,
-                                                            top=468),
-                                    content=trail)
+        trail_holder = ft.Container(padding=ft.Padding.only(
+            left=start_x + 4, top=start_y + 38), content=trail)
         spark = ft.Text('✨', size=34, opacity=0.0, scale=0.4,
                         animate_opacity=ft.Animation(150),
                         animate_scale=ft.Animation(
                             320, ft.AnimationCurve.EASE_OUT_BACK))
-        spark_holder = ft.Container(padding=ft.Padding.only(left=82, top=60),
+        spark_holder = ft.Container(padding=ft.Padding.only(left=tab_x,
+                                                            top=tab_y),
                                     content=spark)
         page.overlay.extend([trail_holder, holder, spark_holder])
         page.update()
@@ -827,24 +840,25 @@ def main(page: ft.Page):
             time.sleep(0.1)
             fire.scale = 1.9              # 点火: 炎がふくらみ
             page.update()
-            for dx in (0.05, -0.05, 0.06, -0.04, 0.0):   # 機体が震える
+            for dx in (0.07, -0.07, 0.09, -0.06, 0.0):   # 機体が震える
                 body.offset = ft.Offset(dx, 0)
                 page.update()
                 time.sleep(0.07)
             # 離陸: 加速しながらまっすぐ上へ (発射地点に煙が残る)
             body.animate_offset = ft.Animation(
                 700, ft.AnimationCurve.EASE_IN)
-            body.offset = ft.Offset(0, -4.5)
+            body.offset = ft.Offset(0, -2.6)
             trail.opacity = 0.7
             trail.scale = 1.7
             page.update()
             time.sleep(0.7)
             trail.opacity = 0.0
-            # 機体を進行方向へ傾けて「更新」タブへ
+            # 機体を進行方向へ傾けて「更新」タブへ (ゆるい弧を描く)
             body.animate_offset = ft.Animation(
                 750, ft.AnimationCurve.EASE_OUT)
             rocket.rotate = ft.Rotate(_UPRIGHT - 0.75)
-            body.offset = ft.Offset(-9.6, -6.9)
+            body.offset = ft.Offset((tab_x - start_x) / body_w,
+                                    (tab_y - start_y) / body_h)
             page.update()
             time.sleep(0.75)
             body.opacity = 0.0            # 到達: ✨ がポンと弾ける
@@ -879,9 +893,10 @@ def main(page: ft.Page):
                         animate_opacity=ft.Animation(350),
                         animate_offset=ft.Animation(
                             900, ft.AnimationCurve.EASE_OUT))
-        holder = ft.Container(padding=ft.Padding.only(left=340, top=280),
-                              content=ft.Row([rocket, boom, smoke],
-                                             spacing=2))
+        holder = ft.Container(
+            padding=ft.Padding.only(left=int(page.width or 760) // 2 - 60,
+                                    top=280),
+            content=ft.Row([rocket, boom, smoke], spacing=2))
         page.overlay.append(holder)
         page.update()
 
