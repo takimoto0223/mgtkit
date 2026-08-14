@@ -48,6 +48,30 @@ class TestExtractZip:
         with pytest.raises(installer.InstallError):
             installer.extract_zip(str(bad), str(tmp_path / 'x'))
 
+    def test_locked_install_dir_keeps_old_install(self, tmp_path,
+                                                  monkeypatch):
+        # Windows でアプリ起動中 (フォルダ使用中) の置き換え失敗を再現:
+        # 平易なエラーになり、インストール済みの内容は壊れず残ること
+        dest = tmp_path / 'inst' / 'mgtkit'
+        dest.mkdir(parents=True)
+        (dest / 'old.py').write_text('old')
+        z = tmp_path / 'a.zip'
+        _make_zip(str(z), {'app.py': 'x'})
+
+        real_rename = os.rename
+
+        def locked_rename(a, b):
+            if os.path.abspath(a) == str(dest):
+                raise PermissionError(13, '使用中', a)
+            return real_rename(a, b)
+
+        monkeypatch.setattr(installer.os, 'rename', locked_rename)
+        with pytest.raises(installer.InstallError, match='使用中'):
+            installer.extract_zip(str(z), str(dest))
+        assert (dest / 'old.py').read_text() == 'old'
+        # 作業用の一時フォルダが残らないこと
+        assert os.listdir(str(tmp_path / 'inst')) == ['mgtkit']
+
 
 RELEASES_JSON = [
     {'tag_name': 'v1.3-beta.2', 'name': 'beta 2', 'prerelease': True,
