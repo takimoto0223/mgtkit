@@ -746,16 +746,20 @@ def main(page: ft.Page):
     def on_approve(pr):
         def handler(_):
             def work():
+                preloaded = None
                 try:
-                    reviews.approve(pr['number'], config)
+                    # 提出者は一覧取得時に判明済み。渡して再取得を省く
+                    reviews.approve(pr['number'], config,
+                                    author=pr['author'])
                     t5_status.value = '#%d を承認しました。' % pr['number']
                     page.update()
-                    # 必要数に達していたら自動リリース (ロケット発射)
-                    _try_auto_release(pr['number'])
+                    # 必要数に達していたら自動リリース (ロケット発射)。
+                    # 判定に取得した一覧はそのまま再描画に使い回す
+                    preloaded = _try_auto_release(pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
                     t5_status.value = str(e)
                 page.update()
-                on_refresh_reviews(None)
+                on_refresh_reviews(None, preloaded=preloaded)
             run_bg(work)
         return handler
 
@@ -764,17 +768,20 @@ def main(page: ft.Page):
 
         検証NG・却下あり・衝突中・権限なしのときは何もしない
         (従来どおりリリースボタンが出るのを待つ)。
+        戻り値: リリースしなかったときは判定に使った (pending, me)
+        (呼び出し側が再描画に使い回す)。リリース実行・取得失敗時は
+        None (画面は取り直しが必要)。
         """
         try:
             me = reviews.current_user()
             pending = reviews.list_pending(config)
         except (reviews.ReviewError, ghcli.GhError):
-            return
+            return None
         pr = next((p for p in pending if p['number'] == pr_number), None)
         if pr is None or pr.get('rejected_final'):
-            return
+            return (pending, me)
         if not reviews.can_release(pr, config, me):
-            return
+            return (pending, me)
         _play_launch()
         try:
             result = reviews.release(pr['number'], config,
@@ -786,6 +793,7 @@ def main(page: ft.Page):
         except (reviews.ReviewError, ghcli.GhError) as e:
             t5_status.value = str(e)
         page.update()
+        return None
 
     # 🚀 の絵文字は素の状態で右上 45° を向いているため -0.79rad で垂直になる
     _UPRIGHT = -0.79
@@ -1322,14 +1330,19 @@ def main(page: ft.Page):
                 return r
         return None
 
-    def on_refresh_reviews(_):
+    def on_refresh_reviews(_, preloaded=None):
+        """一覧の取得と再描画。preloaded=(pending, me) が渡されたときは
+        一覧を取り直さない (承認直後などの取得済みデータを使い回す)."""
         t5_status.value = '取得中...'
         page.update()
 
         def work():
             try:
-                pending = reviews.list_pending(config)
-                me = reviews.current_user()
+                if preloaded is not None:
+                    pending, me = preloaded
+                else:
+                    pending = reviews.list_pending(config)
+                    me = reviews.current_user()
                 releases = ghcli.fetch_releases(repo)
             except (reviews.ReviewError, ghcli.GhError) as e:
                 t5_status.value = str(e)
@@ -1492,6 +1505,21 @@ def main(page: ft.Page):
         run_bg(work)
 
     check_membership()
+
+    # ---- キャッシュの事前取得 ----
+    # 自分のログイン名とメンバー一覧は起動中ほぼ変わらないため、起動時に
+    # 裏で取得しておく (承認タブの各操作から往復が減り体感が軽くなる)
+
+    def warm_review_cache():
+        def work():
+            try:
+                reviews.current_user()
+                reviews.collaborators(config)
+            except Exception:
+                log.info('キャッシュの事前取得をスキップしました (オフライン等)')
+        run_bg(work)
+
+    warm_review_cache()
 
     # ---------------- 初回セットアップ (名前と API キーの登録) ----------------
 

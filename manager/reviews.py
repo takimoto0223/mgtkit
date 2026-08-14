@@ -12,6 +12,7 @@
 import json
 import logging
 import re
+import time
 
 from . import claude_helper, feedback, ghcli, paths
 from .autofix import AUTOFIX_PREFIX, _summarize_checks
@@ -25,8 +26,24 @@ class ReviewError(Exception):
     """承認処理の中断。str() はユーザー向けの平易な日本語メッセージ."""
 
 
+# gh 呼び出し (プロセス起動 + GitHub への往復) は 1 回 0.3〜1 秒かかる。
+# セッション中ほぼ変わらない情報はキャッシュし、ボタン操作のたびに
+# 取り直さない (PR やレビューの状態は毎回 GitHub から取る)。
+_cache = {}
+_COLLABORATORS_TTL = 600  # 秒。メンバー構成が変わるのはまれ
+
+
+def clear_cache():
+    """セッションキャッシュを破棄する (テストや再ログイン時に使う)."""
+    _cache.clear()
+
+
 def current_user():
-    return ghcli.run_gh(['api', 'user', '--jq', '.login']).strip()
+    """自分の GitHub ログイン名。起動中に変わらないため初回のみ取得する."""
+    if 'user' not in _cache:
+        _cache['user'] = ghcli.run_gh(
+            ['api', 'user', '--jq', '.login']).strip()
+    return _cache['user']
 
 
 def required_approvals(config=None):
@@ -67,7 +84,12 @@ def collaborators(config=None):
     承認・却下のカウントはこの一覧のメンバーに限定する。
     取得できない場合は None を返し、呼び出し側はフィルタなし
     (従来どおり全レビューを数える) にフォールバックする。
+    結果は _COLLABORATORS_TTL 秒キャッシュする (取得失敗はキャッシュしない)。
     """
+    cached = _cache.get('collaborators')
+    if cached is not None and (time.monotonic() - cached[1]
+                               < _COLLABORATORS_TTL):
+        return cached[0]
     try:
         out = ghcli.run_gh([
             'api', 'repos/%s/collaborators?per_page=100'
@@ -76,7 +98,9 @@ def collaborators(config=None):
         names = json.loads(out)
     except (ghcli.GhError, ValueError):
         return None
-    return set(names) if names else None
+    result = set(names) if names else None
+    _cache['collaborators'] = (result, time.monotonic())
+    return result
 
 
 def approval_summary(reviews, members=None):
@@ -143,10 +167,13 @@ def list_pending(config=None):
     """承認待ちの提出一覧 (open PR + 承認状況 + 検証状況 + 競合有無).
 
     マネージャー経由の提出 (feature/ ブランチ) のみを対象とする。
+    レビュー・検証・コメントも含めて 1 回の gh pr list で取得する
+    (PR ごとの pr view を繰り返すと件数分の往復になり体感が重い)。
     """
     out = ghcli.run_gh([
         'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
-        '--json', 'number,title,url,author,headRefName'])
+        '--json', 'number,title,url,author,headRefName,'
+                  'reviews,statusCheckRollup,mergeable,comments'])
     try:
         prs = json.loads(out)
     except ValueError:
@@ -157,8 +184,7 @@ def list_pending(config=None):
     for pr in prs:
         if not _is_submission(pr):
             continue
-        detail = _pr_detail(pr['number'], config)
-        summary = approval_summary(detail.get('reviews'), members)
+        summary = approval_summary(pr.get('reviews'), members)
         since = rejected_since(summary, n_req)
         result.append({
             'number': pr['number'],
@@ -170,10 +196,10 @@ def list_pending(config=None):
             'rejected': summary['rejected'],
             'rejected_final': len(summary['rejected']) >= n_req,
             'rejected_since': since,
-            'feedback': parse_feedback(detail.get('comments')),
-            'checks': _summarize_checks(detail.get('statusCheckRollup')
+            'feedback': parse_feedback(pr.get('comments')),
+            'checks': _summarize_checks(pr.get('statusCheckRollup')
                                         or []),
-            'conflicting': (detail.get('mergeable') or '').upper()
+            'conflicting': (pr.get('mergeable') or '').upper()
                            == 'CONFLICTING',
         })
     return result
@@ -205,10 +231,17 @@ def _pr_detail(pr_number, config=None):
         raise ReviewError('提出内容の情報を取得できませんでした。')
 
 
-def approve(pr_number, config=None):
-    """承認する。提出者本人の自己承認は禁止."""
-    detail = _pr_detail(pr_number, config)
-    if ((detail.get('author') or {}).get('login')) == current_user():
+def approve(pr_number, config=None, author=None):
+    """承認する。提出者本人の自己承認は禁止.
+
+    author: 提出者の GitHub ログイン名。一覧取得済みの呼び出し側が
+    渡せば PR 情報の再取得を省ける (提出者は後から変わらない)。
+    None なら従来どおり PR 情報を取得して確認する。
+    """
+    if author is None:
+        detail = _pr_detail(pr_number, config)
+        author = (detail.get('author') or {}).get('login')
+    if author == current_user():
         raise ReviewError('自分の提出は自分では承認できません。'
                           '他のメンバーの承認を待ってください。')
     ghcli.run_gh(['pr', 'review', str(pr_number), '--repo',
