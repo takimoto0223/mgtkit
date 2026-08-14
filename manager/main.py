@@ -789,7 +789,7 @@ def main(page: ft.Page):
 
     # 発射・爆発の基点 = カード右のロケット定位置 (1 枚目のカードの高さ)
     def _rocket_base():
-        return int(page.width or 760) - 72, 272
+        return int(page.width or 760) - 48, 272
 
     def _play_launch():
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →

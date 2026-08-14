@@ -88,7 +88,9 @@ def _rocket_svg(flame):
             ' viewBox="-18 -36 36 96">' + _DEFS + _BODY + flame + '</svg>')
 
 
-ROCKET = _rocket_svg('')
+# 素の機体は炎ぶんの余白なしの viewBox (描画幅が縮まないように)
+ROCKET = ('<svg xmlns="http://www.w3.org/2000/svg"'
+          ' viewBox="-18 -36 36 61">' + _DEFS + _BODY + '</svg>')
 ROCKET_FL_S = _rocket_svg(_FLAME_S)
 ROCKET_FL_M = _rocket_svg(_FLAME_M)
 ROCKET_FL_L = _rocket_svg(_FLAME_L)
@@ -196,8 +198,8 @@ WRECK = (
     '</svg>'
 )
 
-# 機体スプライトの標準サイズ (viewBox -18..18 x -36..60 の 0.62 倍)
-_RW, _RH = 22, 60
+# 機体スプライトの標準サイズ (常駐ロケットと同じ幅 20 に統一)
+_RW, _RH = 20, 53
 
 
 def _sprite(svg, w, h, left=0.0, top=0.0, angle=0.0, opacity=1.0):
@@ -300,7 +302,7 @@ def play_launch(page, start_x, start_y, target_x=90, target_y=92,
     smoke = _Puffs(stage, SMOKE, 14, 10)
     embers = _Puffs(stage, EMBER, 6, 4)
     rocket = _sprite(ROCKET_FL_S, _RW, _RH,
-                     left=start_x - _RW / 2, top=start_y - 22)
+                     left=start_x - _RW / 2, top=start_y - 17)
     stage.add(rocket)
     spark = _sprite(SPARKLE, 10, 10, left=target_x - 5, top=target_y - 5,
                     opacity=0.0)
@@ -329,7 +331,7 @@ def play_launch(page, start_x, start_y, target_x=90, target_y=92,
             p = (t - 0.45) / 0.7
             _swap(rocket, ROCKET_FL_L)
             rocket.left = start_x - _RW / 2
-            rocket.top = start_y - 22 - 105 * p * p
+            rocket.top = start_y - 17 - 105 * p * p
             if t - state['last_smoke'] > 0.07:
                 state['last_smoke'] = t
                 side = 22 if int(t * 14) % 2 else -22
@@ -352,7 +354,7 @@ def play_launch(page, start_x, start_y, target_x=90, target_y=92,
             rocket.rotate = ft.Rotate(math.atan2(dx, -dy))
             _swap(rocket, ROCKET_FL_M)
             rocket.left = x - _RW / 2
-            rocket.top = y - 22
+            rocket.top = y - 17
             if t - state['last_trail'] > 0.09:
                 state['last_trail'] = t
                 smoke.spawn(x, y + 14, 0, 8, 0.7, 4, 9, 0.6)
@@ -379,8 +381,8 @@ def play_crash(page, start_x, start_y, done=None):
     stage = _Stage(page)
     smoke = _Puffs(stage, SMOKE, 12, 10)
     embers = _Puffs(stage, EMBER, 5, 4)
-    rocket = _sprite(ROCKET, _RW, 38, left=start_x - _RW / 2,
-                     top=start_y - 19)
+    rocket = _sprite(ROCKET, _RW, 34, left=start_x - _RW / 2,
+                     top=start_y - 17)
     stage.add(rocket)
     burst = _sprite(BURST, 20, 20, opacity=0.0)
     stage.add(burst)
@@ -420,7 +422,7 @@ def play_crash(page, start_x, start_y, done=None):
             if p > 0.7:
                 over = 1.62 - 0.15 * math.sin((p - 0.7) / 0.3 * math.pi)
             rocket.rotate = ft.Rotate(min(1.47, over))
-            rocket.top = start_y - 19 + 12 * p
+            rocket.top = start_y - 17 + 12 * p
             if 0.68 < t < 0.78:
                 smoke.spawn(start_x - 14, start_y + 18, -20, -8,
                             0.7, 4, 9, 0.6)
