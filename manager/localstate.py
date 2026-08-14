@@ -58,11 +58,32 @@ def unhide_pr(number, config=None):
     _save(data, config)
 
 
+def auto_folded(config=None):
+    """却下確定時に自動で畳んだ記録 (「一覧に戻す」後の再自動畳みを防ぐ)."""
+    try:
+        return {int(n) for n in _load(config).get('auto_folded', [])}
+    except (TypeError, ValueError):
+        return set()
+
+
+def mark_auto_folded(number, config=None):
+    data = _load(config)
+    nums = auto_folded(config)
+    nums.add(int(number))
+    data['auto_folded'] = sorted(nums)
+    _save(data, config)
+
+
 def prune_hidden(open_numbers, config=None):
-    """クローズ済みの提出の非表示記録を掃除する."""
-    nums = hidden_prs(config)
-    kept = sorted(nums & {int(n) for n in open_numbers})
-    if set(kept) != nums:
-        data = _load(config)
-        data['hidden_prs'] = kept
+    """クローズ済みの提出の非表示・自動畳み記録を掃除する."""
+    open_set = {int(n) for n in open_numbers}
+    data = _load(config)
+    changed = False
+    for key, cur in (('hidden_prs', hidden_prs(config)),
+                     ('auto_folded', auto_folded(config))):
+        kept = sorted(cur & open_set)
+        if set(kept) != cur:
+            data[key] = kept
+            changed = True
+    if changed:
         _save(data, config)
