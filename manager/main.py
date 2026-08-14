@@ -745,11 +745,24 @@ def main(page: ft.Page):
 
     def on_approve(pr):
         def handler(_):
+            # 楽観的更新: 押した瞬間に承認済み表示 (バッジ・点火演出) へ
+            # 切り替え、送信は裏で行う。失敗したら取得し直して表示が戻る
+            data = reviewcache.get()
+            me = (data or {}).get('me')
+            optimistic = bool(data is not None and me
+                              and me != pr['author'])
+            if optimistic:
+                pr['approved'] = sorted(set(pr['approved']) | {me})
+                _render_reviews(data, stale=True, animate=True,
+                                status='#%d を承認しました (送信中...)。'
+                                       % pr['number'])
+
             def work():
                 preloaded = None
                 try:
-                    _t5_progress('#%d の承認を送信しています...'
-                                 % pr['number'])
+                    if not optimistic:
+                        _t5_progress('#%d の承認を送信しています...'
+                                     % pr['number'])
                     # 提出者は一覧取得時に判明済み。渡して再取得を省く
                     reviews.approve(pr['number'], config,
                                     author=pr['author'])
@@ -985,24 +998,49 @@ def main(page: ft.Page):
             err = ft.Text('', size=12, color='#b91c1c')
 
             def do_reject(_):
+                comment = (reason.value or '').strip()
+                if not comment:
+                    err.value = '却下には理由の入力が必要です。'
+                    page.update()
+                    return
+                page.pop_dialog()
+                # 楽観的更新: 閉じた瞬間に却下表示 (バッジ・煙/爆発演出)
+                # へ切り替え、送信は裏で行う。失敗したら表示が戻る
+                data = reviewcache.get()
+                me = (data or {}).get('me')
+                optimistic = bool(data is not None and me)
+                n_req = reviews.required_approvals(config)
+                if optimistic:
+                    at = (datetime.datetime.now(datetime.timezone.utc)
+                          .isoformat(timespec='seconds'))
+                    pr['rejected'] = (
+                        [r for r in pr['rejected'] if r['name'] != me]
+                        + [{'name': me, 'comment': comment, 'at': at}])
+                    pr['rejected_final'] = len(pr['rejected']) >= n_req
+                    _render_reviews(data, stale=True, animate=True,
+                                    status='#%d を差し戻しました '
+                                           '(送信中...)。' % pr['number'])
+                    if pr['rejected_final']:
+                        _play_crash()
+
                 def work():
                     try:
-                        _t5_progress('#%d の却下を送信しています...'
-                                     % pr['number'])
-                        reviews.request_changes(pr['number'], reason.value,
+                        if not optimistic:
+                            _t5_progress('#%d の却下を送信しています...'
+                                         % pr['number'])
+                        reviews.request_changes(pr['number'], comment,
                                                 config)
-                        page.pop_dialog()
                         t5_status.value = ('#%d を差し戻しました。'
                                            % pr['number'])
                         page.update()
                         # 自分の却下で必要数に達したら「転倒→爆発」演出
-                        if (len(pr['rejected']) + 1
-                                >= reviews.required_approvals(config)):
+                        if (not optimistic
+                                and len(pr['rejected']) + 1 >= n_req):
                             _play_crash()
-                        on_refresh_reviews(None)
                     except (reviews.ReviewError, ghcli.GhError) as e:
-                        err.value = str(e)
+                        t5_status.value = str(e)
                         page.update()
+                    on_refresh_reviews(None)
                 run_bg(work)
 
             page.show_dialog(ft.AlertDialog(
@@ -1351,18 +1389,21 @@ def main(page: ft.Page):
     # 描画は複数スレッド (ボタン操作・定期更新) から呼ばれるため直列化する
     _render_lock = threading.Lock()
 
-    def _render_reviews(data, stale=False, animate=True):
+    def _render_reviews(data, stale=False, animate=None, status=None):
         """取得済みスナップショットで一覧を描画する.
 
         stale=True は前回結果の即時表示 (裏の取得で差し替わる前提)。
         ローカル記録の掃除・自動畳みは最新データの描画 (stale=False) の
-        ときだけ行う。animate=False は定期更新など画面を見ていない
-        可能性が高いときのロケット演出の抑止。
+        ときだけ行う。animate はロケット演出の再生 (省略時は最新データの
+        描画のみ再生。楽観的更新の即時描画では True を渡す)。
+        status は状態行の文言の上書き (楽観的更新の「送信中...」など)。
         """
+        if animate is None:
+            animate = not stale
         with _render_lock:
-            _render_reviews_locked(data, stale, animate)
+            _render_reviews_locked(data, stale, animate, status)
 
-    def _render_reviews_locked(data, stale, animate):
+    def _render_reviews_locked(data, stale, animate, status):
         pending, me = data['pending'], data['me']
         betas = ghcli.prereleases(data.get('releases') or [])
         if not stale:
@@ -1403,7 +1444,9 @@ def main(page: ft.Page):
                 ], spacing=8))
         # 提出に対応しないβ版はリリース・取り下げ・却下確定の時点で
         # 自動削除されるため、ここでは表示しない
-        if stale:
+        if status is not None:
+            t5_status.value = status
+        elif stale:
             age = reviewcache.age_minutes(data)
             t5_status.value = ('前回の内容を表示中%s。最新を確認して'
                                'います...'
@@ -1413,10 +1456,10 @@ def main(page: ft.Page):
             t5_status.value = ('最新の状態です'
                                + (' (%s 取得)' % hm if hm else ''))
         page.update()
-        # 最新データの描画後にロケット演出 (点火・煙) を一度だけ再生
+        # 描画後にロケット演出 (点火・煙) を一度だけ再生
         anims = _rocket_anims[:]
         _rocket_anims.clear()
-        if anims and not stale and animate:
+        if anims and animate:
             def play():
                 for fn in anims:
                     try:
