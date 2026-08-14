@@ -16,8 +16,8 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffview, feedback, ghcli, launcher,
-               localstate, paths, reviews, selfupdate, settings, submit,
-               updater, usage)
+               localstate, paths, reviews, rocketfx, selfupdate, settings,
+               submit, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 30 * 60  # 新しい安定版の定期チェック間隔
@@ -787,149 +787,21 @@ def main(page: ft.Page):
             t5_status.value = str(e)
         page.update()
 
-    # 🚀 の絵文字は素の状態で右上 45° を向いているため -0.79rad で垂直になる
-    _UPRIGHT = -0.79
+    # 発射・爆発の基点 = カード右のロケット定位置 (1 枚目のカードの高さ)
+    def _rocket_base():
+        return int(page.width or 760) - 72, 272
 
     def _play_launch():
-        """自動リリース演出: 点火 → 機体が震える → 加速しながら離陸 →
-        機体を傾けて「更新」タブへ → ✨ と弾けて消える.
-
-        始点はカード右端のロケット位置・終点は「更新」タブ付近。
-        offset は自身のサイズ比なので、機体を固定サイズの Container に
-        入れて px 換算を確定させる。
-        """
-        body_w, body_h = 54.0, 64.0
-        start_x = int(page.width or 760) - 90   # カード右端のロケット位置
-        start_y = 268
-        tab_x, tab_y = 82, 56                   # 「更新」タブのあたり
-        rocket = ft.Text('🚀', size=34, rotate=ft.Rotate(_UPRIGHT),
-                         animate_rotation=ft.Animation(
-                             500, ft.AnimationCurve.EASE_IN_OUT))
-        fire = ft.Text('🔥', size=16, scale=0.5,
-                       animate_scale=ft.Animation(
-                           180, ft.AnimationCurve.EASE_OUT))
-        body = ft.Container(
-            width=int(body_w), height=int(body_h),
-            content=ft.Column(
-                [rocket, fire], spacing=0,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            offset=ft.Offset(0, 0),
-            animate_offset=ft.Animation(
-                60, ft.AnimationCurve.EASE_IN_OUT),
-            animate_opacity=ft.Animation(250))
-        holder = ft.Container(padding=ft.Padding.only(left=start_x,
-                                                      top=start_y),
-                              content=body)
-        trail = ft.Text('💨', size=18, opacity=0.0, scale=0.6,
-                        animate_opacity=ft.Animation(700),
-                        animate_scale=ft.Animation(
-                            700, ft.AnimationCurve.EASE_OUT))
-        trail_holder = ft.Container(padding=ft.Padding.only(
-            left=start_x + 4, top=start_y + 38), content=trail)
-        spark = ft.Text('✨', size=34, opacity=0.0, scale=0.4,
-                        animate_opacity=ft.Animation(150),
-                        animate_scale=ft.Animation(
-                            320, ft.AnimationCurve.EASE_OUT_BACK))
-        spark_holder = ft.Container(padding=ft.Padding.only(left=tab_x,
-                                                            top=tab_y),
-                                    content=spark)
-        page.overlay.extend([trail_holder, holder, spark_holder])
-        page.update()
-
-        def fly():
-            time.sleep(0.1)
-            fire.scale = 1.9              # 点火: 炎がふくらみ
-            page.update()
-            for dx in (0.07, -0.07, 0.09, -0.06, 0.0):   # 機体が震える
-                body.offset = ft.Offset(dx, 0)
-                page.update()
-                time.sleep(0.07)
-            # 離陸: 加速しながらまっすぐ上へ (発射地点に煙が残る)
-            body.animate_offset = ft.Animation(
-                700, ft.AnimationCurve.EASE_IN)
-            body.offset = ft.Offset(0, -2.6)
-            trail.opacity = 0.7
-            trail.scale = 1.7
-            page.update()
-            time.sleep(0.7)
-            trail.opacity = 0.0
-            # 機体を進行方向へ傾けて「更新」タブへ (ゆるい弧を描く)
-            body.animate_offset = ft.Animation(
-                750, ft.AnimationCurve.EASE_OUT)
-            rocket.rotate = ft.Rotate(_UPRIGHT - 0.75)
-            body.offset = ft.Offset((tab_x - start_x) / body_w,
-                                    (tab_y - start_y) / body_h)
-            page.update()
-            time.sleep(0.75)
-            body.opacity = 0.0            # 到達: ✨ がポンと弾ける
-            spark.opacity = 1.0
-            spark.scale = 1.5
-            page.update()
-            time.sleep(0.35)
-            spark.scale = 1.0
-            spark.opacity = 0.0
-            page.update()
-            time.sleep(0.3)
-            for h in (holder, spark_holder, trail_holder):
-                try:
-                    page.overlay.remove(h)
-                except ValueError:
-                    pass
-            page.update()
-        run_bg(fly)
+        """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
+        弧を描いて「更新」タブへ → ✨ と弾けて消える."""
+        sx, sy = _rocket_base()
+        rocketfx.play_launch(page, sx, sy)
 
     def _play_crash():
-        """却下確定演出: ぐらついて倒れ、爆発して煙が残る."""
-        rocket = ft.Text('🚀', size=36, rotate=ft.Rotate(_UPRIGHT),
-                         animate_rotation=ft.Animation(
-                             120, ft.AnimationCurve.EASE_IN_OUT),
-                         animate_opacity=ft.Animation(400))
-        boom = ft.Text('💥', size=46, opacity=0.0, scale=0.3,
-                       animate_opacity=ft.Animation(120),
-                       animate_scale=ft.Animation(
-                           320, ft.AnimationCurve.EASE_OUT_BACK))
-        smoke = ft.Text('💨', size=22, opacity=0.0,
-                        offset=ft.Offset(0, 0),
-                        animate_opacity=ft.Animation(350),
-                        animate_offset=ft.Animation(
-                            900, ft.AnimationCurve.EASE_OUT))
-        holder = ft.Container(
-            padding=ft.Padding.only(left=int(page.width or 760) // 2 - 60,
-                                    top=280),
-            content=ft.Row([rocket, boom, smoke], spacing=2))
-        page.overlay.append(holder)
-        page.update()
-
-        def run():
-            time.sleep(0.1)
-            for rot in (0.12, -0.15, 0.2):              # ぐらつく
-                rocket.rotate = ft.Rotate(_UPRIGHT + rot)
-                page.update()
-                time.sleep(0.13)
-            rocket.animate_rotation = ft.Animation(
-                650, ft.AnimationCurve.BOUNCE_OUT)
-            rocket.rotate = ft.Rotate(_UPRIGHT + 1.6)   # 横倒しに
-            page.update()
-            time.sleep(0.65)
-            boom.opacity = 1.0                # 💥 がはじける
-            boom.scale = 1.25
-            page.update()
-            time.sleep(0.55)
-            boom.opacity = 0.0
-            rocket.opacity = 0.25
-            smoke.opacity = 0.8               # 煙がのぼって残る
-            smoke.offset = ft.Offset(0.2, -0.7)
-            page.update()
-            time.sleep(0.9)
-            smoke.opacity = 0.0
-            page.update()
-            time.sleep(0.4)
-            try:
-                page.overlay.remove(holder)
-            except ValueError:
-                pass
-            page.update()
-        run_bg(run)
+        """却下確定演出 (rocketfx): ぐらつき → 転倒 → 爆発と同時に
+        パーツ分解 → 破片が放物線で散乱."""
+        sx, sy = _rocket_base()
+        rocketfx.play_crash(page, sx, sy)
 
     def on_cancel_review(pr):
         """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
@@ -1124,55 +996,20 @@ def main(page: ft.Page):
     _rocket_anims = []
 
     def _rocket_zone(pr, n_req):
-        """カード右上のロケット (垂直)。承認・却下の進み具合を演出で表す."""
+        """カード右上の常駐ロケット。承認・却下の進み具合を演出で表す."""
         if pr.get('rejected_final'):
-            # 却下確定: 倒れたロケット + 爆発跡
-            return ft.Row([ft.Text('💥', size=18, opacity=0.8),
-                           ft.Text('🚀', size=20, opacity=0.6,
-                                   rotate=ft.Rotate(_UPRIGHT + 1.6))],
-                          spacing=0)
-        rocket = ft.Text('🚀', size=20, rotate=ft.Rotate(_UPRIGHT),
-                         opacity=1.0 if pr['approved'] else 0.45)
-        if pr['rejected']:
-            # 却下 1 つ: 煙が立ちのぼる (開いたときに一度だけ)
-            smoke = ft.Text('💨', size=14, opacity=0.0,
-                            offset=ft.Offset(0, 0),
-                            animate_opacity=ft.Animation(500),
-                            animate_offset=ft.Animation(
-                                1200, ft.AnimationCurve.EASE_OUT))
-
-            def puff(s=smoke):
-                s.opacity = 0.9
-                s.offset = ft.Offset(0.4, -0.5)
-                page.update()
-                time.sleep(1.2)
-                s.opacity = 0.45
-                page.update()
-            _rocket_anims.append(puff)
-            return ft.Column(
-                [smoke, rocket], spacing=0,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        if len(pr['approved']) >= max(1, n_req - 1):
-            # 承認 1 つ: 真下に着火 (まだ発射しない。開いたときに一度だけ)
-            fire = ft.Text('🔥', size=13, opacity=0.0, scale=0.4,
-                           animate_opacity=ft.Animation(200),
-                           animate_scale=ft.Animation(
-                               200, ft.AnimationCurve.EASE_OUT))
-
-            def ignite(f=fire):
-                f.opacity = 1.0
-                f.scale = 1.5               # ボッと着火
-                page.update()
-                time.sleep(0.3)
-                for sc in (0.9, 1.35, 1.0, 1.2, 1.05):   # 炎が揺らめく
-                    f.scale = sc
-                    page.update()
-                    time.sleep(0.22)
-            _rocket_anims.append(ignite)
-            return ft.Column(
-                [rocket, fire], spacing=0,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        return ft.Column([rocket], spacing=0)
+            state = 'wreck'          # 却下確定: 散らばった残骸
+        elif pr['rejected']:
+            state = 'smoking'        # 却下 1 つ: 煙
+        elif len(pr['approved']) >= max(1, n_req - 1):
+            state = 'ignited'        # 承認 1 つ: 点火
+        else:
+            state = 'idle'
+        control, anim = rocketfx.zone(state)
+        if anim is not None:
+            # 開いたときに一度だけ再生 (page.update を渡す)
+            _rocket_anims.append(lambda fn=anim: fn(page.update))
+        return control
 
     def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
@@ -1366,7 +1203,8 @@ def main(page: ft.Page):
                     color='#9ca3af'))
                 for pr in folded:
                     t5_list.controls.append(ft.Row([
-                        ft.Text('💥 #%d %s' % (pr['number'], pr['title']),
+                        ft.Image(src=rocketfx.WRECK, width=26, height=12),
+                        ft.Text('#%d %s' % (pr['number'], pr['title']),
                                 size=12, color='#9ca3af', expand=True),
                         ft.TextButton('一覧に戻す',
                                       on_click=on_unhide_pr(pr)),
