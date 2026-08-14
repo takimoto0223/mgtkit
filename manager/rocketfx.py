@@ -5,7 +5,8 @@ Flet の Image は SVG 文字列をそのまま src に描画できる。機体�
 SVG で持ち、背景スレッドが約 30fps で位置・回転・透明度を書き換えて
 動かす。演出は数秒で終わり、終了時に overlay から自分を片づける。
 
-基点はカード右側のロケット定位置。発射も転倒・爆発もそこから始まる。
+基点はカードのボタン行右端のロケット定位置。発射も転倒・爆発も
+そこから始まる。
 """
 import logging
 import math
@@ -475,14 +476,34 @@ def play_crash(page, start_x, start_y, done=None):
 _ZW, _ZH = 13, 35      # 常駐サイズ (機体 + 炎ぶんの余白)
 
 
+# 状態ごとの説明 (装飾を「読める部品」にするツールチップ)
+_ZONE_TIPS = {
+    'idle': '承認がそろうと正式版として発射します',
+    'ignited': 'あと 1 人の承認で正式版になります',
+    'smoking': '却下が 1 件あります',
+    'wreck': '却下が確定しました',
+}
+
+
+def _zone_box(inner, state):
+    """全状態を同じ寸法の舞台に載せる (機体・地面の位置がぶれないよう
+    上端をそろえ、炎は下の余白へ伸ばす)."""
+    return ft.Container(content=inner, width=_ZW + 18, height=36,
+                        alignment=ft.Alignment(0, -1),
+                        tooltip=_ZONE_TIPS[state])
+
+
 def zone(state):
-    """カード右上の常駐ロケットを返す。(control, 開いたとき一度の演出fn).
+    """ボタン行末尾の常駐ロケットを返す。(control, 開いたとき一度の演出fn).
 
     state: 'idle' (承認まだ) / 'ignited' (承認1つ=点火) /
            'smoking' (却下1つ=煙) / 'wreck' (却下確定=残骸)
     """
     if state == 'wreck':
-        return ft.Image(src=WRECK, width=28, height=12), None
+        inner = ft.Container(content=ft.Image(src=WRECK, width=30,
+                                              height=13),
+                             margin=ft.Margin.only(top=10))
+        return _zone_box(inner, state), None
     if state == 'smoking':
         rocket = ft.Image(src=ROCKET, width=_ZW, height=22)
         puffs = [ft.Container(content=ft.Image(src=SMOKE, width=8,
@@ -507,7 +528,7 @@ def zone(state):
         col = ft.Column([ft.Stack([rocket] + puffs, width=_ZW + 8,
                                   height=24)],
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        return col, drift
+        return _zone_box(col, state), drift
     if state == 'ignited':
         img = ft.Image(src=ROCKET_FL_S, width=_ZW, height=_ZH)
 
@@ -518,6 +539,6 @@ def zone(state):
                 time.sleep(0.16)
             img.src = ROCKET_FL_S
             page_update()
-        return img, flicker
+        return _zone_box(img, state), flicker
     img = ft.Image(src=ROCKET, width=_ZW, height=22, opacity=0.5)
-    return img, None
+    return _zone_box(img, state), None
