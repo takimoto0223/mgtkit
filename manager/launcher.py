@@ -38,7 +38,7 @@ def launch_app(instance_dir, port, channel='stable', python=None):
     app_py = os.path.join(app_dir(instance_dir), 'app.py')
     if not os.path.isfile(app_py):
         raise LaunchError('アプリがまだ取得されていません。'
-                          '「更新」タブから最新版を取得してください。')
+                          'もう一度「起動」を押すと自動で取得されます。')
     url = app_url(port)
     if port_in_use(port):
         log.info('port %d は使用中。既存の画面を開きます', port)
