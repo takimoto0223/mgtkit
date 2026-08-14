@@ -235,6 +235,64 @@ async function uploadFileTo(file, targetId, after) {
   finally { overlay(false); }
 }
 
+// ---------------- ネイティブのファイル/フォルダ選択 ----------------
+// サーバー側でWindows標準ダイアログを開き実パスを取得する (自己完結運用。
+// アップロード方式と違い一時フォルダへのコピーが発生しない)
+function setPathField(id, val) {
+  const el = $(id);
+  if (!el) return;
+  el.value = val;
+  localStorage.setItem('mgtkit_' + id, val);
+  syncPathGroup(id, val);
+}
+
+async function pickFile(targetId, after, filter) {
+  try {
+    const j = await api('/api/pick_path', {kind: 'file',
+      filter: filter || (targetId === 'mgt_path' ? 'mgt' : 'txt'),
+      initial: $(targetId).value});
+    if (!j.path) return;  // キャンセル
+    setPathField(targetId, j.path);
+    if (after) after();
+  } catch (e) { alert('ファイル選択エラー: ' + e.message); }
+}
+
+async function pickDir(targetId) {
+  try {
+    const j = await api('/api/pick_path', {kind: 'dir',
+      initial: $(targetId).value});
+    if (!j.path) return;
+    setPathField(targetId, j.path);
+  } catch (e) { alert('フォルダ選択エラー: ' + e.message); }
+}
+
+// 事例フォルダを選んで mgt・応力ファイル群を全欄に一括セット
+async function pickCaseDir() {
+  try {
+    const j = await api('/api/pick_path', {kind: 'dir',
+      initial: $('mgt_path').value});
+    if (!j.path) return;
+    const r = await api('/api/scan_case_dir', {dir: j.path});
+    const map = {mgt_path: r.mgt_path,
+                 beam_stress_path: r.beam_stress_path,
+                 truss_stress_path: r.truss_stress_path,
+                 plate_stress_path: r.plate_stress_path,
+                 c_wall_stress_path: r.wall_stress_path,
+                 q_reaction_path: r.reaction_path,
+                 q_deformation_path: r.deformation_path};
+    const found = [];
+    for (const [id, v] of Object.entries(map)) {
+      if (v) { setPathField(id, v); found.push(v.split(/[\\/]/).pop()); }
+    }
+    setMsg('mgt_msg', found.length
+      ? '一括セット: ' + found.map(esc).join(', ')
+      : 'フォルダ内に mgt・応力ファイルが見つかりませんでした',
+      found.length ? 'msg-ok' : 'msg-err');
+    if (r.mgt_path) await loadMgt();
+    if (r.beam_stress_path) loadCases();
+  } catch (e) { alert('一括セットエラー: ' + e.message); }
+}
+
 async function uploadTo(input, targetId, after) {
   if (!input.files.length) return;
   await uploadFileTo(input.files[0], targetId, after);
