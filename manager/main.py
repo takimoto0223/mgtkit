@@ -787,9 +787,10 @@ def main(page: ft.Page):
             t5_status.value = str(e)
         page.update()
 
-    # 発射・爆発の基点 = カード右のロケット定位置 (1 枚目のカードの高さ)
+    # 発射・爆発の基点 = ボタン列末尾のロケット定位置 (1 枚目のカード。
+    # ボタン列は左詰めなのでウィンドウ幅に依存しない)
     def _rocket_base():
-        return int(page.width or 760) - 48, 272
+        return 460, 410
 
     def _play_launch():
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
@@ -895,20 +896,6 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
-    def on_release(pr):
-        def handler(_):
-            def work():
-                try:
-                    result = reviews.release(pr['number'], config,
-                                             on_progress=_t5_progress)
-                    t5_status.value = result['message']
-                except (reviews.ReviewError, ghcli.GhError) as e:
-                    t5_status.value = str(e)
-                page.update()
-                on_refresh_reviews(None)
-            run_bg(work)
-        return handler
-
     def on_resolve_conflict(pr):
         def handler(_):
             _t5_progress('最新版との衝突を調べています...')
@@ -994,6 +981,8 @@ def main(page: ft.Page):
 
     # 一覧描画後に一度だけ再生するロケット演出 (飾り。操作はできない)
     _rocket_anims = []
+    # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
+    _auto_release_tried = set()
 
     def _rocket_zone(pr, n_req):
         """カード右上の常駐ロケット。承認・却下の進み具合を演出で表す."""
@@ -1049,10 +1038,8 @@ def main(page: ft.Page):
         }[pr['checks']]
 
         lines = [
-            ft.Row([ft.Text('#%d %s' % (pr['number'], pr['title']),
-                            weight=ft.FontWeight.BOLD, size=13,
-                            expand=True),
-                    _rocket_zone(pr, n_req)]),
+            ft.Text('#%d %s' % (pr['number'], pr['title']),
+                    weight=ft.FontWeight.BOLD, size=13),
             ft.Row(badges + [ft.Text(checks_label, size=12,
                                      color=checks_color),
                              ft.Text('提出者: %s' % pr['author'], size=12,
@@ -1129,10 +1116,9 @@ def main(page: ft.Page):
             else:
                 buttons.append(ft.OutlinedButton('却下',
                                                  on_click=on_reject(pr)))
-        if not final and reviews.can_release(pr, config, me):
-            buttons.append(ft.FilledButton(
-                'リリース', icon=ft.Icons.ROCKET_LAUNCH,
-                on_click=on_release(pr), bgcolor=NAVY, color='#ffffff'))
+        # ロケットはボタン列の末尾に常駐 (かつてのリリースボタンの位置。
+        # リリースは承認がそろった時点で自動実行されるためボタンは廃止)
+        buttons.append(_rocket_zone(pr, n_req))
         if locked:
             # カード情報は薄く、案内文だけ明るく表示する
             content = ft.Column([
@@ -1225,6 +1211,17 @@ def main(page: ft.Page):
                             log.debug('ロケット演出をスキップ',
                                       exc_info=True)
                 run_bg(play)
+            # リリースボタン廃止に伴い、承認がそろったまま未リリースの
+            # 提出 (2 人目の承認時に自動リリースできなかったもの) は
+            # タブを開いたときに自動でリリースする (発射演出つき)
+            for p in visible:
+                if (p['number'] not in _auto_release_tried
+                        and not p.get('rejected_final')
+                        and reviews.can_release(p, config, me)):
+                    _auto_release_tried.add(p['number'])
+                    _try_auto_release(p['number'])
+                    on_refresh_reviews(None)
+                    break
         run_bg(work)
 
     tab_beta_review = ft.Container(padding=24, content=ft.Column([
