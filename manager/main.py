@@ -158,6 +158,21 @@ def main(page: ft.Page):
     t1_status = status_text()
     t1_notice = ft.Text('', size=13, weight=ft.FontWeight.BOLD, color=AMBER)
     join_notice = ft.Text('', size=12, color='#555555')
+    # 自動更新の完了通知: 黄色いタグ + 更新内容 (更新タブ廃止に伴う導線)
+    t1_update_tag = ft.Container(
+        visible=False, bgcolor='#fef08a', border_radius=6,
+        padding=ft.Padding.symmetric(vertical=6, horizontal=12),
+        content=ft.Text('', size=13, weight=ft.FontWeight.BOLD,
+                        color='#713f12'))
+    t1_update_notes = ft.Container(
+        visible=False, bgcolor='#f5f7fa', border_radius=6, padding=12,
+        content=ft.Text('', size=13, selectable=True, color='#374151'))
+    t1_launch_btn = ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
+                                    bgcolor=NAVY, color='#ffffff')
+    # installing: 自動更新の実行中 (二重実行と起動の衝突を防ぐ) /
+    # pending: アプリ起動中などで取り込めなかった新しい正式版
+    # (次回「起動」時に取り込む)
+    _update_state = {'installing': False, 'pending': None}
 
     def refresh_local_version():
         info = updater.local_version_info(stable)
@@ -170,6 +185,58 @@ def main(page: ft.Page):
             t1_status.value = '配布日: %s' % info.get('distributed_at', '-')
         page.update()
 
+    def _show_updated(release):
+        """自動更新の完了を黄色いタグ + 更新内容で知らせる."""
+        t1_update_tag.content.value = ('バージョンが更新されました (%s)。'
+                                       % release['tag'])
+        t1_update_tag.visible = True
+        t1_update_notes.content.value = (release.get('notes')
+                                         or '(更新内容の記載はありません)')
+        t1_update_notes.visible = True
+        t1_notice.value = ''
+        page.update()
+
+    def _auto_update(latest):
+        """新しい正式版を自動で取り込む (更新タブ廃止に伴い手動操作なし).
+
+        アプリが起動中 (Windows ではフォルダが使用中で置き換え不可) の
+        ときは作業を邪魔しないため取り込まず、次回「起動」時に取り込む
+        予約だけする。戻り値: 取り込んだら True。
+        """
+        if _update_state['installing'] or latest is None:
+            return False
+        if launcher.port_in_use(paths.stable_port(config)):
+            _update_state['pending'] = latest
+            t1_notice.value = ('新しい安定版 %s があります。次回の「起動」で'
+                               '自動的に更新されます。' % latest['tag'])
+            page.update()
+            return False
+        _update_state['installing'] = True
+        t1_launch_btn.disabled = True
+        page.update()
+        try:
+            def progress(msg):
+                t1_status.value = ('新しい安定版 %s を取り込んでいます... %s'
+                                   % (latest['tag'], msg))
+                page.update()
+            updater.install_release(repo, latest, stable,
+                                    on_progress=progress)
+            _update_state['pending'] = None
+            refresh_local_version()
+            _show_updated(latest)
+            ok = True
+        except Exception:
+            log.exception('自動更新に失敗しました')
+            t1_notice.value = ('自動更新に失敗しました。ネットワーク接続を'
+                               '確認してください (次回の起動時にもう一度'
+                               '試します)。')
+            _update_state['pending'] = latest
+            ok = False
+        _update_state['installing'] = False
+        t1_launch_btn.disabled = False
+        page.update()
+        return ok
+
     def on_launch_stable(_):
         t1_status.value = '起動しています...'
         page.update()
@@ -179,6 +246,17 @@ def main(page: ft.Page):
                 t1_status.value = msg
                 page.update()
             try:
+                # 取り込み待ちの新しい正式版があれば起動前に取り込む
+                pending = _update_state['pending']
+                if pending is not None and not _update_state['installing']:
+                    progress('新しい安定版 %s に更新しています...'
+                             % pending['tag'])
+                    launcher.stop_app(paths.stable_port(config))
+                    updater.install_release(repo, pending, stable,
+                                            on_progress=progress)
+                    _update_state['pending'] = None
+                    refresh_local_version()
+                    _show_updated(pending)
                 if updater.local_version_info(stable) is None:
                     # 初回: 最新の安定版を自動で取得してから起動する
                     progress('最新の安定版を確認しています...')
@@ -204,106 +282,96 @@ def main(page: ft.Page):
             page.update()
         run_bg(work)
 
+    t1_launch_btn.on_click = on_launch_stable
+
+    def _download_history_zip(rel, dlg_status):
+        """過去の正式版の ZIP をダウンロードフォルダへ保存する."""
+        def handler(_):
+            dlg_status.value = '%s を取得しています...' % rel['tag']
+            page.update()
+
+            def work():
+                import shutil
+                import tempfile
+                tmp = tempfile.mkdtemp(prefix='mgtkit_hist_')
+                try:
+                    path, _src = ghcli.download_release(
+                        repo, rel['tag'], tmp,
+                        has_assets=bool(rel.get('assets')))
+                    dest_dir = os.path.join(os.path.expanduser('~'),
+                                            'Downloads')
+                    os.makedirs(dest_dir, exist_ok=True)
+                    dest = os.path.join(dest_dir,
+                                        'mgtkit-%s.zip' % rel['tag'])
+                    shutil.copyfile(path, dest)
+                    dlg_status.value = 'ZIP を保存しました: %s' % dest
+                except Exception as e:
+                    log.exception('過去の版の取得に失敗しました')
+                    dlg_status.value = (str(e)
+                                        or 'ダウンロードに失敗しました。')
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+                page.update()
+            run_bg(work)
+        return handler
+
+    def on_show_history(_):
+        """過去の更新ログ (正式版ごとのリリースノート + ZIP 保存)."""
+        cached = reviewcache.get() or reviewcache.load_from_disk(config)
+        stables = [r for r in (cached or {}).get('releases') or []
+                   if not r['prerelease']]
+        dlg_status = ft.Text('', size=12, color='#555555', selectable=True)
+        local_v = (updater.local_version_info(stable) or {}).get('version')
+        rows = []
+        for r in stables:
+            head = [ft.Text(r['tag'], size=14, weight=ft.FontWeight.BOLD,
+                            color=NAVY),
+                    ft.Text(r.get('published_at') or '', size=12,
+                            color='#9ca3af')]
+            if r['tag'] == local_v:
+                head.append(ft.Text('いま使っている版', size=11,
+                                    color='#15803d'))
+            head.append(ft.Container(expand=True))
+            head.append(ft.OutlinedButton(
+                'ZIP を保存', icon=ft.Icons.DOWNLOAD,
+                on_click=_download_history_zip(r, dlg_status)))
+            rows.append(ft.Container(
+                bgcolor='#f5f7fa', border_radius=6, padding=12,
+                content=ft.Column([
+                    ft.Row(head, spacing=10),
+                    ft.Text(r.get('notes')
+                            or '(更新内容の記載はありません)',
+                            size=12, color='#555555', selectable=True),
+                ], spacing=6)))
+        if not rows:
+            rows = [ft.Text('過去の更新ログはまだありません。', size=13,
+                            color='#555555')]
+        page.show_dialog(ft.AlertDialog(
+            title=ft.Text('過去の更新ログ'),
+            content=ft.Column(rows + [dlg_status], width=560, height=380,
+                              scroll=ft.ScrollMode.AUTO, tight=True),
+            actions=[ft.TextButton('閉じる',
+                                   on_click=lambda _: page.pop_dialog())]))
+
     tab_launch = ft.Container(padding=24, content=ft.Column([
+        t1_update_tag,
+        t1_update_notes,
         t1_notice,
         join_notice,
         t1_version,
-        ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
-                        on_click=on_launch_stable,
-                        bgcolor=NAVY, color='#ffffff'),
-        t1_status,
-    ], spacing=16))
-
-    # ---------------- タブ2: 更新 ----------------
-
-    t2_info = ft.Text('「更新を確認」を押してください', size=14)
-    t2_notes = ft.Text('', size=13, selectable=True)
-    t2_status = status_text()
-    t2_update_btn = ft.FilledButton(
-        '更新して起動', icon=ft.Icons.DOWNLOAD, disabled=True,
-        bgcolor=NAVY, color='#ffffff')
-    _latest = {'release': None}
-
-    def on_check_update(_):
-        t2_status.value = '確認中...'
-        t2_update_btn.disabled = True
-        page.update()
-
-        def work():
-            try:
-                result = updater.check_update(repo, stable)
-            except ghcli.GhError as e:
-                t2_status.value = str(e)
-                page.update()
-                return
-            local = result['local']
-            latest = result['latest']
-            local_v = (local or {}).get('version', '未取得')
-            if latest is None:
-                t2_info.value = ('配布された安定版はまだありません '
-                                 '(手元: %s)' % local_v)
-                t2_notes.value = ''
-            elif result['has_update']:
-                t2_info.value = '更新があります: %s → %s' % (
-                    local_v, latest['tag'])
-                t2_notes.value = ('【更新内容】\n%s' % (latest['notes']
-                                  or '(リリースノートなし)'))
-                _latest['release'] = latest
-                t2_update_btn.disabled = False
-            else:
-                if time.time() < _pending_release['until']:
-                    t2_info.value = ('新しい正式版を準備中です (数分かかり'
-                                     'ます)。公開されると自動でお知らせ'
-                                     'します。')
-                else:
-                    t2_info.value = '最新の安定版です (%s)' % local_v
-                t2_notes.value = ''
-            t2_status.value = ''
-            page.update()
-        run_bg(work)
-
-    def on_do_update(_):
-        rel = _latest['release']
-        if rel is None:
-            return
-        t2_update_btn.disabled = True
-        page.update()
-
-        def work():
-            def progress(msg):
-                t2_status.value = msg
-                page.update()
-            try:
-                # アプリが起動したままだとフォルダが「使用中」になり
-                # 置き換えられない (更新後の再起動にも必要) ため先に終了する
-                progress('起動中のアプリを終了しています...')
-                launcher.stop_app(paths.stable_port(config))
-                updater.install_release(repo, rel, stable,
-                                        on_progress=progress)
-                refresh_local_version()
-                _, url = launcher.launch_app(
-                    stable, paths.stable_port(config), channel='stable')
-                t2_status.value = '更新して起動しました: %s' % url
-            except (ghcli.GhError, launcher.LaunchError, Exception) as e:
-                log.exception('更新に失敗しました')
-                t2_status.value = str(e) or '更新に失敗しました。'
-            page.update()
-        run_bg(work)
-
-    t2_update_btn.on_click = on_do_update
-    tab_update = ft.Container(padding=24, content=ft.Column([
         ft.Row([
-            ft.OutlinedButton('更新を確認', icon=ft.Icons.REFRESH,
-                              on_click=on_check_update),
-            t2_update_btn,
+            t1_launch_btn,
+            ft.OutlinedButton(
+                '過去の更新ログ', icon=ft.Icons.HISTORY,
+                on_click=on_show_history,
+                style=ft.ButtonStyle(color='#6b7280')),
         ], spacing=12),
-        t2_info,
-        ft.Container(content=t2_notes, bgcolor='#f5f7fa', padding=12,
-                     border_radius=6),
-        t2_status,
+        t1_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 
-    # ---------------- タブ3: 更新版を提出 ----------------
+    # ---------------- タブ2: 更新版を提出 ----------------
+    # (旧・更新タブは廃止: 新しい正式版は自動で取り込み、起動タブの
+    #  黄色いタグと「過去の更新ログ」で知らせる)
 
     file_picker = ft.FilePicker()
     page.services.append(file_picker)
@@ -805,7 +873,7 @@ def main(page: ft.Page):
 
         検証NG・却下あり・衝突中・権限なしのときは何もしない。
         発射演出を始めたら True を返す。カードの削除 (一覧更新) と
-        更新タブのバッジは ✨ が光ったあとに行う。
+        公開待ち・自動更新の案内は ✨ が光ったあとに行う。
         """
         try:
             _t5_progress('承認がそろったかどうか確認しています...')
@@ -835,8 +903,8 @@ def main(page: ft.Page):
             if not (state['anim'] and state['net']):
                 return
             if state['ok']:
-                # キラッのあと: バッジを「準備中」にし、リリースの公開
-                # (数分かかる) を裏で見張って公開されたら黄色に切り替える
+                # キラッのあと: 「準備中」の案内を出し、リリースの公開
+                # (数分かかる) を裏で見張って公開されたら自動で取り込む
                 _watch_new_release()
             on_refresh_reviews(None)
 
@@ -875,7 +943,7 @@ def main(page: ft.Page):
 
     def _play_launch(pr_number, done=None):
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
-        弧を描いて「更新」タブへ → ✨ と弾けて消える."""
+        弧を描いて「起動」タブへ → ✨ と弾けて消える."""
         sx, sy = _rocket_base(pr_number)
         rocketfx.play_launch(page, sx, sy, done=done)
 
@@ -1464,29 +1532,26 @@ def main(page: ft.Page):
 
     # ---------------- 組み立て ----------------
 
-    update_label, update_badge = tab_label('更新')
     review_label, review_badge = tab_label('β版の確認と承認')
 
     def on_tab_change(e):
         # β版タブを開いた瞬間: 手元の内容を即表示し、裏で最新へ更新する
-        if getattr(e.control, 'selected_index', None) == 3:
+        if getattr(e.control, 'selected_index', None) == 2:
             on_refresh_reviews(None)
 
     page.add(
         header(),
         ft.Tabs(
-            length=4, selected_index=0, animation_duration=150, expand=True,
+            length=3, selected_index=0, animation_duration=150, expand=True,
             on_change=on_tab_change,
             content=ft.Column([
                 ft.TabBar(tabs=[
                     ft.Tab(label='起動'),
-                    ft.Tab(label=update_label),
                     ft.Tab(label='更新版を提出'),
                     ft.Tab(label=review_label),
                 ]),
                 ft.TabBarView(expand=True, controls=[
                     tab_launch,
-                    tab_update,
                     tab_submit,
                     tab_beta_review,
                 ]),
@@ -1498,18 +1563,16 @@ def main(page: ft.Page):
     # ------- 通知の更新 (起動時 + 定期ポーリング): 更新バナーとタブバッジ -------
 
     def _watch_new_release():
-        """リリース公開 (数分かかる) を見張り、公開されたら通知を更新する.
+        """リリース公開 (数分かかる) を見張り、公開されたら自動更新する.
 
         リリース直後は Releases の公開処理が終わっておらず即時チェック
-        では「更新なし」になるため、バッジは「準備中」(グレーの…) で
-        すぐ反応を返し、公開を確認できたら黄色の件数に切り替える。
+        では「更新なし」になるため、「準備中」の案内をすぐ出し、
+        公開を確認できたら自動で取り込んで黄色いタグに切り替える。
         最初の 1 分は 10 秒間隔・以降 30 秒間隔で最大 10 分見張る。
         """
         _pending_release['until'] = time.time() + 10 * 60
-        update_badge.content.value = '…'
-        update_badge.bgcolor = '#cbd5e1'
-        update_badge.tooltip = '新しい正式版を準備中です (数分かかります)'
-        update_badge.visible = True
+        t1_notice.value = ('新しい正式版を準備中です (数分かかります)。'
+                           '公開されると自動で更新されます。')
         page.update()
 
         def work():
@@ -1523,17 +1586,12 @@ def main(page: ft.Page):
                 if (result and result['has_update']
                         and result['latest'] is not None):
                     _pending_release['until'] = 0.0
-                    t1_notice.value = ('新しい安定版 %s があります。'
-                                       '「更新」タブから更新してください。'
-                                       % result['latest']['tag'])
-                    set_badge(update_badge, 1)
-                    page.update()
+                    _auto_update(result['latest'])
                     return
-            # 期限切れ: 黙って消さず、確認方法を案内する
+            # 期限切れ: 黙って消さず、その後の動きを案内する
             _pending_release['until'] = 0.0
-            set_badge(update_badge, 0)
-            msg = ('リリースの公開確認ができませんでした。しばらく'
-                   'してから「更新」タブの「更新を確認」を押してください。')
+            msg = ('リリースの公開確認ができませんでした。公開されると'
+                   '自動で取り込んでお知らせします。')
             t1_notice.value = msg
             t5_status.value = msg
             page.update()
@@ -1543,8 +1601,8 @@ def main(page: ft.Page):
         """起動時と定期的なバックグラウンド更新.
 
         承認待ち一覧 + リリース一覧を 1 回のスナップショット取得に
-        まとめ、更新バナー・タブバッジ・承認タブの表示をすべて同じ
-        結果から更新する (タブを開いた瞬間に新しい内容が出せる)。
+        まとめ、承認タブの表示・バッジを最新化し、新しい正式版が
+        あれば自動で取り込む (更新タブ廃止に伴い手動操作なし)。
         """
         def work():
             try:
@@ -1554,6 +1612,9 @@ def main(page: ft.Page):
                 return
             if data is None:
                 return  # より新しい取得が反映済み
+            # 承認タブの一覧・バッジを先に最新化する (自動更新の
+            # ダウンロードで画面の反映を待たせない)
+            _render_reviews(data, animate=False)
             try:
                 result = updater.check_update(repo, stable,
                                               releases=data['releases'])
@@ -1562,16 +1623,14 @@ def main(page: ft.Page):
                 result = None
             if result is not None:
                 if result['has_update'] and result['latest'] is not None:
-                    t1_notice.value = ('新しい安定版 %s があります。'
-                                       '「更新」タブから更新してください。'
-                                       % result['latest']['tag'])
-                    set_badge(update_badge, 1)
+                    _pending_release['until'] = 0.0
+                    _auto_update(result['latest'])
                 elif time.time() >= _pending_release['until']:
-                    # リリース公開待ちの「準備中」バッジは消さない
-                    t1_notice.value = ''
-                    set_badge(update_badge, 0)
-            # 承認タブの一覧・バッジも同じ取得結果で最新化しておく
-            _render_reviews(data, animate=False)
+                    # 最新の状態: 取り込み予約や古い案内が残っていれば消す
+                    _update_state['pending'] = None
+                    if t1_notice.value:
+                        t1_notice.value = ''
+                        page.update()
         run_bg(work)
         if reschedule:
             timer = threading.Timer(UPDATE_POLL_SECONDS, check_update_notice)
@@ -1604,11 +1663,11 @@ def main(page: ft.Page):
                     ghcli.create_join_request(repo, name)
                     join_notice.value = ('参加申請を送信しました。管理者の'
                                          '承認後に提出・承認へ参加できます '
-                                         '(起動・更新・β版の試用は承認前でも'
+                                         '(起動・β版の試用は承認前でも'
                                          '使えます)。')
                 else:
                     join_notice.value = ('参加申請は送信済みです。管理者の'
-                                         '承認をお待ちください (起動・更新・'
+                                         '承認をお待ちください (起動・'
                                          'β版の試用はそのまま使えます)。')
                 page.update()
             except Exception:

@@ -645,4 +645,4 @@ def release(pr_number, config=None, on_progress=None):
     delete_betas_for(pr_number, config)
     return {'version': version,
             'message': ('%s として取り込みました。数分でリリースが公開され、'
-                        '各メンバーの更新タブに表示されます。' % version)}
+                        '各メンバーへ自動で配布されます。' % version)}
