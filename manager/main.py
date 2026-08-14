@@ -748,6 +748,8 @@ def main(page: ft.Page):
             def work():
                 preloaded = None
                 try:
+                    _t5_progress('#%d の承認を送信しています...'
+                                 % pr['number'])
                     # 提出者は一覧取得時に判明済み。渡して再取得を省く
                     reviews.approve(pr['number'], config,
                                     author=pr['author'])
@@ -773,6 +775,7 @@ def main(page: ft.Page):
         None (画面は取り直しが必要)。
         """
         try:
+            _t5_progress('承認がそろったかどうか確認しています...')
             me = reviews.current_user()
             pending = reviews.list_pending(config)
         except (reviews.ReviewError, ghcli.GhError):
@@ -944,6 +947,8 @@ def main(page: ft.Page):
         def handler(_):
             def work():
                 try:
+                    _t5_progress('#%d の取り消しを送信しています...'
+                                 % pr['number'])
                     reviews.cancel_my_review(pr['number'], config)
                     t5_status.value = ('#%d への承認・却下を取り消しました。'
                                        % pr['number'])
@@ -982,6 +987,8 @@ def main(page: ft.Page):
             def do_reject(_):
                 def work():
                     try:
+                        _t5_progress('#%d の却下を送信しています...'
+                                     % pr['number'])
                         reviews.request_changes(pr['number'], reason.value,
                                                 config)
                         page.pop_dialog()
@@ -1330,6 +1337,17 @@ def main(page: ft.Page):
                 return r
         return None
 
+    def _fetched_hm(data):
+        """スナップショット取得時刻を「HH:MM」(この PC の時刻) で返す."""
+        try:
+            t = datetime.datetime.fromisoformat(
+                data.get('fetched_at') or '')
+        except (TypeError, ValueError):
+            return ''
+        if t.tzinfo is not None:
+            t = t.astimezone()
+        return t.strftime('%H:%M')
+
     # 描画は複数スレッド (ボタン操作・定期更新) から呼ばれるため直列化する
     _render_lock = threading.Lock()
 
@@ -1391,7 +1409,9 @@ def main(page: ft.Page):
                                'います...'
                                % (' (%d 分前の取得)' % age if age else ''))
         else:
-            t5_status.value = ''
+            hm = _fetched_hm(data)
+            t5_status.value = ('最新の状態です'
+                               + (' (%s 取得)' % hm if hm else ''))
         page.update()
         # 最新データの描画後にロケット演出 (点火・煙) を一度だけ再生
         anims = _rocket_anims[:]
@@ -1406,37 +1426,18 @@ def main(page: ft.Page):
                                   exc_info=True)
             run_bg(play)
 
-    def _fetch_review_snapshot():
-        """一覧とリリース一覧を並列に取得してスナップショットへ保存する.
+    def _fetch_review_snapshot(on_progress=None):
+        """一覧とリリース一覧を一括取得してスナップショットへ保存する.
 
+        取得は reviews.fetch_snapshot (1 回の一括取得。失敗時は従来経路へ
+        自動フォールバック)。on_progress で進行状況を画面に流せる。
         戻り値: 採用されたスナップショット。より新しい取得に追い越されて
         破棄されたときは None。取得失敗は ReviewError / GhError を送出。
         """
         seq = reviewcache.next_seq()
-        results, errors = {}, []
-
-        def fetch(name, fn):
-            def run():
-                try:
-                    results[name] = fn()
-                except (reviews.ReviewError, ghcli.GhError) as e:
-                    errors.append(e)
-            return threading.Thread(target=run, daemon=True)
-
-        threads = [
-            fetch('pending', lambda: (reviews.list_pending(config),
-                                      reviews.current_user())),
-            fetch('releases', lambda: ghcli.fetch_releases(repo)),
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        if errors:
-            raise errors[0]
-        pending, me = results['pending']
-        return reviewcache.put(pending, results['releases'], me,
-                               seq=seq, config=config)
+        snap = reviews.fetch_snapshot(config, on_progress=on_progress)
+        return reviewcache.put(snap['pending'], snap['releases'],
+                               snap['me'], seq=seq, config=config)
 
     def on_refresh_reviews(_, preloaded=None):
         """一覧の再描画。手元にある前回の取得結果を即座に表示し、
@@ -1451,19 +1452,20 @@ def main(page: ft.Page):
         elif cached is not None:
             _render_reviews(cached, stale=True)
         else:
-            t5_status.value = '取得中...'
-            page.update()
+            _t5_progress('最新の提出状況とβ版・リリースの一覧を確認して'
+                         'います...')
 
         def work():
             try:
                 if preloaded is not None:
                     seq = reviewcache.next_seq()
                     pending, me = preloaded
+                    _t5_progress('β版とリリースの一覧を確認しています...')
                     data = reviewcache.put(pending,
                                            ghcli.fetch_releases(repo),
                                            me, seq=seq, config=config)
                 else:
-                    data = _fetch_review_snapshot()
+                    data = _fetch_review_snapshot(on_progress=_t5_progress)
             except (reviews.ReviewError, ghcli.GhError) as e:
                 t5_status.value = str(e)
                 page.update()

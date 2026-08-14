@@ -12,6 +12,7 @@
 import json
 import logging
 import re
+import threading
 import time
 
 from . import claude_helper, feedback, ghcli, paths
@@ -178,6 +179,11 @@ def list_pending(config=None):
         prs = json.loads(out)
     except ValueError:
         raise ReviewError('承認待ち一覧を取得できませんでした。')
+    return _build_pending(prs, config)
+
+
+def _build_pending(prs, config):
+    """gh pr list --json 形式の PR dict 一覧から承認待ち一覧を組み立てる."""
     members = collaborators(config)
     n_req = required_approvals(config)
     result = []
@@ -203,6 +209,148 @@ def list_pending(config=None):
                            == 'CONFLICTING',
         })
     return result
+
+
+# 承認タブの表示に必要な情報 (自分のログイン名・open PR とそのレビュー・
+# 検証・コメント・リリース一覧) を 1 回の往復でまとめて取る GraphQL。
+# collaborator 一覧は権限によって読めないことがあるため含めない
+# (従来どおり collaborators() のキャッシュ付き取得を使う)
+_SNAPSHOT_QUERY = '''\
+query($owner: String!, $name: String!) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 50) {
+      nodes {
+        number title url headRefName mergeable
+        author { login }
+        reviews(first: 100) {
+          nodes { state body submittedAt author { login } }
+        }
+        comments(first: 100) {
+          nodes { body createdAt url author { login } }
+        }
+        commits(last: 1) {
+          nodes { commit { statusCheckRollup { contexts(first: 100) {
+            nodes {
+              __typename
+              ... on CheckRun { status conclusion }
+              ... on StatusContext { state }
+            }
+          } } } }
+        }
+      }
+    }
+    releases(first: 30, orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes {
+        tagName name isPrerelease isDraft description publishedAt
+        releaseAssets(first: 10) { nodes { name downloadUrl } }
+      }
+    }
+  }
+}
+'''
+
+
+def fetch_snapshot(config=None, on_progress=None):
+    """承認タブ用の一括取得: 承認待ち一覧 + リリース一覧 + ログイン名.
+
+    まず GraphQL 1 回 (プロセス起動 1 回・往復 1 回) で取得し、
+    通信失敗や想定外の応答のときは従来の取得 (pr list + リリース一覧の
+    並列) へ自動でフォールバックする。
+    on_progress: 進行状況をユーザーへ伝えるコールバック (平易な日本語)。
+    戻り値: dict(pending, releases, me)。
+    """
+    def progress(msg):
+        if on_progress:
+            on_progress(msg)
+
+    progress('最新の提出状況とβ版・リリースの一覧を確認しています...')
+    try:
+        return _snapshot_via_graphql(config)
+    except Exception:
+        log.info('一括取得に失敗したため従来の方法で取得します',
+                 exc_info=True)
+    progress('うまく取得できなかったため、方法を変えて確認し直して'
+             'います...')
+    return _snapshot_via_rest(config)
+
+
+def _snapshot_via_graphql(config):
+    slug = paths.repo_slug(config)
+    owner, name = slug.split('/', 1)
+    out = ghcli.run_gh(['api', 'graphql',
+                        '-f', 'query=%s' % _SNAPSHOT_QUERY,
+                        '-f', 'owner=%s' % owner,
+                        '-f', 'name=%s' % name])
+    data = json.loads(out)['data']
+    me = data['viewer']['login']
+    _cache['user'] = me  # ログイン名もこの 1 回から得られる
+    repo = data['repository']
+    prs = [_pr_from_graphql(n) for n in repo['pullRequests']['nodes']]
+    releases = [_release_from_graphql(n) for n in repo['releases']['nodes']
+                if not n.get('isDraft')]
+    return {'pending': _build_pending(prs, config),
+            'releases': releases, 'me': me}
+
+
+def _pr_from_graphql(node):
+    """GraphQL の PR ノードを gh pr list --json と同じ形に変換する."""
+    commits = (node.get('commits') or {}).get('nodes') or []
+    rollup = (((commits[0].get('commit') or {}).get('statusCheckRollup'))
+              if commits else None) or {}
+    contexts = (rollup.get('contexts') or {}).get('nodes') or []
+    return {
+        'number': node['number'],
+        'title': node.get('title') or '',
+        'url': node.get('url') or '',
+        'headRefName': node.get('headRefName') or '',
+        'mergeable': node.get('mergeable') or '',
+        'author': node.get('author') or {},
+        'reviews': (node.get('reviews') or {}).get('nodes') or [],
+        'comments': (node.get('comments') or {}).get('nodes') or [],
+        'statusCheckRollup': contexts,
+    }
+
+
+def _release_from_graphql(node):
+    """GraphQL の Release ノードを ghcli.fetch_releases と同じ形に変換."""
+    assets = (node.get('releaseAssets') or {}).get('nodes') or []
+    return {
+        'tag': node.get('tagName') or '',
+        'name': node.get('name') or node.get('tagName') or '',
+        'prerelease': bool(node.get('isPrerelease')),
+        'notes': node.get('description') or '',
+        'published_at': (node.get('publishedAt') or '')[:10],
+        'assets': [{'name': a.get('name'), 'url': a.get('downloadUrl')}
+                   for a in assets],
+    }
+
+
+def _snapshot_via_rest(config):
+    """従来経路のフォールバック: pr list とリリース一覧を並列に取得."""
+    results, errors = {}, []
+
+    def fetch(name, fn):
+        def run():
+            try:
+                results[name] = fn()
+            except (ReviewError, ghcli.GhError) as e:
+                errors.append(e)
+        return threading.Thread(target=run, daemon=True)
+
+    threads = [
+        fetch('pending', lambda: (list_pending(config), current_user())),
+        fetch('releases',
+              lambda: ghcli.fetch_releases(paths.repo_slug(config))),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if errors:
+        raise errors[0]
+    pending, me = results['pending']
+    return {'pending': pending, 'releases': results['releases'], 'me': me}
 
 
 def _pr_detail(pr_number, config=None):

@@ -257,6 +257,148 @@ class TestSubmissionFilter:
         assert pending[1]['approved'] == []
 
 
+_GRAPHQL_SNAPSHOT = {
+    'data': {
+        'viewer': {'login': 'yamada'},
+        'repository': {
+            'pullRequests': {'nodes': [
+                {'number': 33, 'title': '組立断面', 'url': 'u',
+                 'headRefName': 'feature/fujitaka-20260808-1',
+                 'mergeable': 'MERGEABLE',
+                 'author': {'login': 'fujitaka'},
+                 'reviews': {'nodes': [
+                     {'state': 'APPROVED', 'body': '',
+                      'submittedAt': '2026-08-10T09:00:00Z',
+                      'author': {'login': 'yamada'}}]},
+                 'comments': {'nodes': [
+                     {'body': 'β版 v1.1-beta.1 のフィードバック '
+                              '(山田太郎):\n\n良い感じ',
+                      'createdAt': '2026-08-05T12:34:56Z',
+                      'url': 'https://github.com/o/r/pull/33'
+                             '#issuecomment-987',
+                      'author': {'login': 'yamada'}}]},
+                 'commits': {'nodes': [{'commit': {'statusCheckRollup': {
+                     'contexts': {'nodes': [
+                         {'__typename': 'CheckRun', 'status': 'COMPLETED',
+                          'conclusion': 'SUCCESS'}]}}}}]}},
+                {'number': 35, 'title': 'マネージャー更新', 'url': 'u',
+                 'headRefName': 'claude/app-manager-x',
+                 'mergeable': 'MERGEABLE', 'author': {'login': 't'},
+                 'reviews': {'nodes': []}, 'comments': {'nodes': []},
+                 'commits': {'nodes': []}},
+            ]},
+            'releases': {'nodes': [
+                {'tagName': 'v1.1-beta.1', 'name': 'v1.1-beta.1',
+                 'isPrerelease': True, 'isDraft': False,
+                 'description': '提出 #33 の検証通過版です。',
+                 'publishedAt': '2026-08-05T00:00:00Z',
+                 'releaseAssets': {'nodes': [
+                     {'name': 'mgtkit.zip', 'downloadUrl': 'http://x/z'}]}},
+                {'tagName': 'v1.0', 'name': 'v1.0', 'isPrerelease': False,
+                 'isDraft': True, 'description': '', 'publishedAt': '',
+                 'releaseAssets': {'nodes': []}},
+            ]},
+        },
+    },
+}
+
+
+class TestFetchSnapshot:
+    """一括スナップショット取得 (GraphQL 1 回 + 従来経路フォールバック)."""
+
+    def test_graphql_single_roundtrip(self, monkeypatch):
+        import json as _json
+        calls = []
+
+        def fake(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'graphql']:
+                return _json.dumps(_GRAPHQL_SNAPSHOT)
+            if args[0] == 'api' and 'collaborators' in args[1]:
+                return '["yamada", "fujitaka"]'
+            raise AssertionError('unexpected gh call: %r' % args)
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
+        snap = reviews.fetch_snapshot({'repo': 'o/r'})
+        # gh は GraphQL 1 回 + collaborators 1 回のみ
+        assert [c[:2] for c in calls] == [
+            ['api', 'graphql'],
+            ['api', 'repos/o/r/collaborators?per_page=100']]
+        assert snap['me'] == 'yamada'
+        # ログイン名はこの 1 回でキャッシュされ、追加の gh 呼び出しなし
+        assert reviews.current_user() == 'yamada'
+        assert len(calls) == 2
+        # 承認待ち一覧は list_pending と同じ形 (feature/ のみ)
+        pr = snap['pending'][0]
+        assert [p['number'] for p in snap['pending']] == [33]
+        assert pr['author'] == 'fujitaka'
+        assert pr['approved'] == ['yamada']
+        assert pr['checks'] == 'success'
+        assert pr['conflicting'] is False
+        assert pr['feedback'][0] == {
+            'tag': 'v1.1-beta.1', 'name': '山田太郎', 'date': '2026-08-05',
+            'text': '良い感じ', 'author': 'yamada', 'comment_id': '987'}
+        # リリース一覧は fetch_releases と同じ形 (draft は除外)
+        assert snap['releases'] == [
+            {'tag': 'v1.1-beta.1', 'name': 'v1.1-beta.1',
+             'prerelease': True, 'notes': '提出 #33 の検証通過版です。',
+             'published_at': '2026-08-05',
+             'assets': [{'name': 'mgtkit.zip', 'url': 'http://x/z'}]}]
+
+    def test_falls_back_to_rest_on_graphql_error(self, monkeypatch):
+        import json as _json
+        calls = []
+
+        def fake(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'graphql']:
+                raise reviews.ghcli.GhError('通信エラー')
+            if args[:2] == ['pr', 'list']:
+                return _json.dumps([
+                    {'number': 33, 'title': '組立断面', 'url': 'u',
+                     'author': {'login': 'fujitaka'},
+                     'headRefName': 'feature/fujitaka-20260808-1',
+                     'reviews': [], 'statusCheckRollup': [],
+                     'mergeable': 'MERGEABLE', 'comments': []}])
+            if args[:2] == ['api', 'user']:
+                return 'yamada\n'
+            if args[0] == 'api' and 'collaborators' in args[1]:
+                return '[]'
+            if args[0] == 'api' and 'releases' in args[1]:
+                return '[]'
+            raise AssertionError('unexpected gh call: %r' % args)
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
+        progress = []
+        snap = reviews.fetch_snapshot({'repo': 'o/r'},
+                                      on_progress=progress.append)
+        assert snap['me'] == 'yamada'
+        assert [p['number'] for p in snap['pending']] == [33]
+        assert snap['releases'] == []
+        # 進行状況が言語化される (最初の取得 → 方法を変えて再取得)
+        assert len(progress) == 2
+        assert '確認しています' in progress[0]
+        assert '方法を変えて' in progress[1]
+
+    def test_falls_back_on_unexpected_shape(self, monkeypatch):
+        import json as _json
+
+        def fake(args, timeout=60):
+            if args[:2] == ['api', 'graphql']:
+                return _json.dumps({'data': None})  # 想定外の応答
+            if args[:2] == ['pr', 'list']:
+                return '[]'
+            if args[:2] == ['api', 'user']:
+                return 'yamada\n'
+            if args[0] == 'api':
+                return '[]'
+            raise AssertionError('unexpected gh call: %r' % args)
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
+        snap = reviews.fetch_snapshot({'repo': 'o/r'})
+        assert snap == {'pending': [], 'releases': [], 'me': 'yamada'}
+
+
 class TestRejectedFinal:
     """却下が必要数そろった提出の判定と確定時刻."""
 
