@@ -44,17 +44,19 @@ def get():
         return _mem['data']
 
 
-def put(pending, releases, me, seq=None, config=None):
+def put(pending, releases, me, seq=None, config=None, merged=None):
     """スナップショットを保存する.
 
     seq: next_seq() で採番した番号。より新しい取得が既に採用済みなら
     保存せず None を返す (追い越された応答)。採用したら dict を返す。
+    merged: 取り込み済みの提出一覧 (過去の更新ログの図用。無くてもよい)。
     ディスクへの保存失敗は表示に影響しないため警告ログのみ。
     """
     data = {
         'pending': pending,
         'releases': releases,
         'me': me,
+        'merged': merged or [],
         'fetched_at': datetime.datetime.now(datetime.timezone.utc)
         .isoformat(timespec='seconds'),
     }

@@ -173,7 +173,7 @@ def list_pending(config=None):
     """
     out = ghcli.run_gh([
         'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
-        '--json', 'number,title,url,author,headRefName,'
+        '--json', 'number,title,url,author,headRefName,createdAt,'
                   'reviews,statusCheckRollup,mergeable,comments'])
     try:
         prs = json.loads(out)
@@ -198,6 +198,7 @@ def _build_pending(prs, config):
             'url': pr['url'],
             'branch': pr['headRefName'],
             'author': (pr.get('author') or {}).get('login', '?'),
+            'created_at': (pr.get('createdAt') or '')[:10],
             'approved': summary['approved'],
             'rejected': summary['rejected'],
             'rejected_final': len(summary['rejected']) >= n_req,
@@ -221,7 +222,7 @@ query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 50) {
       nodes {
-        number title url headRefName mergeable
+        number title url headRefName mergeable createdAt
         author { login }
         reviews(first: 100) {
           nodes { state body submittedAt author { login } }
@@ -238,6 +239,13 @@ query($owner: String!, $name: String!) {
             }
           } } } }
         }
+      }
+    }
+    merged: pullRequests(states: MERGED, first: 40,
+                         orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number title headRefName createdAt mergedAt
+        author { login }
       }
     }
     releases(first: 30, orderBy: {field: CREATED_AT, direction: DESC}) {
@@ -289,8 +297,9 @@ def _snapshot_via_graphql(config):
     prs = [_pr_from_graphql(n) for n in repo['pullRequests']['nodes']]
     releases = [_release_from_graphql(n) for n in repo['releases']['nodes']
                 if not n.get('isDraft')]
+    merged = _merged_from_prs((repo.get('merged') or {}).get('nodes') or [])
     return {'pending': _build_pending(prs, config),
-            'releases': releases, 'me': me}
+            'releases': releases, 'me': me, 'merged': merged}
 
 
 def _pr_from_graphql(node):
@@ -305,6 +314,7 @@ def _pr_from_graphql(node):
         'url': node.get('url') or '',
         'headRefName': node.get('headRefName') or '',
         'mergeable': node.get('mergeable') or '',
+        'createdAt': node.get('createdAt') or '',
         'author': node.get('author') or {},
         'reviews': (node.get('reviews') or {}).get('nodes') or [],
         'comments': (node.get('comments') or {}).get('nodes') or [],
@@ -326,6 +336,39 @@ def _release_from_graphql(node):
     }
 
 
+def _merged_from_prs(prs):
+    """PR dict (gh --json / GraphQL 変換済み) から済み提出の要約を作る.
+
+    過去の更新ログの図 (誰がいつ提出し、いつ正式版になったか) 用。
+    マネージャー経由の提出 (feature/ ブランチ) のみを対象とする。
+    """
+    out = []
+    for pr in prs:
+        if not _is_submission(pr):
+            continue
+        out.append({
+            'number': pr['number'],
+            'title': pr.get('title') or '',
+            'author': (pr.get('author') or {}).get('login', '?'),
+            'created_at': (pr.get('createdAt') or '')[:10],
+            'merged_at': (pr.get('mergedAt') or '')[:10],
+        })
+    return out
+
+
+def list_merged(config=None):
+    """取り込み済みの提出一覧 (過去の更新ログの図用・直近 40 件)."""
+    out = ghcli.run_gh([
+        'pr', 'list', '--repo', paths.repo_slug(config),
+        '--state', 'merged', '--limit', '40',
+        '--json', 'number,title,author,headRefName,createdAt,mergedAt'])
+    try:
+        prs = json.loads(out)
+    except ValueError:
+        raise ReviewError('取り込み済みの提出一覧を取得できませんでした。')
+    return _merged_from_prs(prs)
+
+
 def _snapshot_via_rest(config):
     """従来経路のフォールバック: pr list とリリース一覧を並列に取得."""
     results, errors = {}, []
@@ -338,10 +381,19 @@ def _snapshot_via_rest(config):
                 errors.append(e)
         return threading.Thread(target=run, daemon=True)
 
+    def merged_safe():
+        # 図のための補助情報。取れなくても一覧表示は成立するので
+        # 失敗はエラーにしない (図は「準備中」表示になる)
+        try:
+            return list_merged(config)
+        except (ReviewError, ghcli.GhError):
+            return []
+
     threads = [
         fetch('pending', lambda: (list_pending(config), current_user())),
         fetch('releases',
               lambda: ghcli.fetch_releases(paths.repo_slug(config))),
+        fetch('merged', merged_safe),
     ]
     for t in threads:
         t.start()
@@ -350,7 +402,8 @@ def _snapshot_via_rest(config):
     if errors:
         raise errors[0]
     pending, me = results['pending']
-    return {'pending': pending, 'releases': results['releases'], 'me': me}
+    return {'pending': pending, 'releases': results['releases'], 'me': me,
+            'merged': results.get('merged') or []}
 
 
 def _pr_detail(pr_number, config=None):
