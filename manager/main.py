@@ -746,36 +746,55 @@ def main(page: ft.Page):
     def on_approve(pr):
         def handler(_):
             def work():
+                released = False
                 try:
                     reviews.approve(pr['number'], config)
                     t5_status.value = '#%d を承認しました。' % pr['number']
                     page.update()
                     # 必要数に達していたら自動リリース (ロケット発射)
-                    _try_auto_release(pr['number'])
+                    released = _try_auto_release(pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
                     t5_status.value = str(e)
                 page.update()
-                on_refresh_reviews(None)
+                if not released:
+                    # 発射したときは ✨ のあとに _try_auto_release 側で
+                    # 一覧を更新する (演出前にカードが消えないように)
+                    on_refresh_reviews(None)
             run_bg(work)
         return handler
 
     def _try_auto_release(pr_number):
         """承認が必要数そろい条件が整っていれば、その場でリリースする.
 
-        検証NG・却下あり・衝突中・権限なしのときは何もしない
-        (従来どおりリリースボタンが出るのを待つ)。
+        検証NG・却下あり・衝突中・権限なしのときは何もしない。
+        発射演出を始めたら True を返す。カードの削除 (一覧更新) と
+        更新タブのバッジは ✨ が光ったあとに行う。
         """
         try:
             me = reviews.current_user()
             pending = reviews.list_pending(config)
         except (reviews.ReviewError, ghcli.GhError):
-            return
+            return False
         pr = next((p for p in pending if p['number'] == pr_number), None)
         if pr is None or pr.get('rejected_final'):
-            return
+            return False
         if not reviews.can_release(pr, config, me):
-            return
-        _play_launch()
+            return False
+        _hide_zone(pr_number)     # 常駐機は overlay の機体と入れ替える
+        state = {'anim': False, 'net': False, 'ok': False}
+
+        def _finish(key):
+            state[key] = True
+            if not (state['anim'] and state['net']):
+                return
+            if state['ok']:
+                # キラッのあと: 更新タブのバッジを立てて通知も更新
+                set_badge(update_badge, 1)
+                page.update()
+                check_update_notice(reschedule=False)
+            on_refresh_reviews(None)
+
+        _play_launch(done=lambda: _finish('anim'))
         try:
             result = reviews.release(pr['number'], config,
                                      on_progress=_t5_progress)
@@ -783,26 +802,34 @@ def main(page: ft.Page):
                                'しました。%s'
                                % (reviews.required_approvals(config),
                                   result['message']))
+            state['ok'] = True
         except (reviews.ReviewError, ghcli.GhError) as e:
             t5_status.value = str(e)
         page.update()
+        _finish('net')
+        return True
 
     # 発射・爆発の基点 = ボタン列末尾のロケット定位置 (1 枚目のカード。
     # ボタン列は左詰めなのでウィンドウ幅に依存しない)
     def _rocket_base():
-        return 460, 410
+        return 472, 410
 
-    def _play_launch():
+    def _hide_zone(pr_number):
+        zone = _rocket_zones.get(pr_number)
+        if zone is not None:
+            zone.visible = False
+
+    def _play_launch(done=None):
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
         弧を描いて「更新」タブへ → ✨ と弾けて消える."""
         sx, sy = _rocket_base()
-        rocketfx.play_launch(page, sx, sy)
+        rocketfx.play_launch(page, sx, sy, done=done)
 
-    def _play_crash():
+    def _play_crash(done=None):
         """却下確定演出 (rocketfx): ぐらつき → 転倒 → 爆発と同時に
         パーツ分解 → 破片が放物線で散乱."""
         sx, sy = _rocket_base()
-        rocketfx.play_crash(page, sx, sy)
+        rocketfx.play_crash(page, sx, sy, done=done)
 
     def on_cancel_review(pr):
         """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
@@ -853,11 +880,15 @@ def main(page: ft.Page):
                         t5_status.value = ('#%d を差し戻しました。'
                                            % pr['number'])
                         page.update()
-                        # 自分の却下で必要数に達したら「転倒→爆発」演出
+                        # 自分の却下で必要数に達したら「転倒→爆発」演出。
+                        # 非表示エリアへ畳むのは爆発が終わってから
                         if (len(pr['rejected']) + 1
                                 >= reviews.required_approvals(config)):
-                            _play_crash()
-                        on_refresh_reviews(None)
+                            _hide_zone(pr['number'])
+                            _play_crash(
+                                done=lambda: on_refresh_reviews(None))
+                        else:
+                            on_refresh_reviews(None)
                     except (reviews.ReviewError, ghcli.GhError) as e:
                         err.value = str(e)
                         page.update()
@@ -981,14 +1012,20 @@ def main(page: ft.Page):
 
     # 一覧描画後に一度だけ再生するロケット演出 (飾り。操作はできない)
     _rocket_anims = []
+    # 表示中の常駐ロケット (発射・爆発の演出中は隠して二重表示を防ぐ)
+    _rocket_zones = {}
     # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
     _auto_release_tried = set()
 
     def _rocket_zone(pr, n_req):
-        """カード右上の常駐ロケット。承認・却下の進み具合を演出で表す."""
+        """ボタン列末尾の常駐ロケット。承認・却下の進み具合を演出で表す.
+
+        却下確定 (一覧に戻した表示) にはもうロケットは出さない。却下が
+        期日内に取り消されれば状態が変わり、煙付きで再表示される。
+        """
         if pr.get('rejected_final'):
-            state = 'wreck'          # 却下確定: 散らばった残骸
-        elif pr['rejected']:
+            return ft.Container(width=0, height=0)
+        if pr['rejected']:
             state = 'smoking'        # 却下 1 つ: 煙
         elif len(pr['approved']) >= max(1, n_req - 1):
             state = 'ignited'        # 承認 1 つ: 点火
@@ -998,7 +1035,11 @@ def main(page: ft.Page):
         if anim is not None:
             # 開いたときに一度だけ再生 (page.update を渡す)
             _rocket_anims.append(lambda fn=anim: fn(page.update))
-        return control
+        # ボタンと少し間を空けて置く。演出中に隠せるよう登録しておく
+        wrapper = ft.Container(content=control,
+                               margin=ft.Margin.only(left=12))
+        _rocket_zones[pr['number']] = wrapper
+        return wrapper
 
     def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
@@ -1175,6 +1216,7 @@ def main(page: ft.Page):
             visible = [p for p in pending if p not in folded]
             set_badge(review_badge, len(visible))
             _rocket_anims.clear()
+            _rocket_zones.clear()
             t5_list.controls.clear()
             if not visible:
                 t5_list.controls.append(
@@ -1220,7 +1262,6 @@ def main(page: ft.Page):
                         and reviews.can_release(p, config, me)):
                     _auto_release_tried.add(p['number'])
                     _try_auto_release(p['number'])
-                    on_refresh_reviews(None)
                     break
         run_bg(work)
 

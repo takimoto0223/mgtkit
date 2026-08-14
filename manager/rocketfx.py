@@ -198,8 +198,8 @@ WRECK = (
     '</svg>'
 )
 
-# 機体スプライトの標準サイズ (常駐ロケットと同じ幅 16 に統一)
-_RW, _RH = 16, 43
+# 機体スプライトの標準サイズ (常駐ロケットと同じ幅 13 に統一)
+_RW, _RH = 13, 35
 
 
 def _sprite(svg, w, h, left=0.0, top=0.0, angle=0.0, opacity=1.0):
@@ -302,7 +302,7 @@ def play_launch(page, start_x, start_y, target_x=90, target_y=92,
     smoke = _Puffs(stage, SMOKE, 14, 10)
     embers = _Puffs(stage, EMBER, 6, 4)
     rocket = _sprite(ROCKET_FL_S, _RW, _RH,
-                     left=start_x - _RW / 2, top=start_y - 14)
+                     left=start_x - _RW / 2, top=start_y - 11)
     stage.add(rocket)
     spark = _sprite(SPARKLE, 10, 10, left=target_x - 5, top=target_y - 5,
                     opacity=0.0)
@@ -331,7 +331,7 @@ def play_launch(page, start_x, start_y, target_x=90, target_y=92,
             p = (t - 0.45) / 0.7
             _swap(rocket, ROCKET_FL_L)
             rocket.left = start_x - _RW / 2
-            rocket.top = start_y - 14 - 105 * p * p
+            rocket.top = start_y - 11 - 105 * p * p
             if t - state['last_smoke'] > 0.07:
                 state['last_smoke'] = t
                 side = 22 if int(t * 14) % 2 else -22
@@ -354,7 +354,7 @@ def play_launch(page, start_x, start_y, target_x=90, target_y=92,
             rocket.rotate = ft.Rotate(math.atan2(dx, -dy))
             _swap(rocket, ROCKET_FL_M)
             rocket.left = x - _RW / 2
-            rocket.top = y - 14
+            rocket.top = y - 11
             if t - state['last_trail'] > 0.09:
                 state['last_trail'] = t
                 smoke.spawn(x, y + 14, 0, 8, 0.7, 4, 9, 0.6)
@@ -381,22 +381,22 @@ def play_crash(page, start_x, start_y, done=None):
     stage = _Stage(page)
     smoke = _Puffs(stage, SMOKE, 12, 10)
     embers = _Puffs(stage, EMBER, 5, 4)
-    rocket = _sprite(ROCKET, _RW, 27, left=start_x - _RW / 2,
-                     top=start_y - 13)
+    rocket = _sprite(ROCKET, _RW, 22, left=start_x - _RW / 2,
+                     top=start_y - 11)
     stage.add(rocket)
-    burst = _sprite(BURST, 16, 16, opacity=0.0)
+    burst = _sprite(BURST, 13, 13, opacity=0.0)
     stage.add(burst)
-    ground = start_y + 21
+    ground = start_y + 17
 
     # 破片: (svg, 幅, 初速x, 初速y, 回転速度)
     spec = [
-        (P_NOSE, 10, -55, -170, -6.5),
-        (P_WINDOW, 9, 62, -195, 4.5),
-        (P_BODY_U, 10, -30, -120, -5.0),
-        (P_BODY_L, 10, 42, -100, 5.5),
-        (P_FIN_L, 8, -95, -70, -8.0),
-        (P_FIN_R, 8, 98, -75, 7.5),
-        (P_NOZZLE, 9, -18, -45, -4.0),
+        (P_NOSE, 8, -55, -170, -6.5),
+        (P_WINDOW, 7, 62, -195, 4.5),
+        (P_BODY_U, 8, -30, -120, -5.0),
+        (P_BODY_L, 8, 42, -100, 5.5),
+        (P_FIN_L, 7, -95, -70, -8.0),
+        (P_FIN_R, 7, 98, -75, 7.5),
+        (P_NOZZLE, 7, -18, -45, -4.0),
     ]
     parts = []
     for svg, w, vx, vy, rv in spec:
@@ -422,7 +422,7 @@ def play_crash(page, start_x, start_y, done=None):
             if p > 0.7:
                 over = 1.62 - 0.15 * math.sin((p - 0.7) / 0.3 * math.pi)
             rocket.rotate = ft.Rotate(min(1.47, over))
-            rocket.top = start_y - 13 + 10 * p
+            rocket.top = start_y - 11 + 8 * p
             if 0.68 < t < 0.78:
                 smoke.spawn(start_x - 14, start_y + 18, -20, -8,
                             0.7, 4, 9, 0.6)
@@ -435,7 +435,7 @@ def play_crash(page, start_x, start_y, done=None):
                     pt['s'].opacity = 1.0
                 burst.opacity = 1.0
             k = min(1.0, (t - 0.95) / 0.5)
-            size = 16 + 42 * k
+            size = 13 + 34 * k
             burst.left = start_x - size / 2
             burst.top = start_y - size / 2
             burst.width = burst.height = size
@@ -472,7 +472,7 @@ def play_crash(page, start_x, start_y, done=None):
 
 # ---- カード右の常駐ロケット (一覧内の小さな表示) ----
 
-_ZW, _ZH = 16, 43      # 常駐サイズ (機体 + 炎ぶんの余白)
+_ZW, _ZH = 13, 35      # 常駐サイズ (機体 + 炎ぶんの余白)
 
 
 def zone(state):
@@ -482,12 +482,12 @@ def zone(state):
            'smoking' (却下1つ=煙) / 'wreck' (却下確定=残骸)
     """
     if state == 'wreck':
-        return ft.Image(src=WRECK, width=32, height=14), None
+        return ft.Image(src=WRECK, width=28, height=12), None
     if state == 'smoking':
-        rocket = ft.Image(src=ROCKET, width=_ZW, height=27)
-        puffs = [ft.Container(content=ft.Image(src=SMOKE, width=10,
-                                               height=10),
-                              width=10, height=10, opacity=0.0,
+        rocket = ft.Image(src=ROCKET, width=_ZW, height=22)
+        puffs = [ft.Container(content=ft.Image(src=SMOKE, width=8,
+                                               height=8),
+                              width=8, height=8, opacity=0.0,
                               offset=ft.Offset(0, 0),
                               animate_opacity=ft.Animation(400),
                               animate_offset=ft.Animation(
@@ -504,8 +504,8 @@ def zone(state):
             for p in puffs:
                 p.opacity = 0.35
             page_update()
-        col = ft.Column([ft.Stack([rocket] + puffs, width=_ZW + 10,
-                                  height=29)],
+        col = ft.Column([ft.Stack([rocket] + puffs, width=_ZW + 8,
+                                  height=24)],
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         return col, drift
     if state == 'ignited':
@@ -519,5 +519,5 @@ def zone(state):
             img.src = ROCKET_FL_S
             page_update()
         return img, flicker
-    img = ft.Image(src=ROCKET, width=_ZW, height=27, opacity=0.5)
+    img = ft.Image(src=ROCKET, width=_ZW, height=22, opacity=0.5)
     return img, None
