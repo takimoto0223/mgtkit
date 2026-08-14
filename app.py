@@ -1157,10 +1157,20 @@ def api_check_cases():
         if mgt_path and os.path.isfile(mgt_path):
             wood = mgtopen_wood_materials(mgt_path, w_select=w_al_match)
             if wood:
+                from mgtkit.w_check import (w_glulam_species_missing,
+                                            w_glulam_species_options)
                 out['wood_materials'] = [
                     {'no': int(w['no']), 'name': str(w['name']),
-                     'w_index': int(w['w_index'])} for w in wood]
+                     'w_index': int(w['w_index']),
+                     'sp_missing': bool(
+                         w_glulam_species_missing(w['name'])),
+                     'sp_options': (
+                         w_glulam_species_options(w['name'])
+                         if w_glulam_species_missing(w['name']) else [])}
+                    for w in wood]
                 out['w_al_names'] = w_al_names()
+                from mgtkit.w_check import w_al_menu
+                out['w_al_menu'] = w_al_menu()
             # RC断面 (material type 3) の検出 → RC壁配筋設定表の表示用
             rc = _rc_sections_info(
                 mgt_path, limit_sec_no=float(p.get('limit_sec_no', 9000)))

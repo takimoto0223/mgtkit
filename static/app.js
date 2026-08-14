@@ -1074,12 +1074,21 @@ function renderWoodMaterials(j) {
     $('check_wood_box').innerHTML = '';
     return;
   }
+  const menu = j.w_al_menu || [];
   const names = j.w_al_names || [];
+  const SP_GROUPS = ['からまつ・べいまつ系', 'おうしゅうあかまつ系',
+                     'すぎ系'];
+  // 行番号 → 属する集成材項目の樹種群 (初期選択の判定用)
+  const idx2sp = {};
+  menu.forEach(g => g.items.forEach(it => {
+    if (it.sp) Object.entries(it.sp).forEach(([sp, v]) => idx2sp[v] = sp);
+  }));
   let h = '<div class="row"><b>木材料の許容応力度 (W_AL表の行選択)</b></div>' +
     '<table class="res"><thead><tr><th>材料番号</th><th>材料名 (mgt)</th>' +
-    '<th>木材種別 (W_AL)</th></tr></thead><tbody>';
+    '<th>木材種別 (W_AL)</th><th>集成材の樹種</th></tr></thead><tbody>';
   j.wood_materials.forEach((w, i) => {
     const auto = w.w_index > 0;
+    const curSp = idx2sp[w.w_index] || SP_GROUPS[0];
     h += '<tr><td>' + w.no + '</td><td class="name">' + esc(w.name) +
       '</td><td><select class="wsel" data-no="' + w.no + '" id="wsel' + i +
       '"' + (auto ? '' : ' style="border:2px solid #c00"') + '>';
@@ -1087,20 +1096,61 @@ function renderWoodMaterials(j) {
       h += '<option value="0" selected>-- 自動対応不可: 選択してください --' +
            '</option>';
     }
-    names.forEach((n, k) => {
-      h += '<option value="' + (k + 1) + '"' +
-        (w.w_index === k + 1 ? ' selected' : '') + '>' + (k + 1) + ': ' +
-        esc(n) + '</option>';
+    menu.forEach(g => {
+      h += '<optgroup label="' + esc(g.label) + '">';
+      g.items.forEach(it => {
+        if (it.sp) {
+          const v = it.sp[curSp] !== undefined
+            ? it.sp[curSp] : Object.values(it.sp)[0];
+          const isSel = Object.values(it.sp).includes(w.w_index);
+          h += '<option value="' + v + '" data-sp=\'' +
+            JSON.stringify(it.sp) + '\'' + (isSel ? ' selected' : '') +
+            '>' + esc(it.label) + '</option>';
+        } else {
+          h += '<option value="' + it.value + '"' +
+            (w.w_index === it.value ? ' selected' : '') + '>' +
+            esc(it.label) + '</option>';
+        }
+      });
+      h += '</optgroup>';
     });
-    h += '</select>' + (auto ? '<span class="hint">(材料名から自動対応)' +
-      '</span>' : '') + '</td></tr>';
+    h += '</select></td><td><select class="wspsel" data-idx="' + i + '">' +
+      SP_GROUPS.map(sp => '<option value="' + esc(sp) + '"' +
+        (sp === curSp ? ' selected' : '') + '>' + esc(sp) +
+        '</option>').join('') +
+      '</select></td></tr>';
   });
   h += '</tbody></table>' +
-    '<div class="hint">※ 材料名 (E***F***パターン・樹種名+等級・構造用合板)' +
-    'から一意に確定できた行は自動選択されています。赤枠の材料は' +
-    '自動対応できないため選択してください (未選択のまま検定すると' +
-    'その材料の部材でエラーになります)。</div>';
+    '<div class="hint">※ 材料名から自動対応できた行は選択済みです。' +
+    '赤枠の材料は選択してください (未選択のまま検定するとその材料の' +
+    '部材でエラーになります)。集成材は左で区分・等級を、右の' +
+    '「集成材の樹種」で樹種群 (せん断強度) を選びます。</div>';
   $('check_wood_box').innerHTML = h;
+  // 樹種セレクト変更 → 集成材項目の行番号を差し替え (選択は維持)
+  document.querySelectorAll('#check_wood_box select.wspsel').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const wsel = $('wsel' + sel.dataset.idx);
+      [...wsel.options].forEach(o => {
+        if (!o.dataset.sp) return;
+        const sp = JSON.parse(o.dataset.sp);
+        if (sp[sel.value] !== undefined) o.value = sp[sel.value];
+      });
+    });
+  });
+  // 行セレクト変更 → 集成材なら樹種セレクトを追従
+  document.querySelectorAll('#check_wood_box select.wsel').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const i = sel.id.replace('wsel', '');
+      const sp = document.querySelector(
+        '#check_wood_box select.wspsel[data-idx="' + i + '"]');
+      const opt = sel.selectedOptions[0];
+      if (!sp || !opt || !opt.dataset.sp) return;
+      const m = JSON.parse(opt.dataset.sp);
+      for (const [g, v] of Object.entries(m)) {
+        if (String(v) === String(sel.value)) { sp.value = g; break; }
+      }
+    });
+  });
 }
 
 function collectWoodMaterialMap() {
