@@ -787,58 +787,128 @@ def main(page: ft.Page):
             t5_status.value = str(e)
         page.update()
 
+    # 🚀 の絵文字は素の状態で右上 45° を向いているため -0.79rad で垂直になる
+    _UPRIGHT = -0.79
+
     def _play_launch():
-        """自動リリース演出: ロケットが画面を縦断して「更新」タブ方向へ."""
-        rocket = ft.Text('🚀', size=36, rotate=ft.Rotate(-0.8),
+        """自動リリース演出: 点火 → 機体が震える → 加速しながら離陸 →
+        機体を傾けて「更新」タブへ → ✨ と弾けて消える."""
+        rocket = ft.Text('🚀', size=34, rotate=ft.Rotate(_UPRIGHT),
+                         animate_rotation=ft.Animation(
+                             500, ft.AnimationCurve.EASE_IN_OUT))
+        fire = ft.Text('🔥', size=16, scale=0.5,
+                       animate_scale=ft.Animation(
+                           180, ft.AnimationCurve.EASE_OUT))
+        body = ft.Column([rocket, fire], spacing=0,
+                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                          offset=ft.Offset(0, 0),
                          animate_offset=ft.Animation(
-                             1500, ft.AnimationCurve.EASE_IN),
-                         animate_opacity=ft.Animation(400))
-        holder = ft.Container(padding=ft.Padding.only(left=560, top=520),
-                              content=rocket)
-        page.overlay.append(holder)
+                             60, ft.AnimationCurve.EASE_IN_OUT),
+                         animate_opacity=ft.Animation(250))
+        holder = ft.Container(padding=ft.Padding.only(left=600, top=430),
+                              content=body)
+        trail = ft.Text('💨', size=18, opacity=0.0, scale=0.6,
+                        animate_opacity=ft.Animation(700),
+                        animate_scale=ft.Animation(
+                            700, ft.AnimationCurve.EASE_OUT))
+        trail_holder = ft.Container(padding=ft.Padding.only(left=596,
+                                                            top=468),
+                                    content=trail)
+        spark = ft.Text('✨', size=34, opacity=0.0, scale=0.4,
+                        animate_opacity=ft.Animation(150),
+                        animate_scale=ft.Animation(
+                            320, ft.AnimationCurve.EASE_OUT_BACK))
+        spark_holder = ft.Container(padding=ft.Padding.only(left=82, top=60),
+                                    content=spark)
+        page.overlay.extend([trail_holder, holder, spark_holder])
         page.update()
 
         def fly():
             time.sleep(0.1)
-            rocket.offset = ft.Offset(-14, -14)   # 左上 (更新タブ) へ縦断
+            fire.scale = 1.9              # 点火: 炎がふくらみ
             page.update()
-            time.sleep(1.6)
-            rocket.opacity = 0.0
+            for dx in (0.05, -0.05, 0.06, -0.04, 0.0):   # 機体が震える
+                body.offset = ft.Offset(dx, 0)
+                page.update()
+                time.sleep(0.07)
+            # 離陸: 加速しながらまっすぐ上へ (発射地点に煙が残る)
+            body.animate_offset = ft.Animation(
+                700, ft.AnimationCurve.EASE_IN)
+            body.offset = ft.Offset(0, -4.5)
+            trail.opacity = 0.7
+            trail.scale = 1.7
             page.update()
-            time.sleep(0.4)
-            try:
-                page.overlay.remove(holder)
-            except ValueError:
-                pass
+            time.sleep(0.7)
+            trail.opacity = 0.0
+            # 機体を進行方向へ傾けて「更新」タブへ
+            body.animate_offset = ft.Animation(
+                750, ft.AnimationCurve.EASE_OUT)
+            rocket.rotate = ft.Rotate(_UPRIGHT - 0.75)
+            body.offset = ft.Offset(-9.6, -6.9)
+            page.update()
+            time.sleep(0.75)
+            body.opacity = 0.0            # 到達: ✨ がポンと弾ける
+            spark.opacity = 1.0
+            spark.scale = 1.5
+            page.update()
+            time.sleep(0.35)
+            spark.scale = 1.0
+            spark.opacity = 0.0
+            page.update()
+            time.sleep(0.3)
+            for h in (holder, spark_holder, trail_holder):
+                try:
+                    page.overlay.remove(h)
+                except ValueError:
+                    pass
             page.update()
         run_bg(fly)
 
     def _play_crash():
-        """却下確定演出: ロケットが倒れて爆発."""
-        rocket = ft.Text('🚀', size=36, rotate=ft.Rotate(-0.8),
+        """却下確定演出: ぐらついて倒れ、爆発して煙が残る."""
+        rocket = ft.Text('🚀', size=36, rotate=ft.Rotate(_UPRIGHT),
                          animate_rotation=ft.Animation(
-                             700, ft.AnimationCurve.BOUNCE_OUT),
+                             120, ft.AnimationCurve.EASE_IN_OUT),
                          animate_opacity=ft.Animation(400))
-        boom = ft.Text('💥', size=46, opacity=0.0,
-                       animate_opacity=ft.Animation(250))
+        boom = ft.Text('💥', size=46, opacity=0.0, scale=0.3,
+                       animate_opacity=ft.Animation(120),
+                       animate_scale=ft.Animation(
+                           320, ft.AnimationCurve.EASE_OUT_BACK))
+        smoke = ft.Text('💨', size=22, opacity=0.0,
+                        offset=ft.Offset(0, 0),
+                        animate_opacity=ft.Animation(350),
+                        animate_offset=ft.Animation(
+                            900, ft.AnimationCurve.EASE_OUT))
         holder = ft.Container(padding=ft.Padding.only(left=340, top=280),
-                              content=ft.Row([rocket, boom], spacing=2))
+                              content=ft.Row([rocket, boom, smoke],
+                                             spacing=2))
         page.overlay.append(holder)
         page.update()
 
         def run():
             time.sleep(0.1)
-            rocket.rotate = ft.Rotate(1.9)        # 倒れる
+            for rot in (0.12, -0.15, 0.2):              # ぐらつく
+                rocket.rotate = ft.Rotate(_UPRIGHT + rot)
+                page.update()
+                time.sleep(0.13)
+            rocket.animate_rotation = ft.Animation(
+                650, ft.AnimationCurve.BOUNCE_OUT)
+            rocket.rotate = ft.Rotate(_UPRIGHT + 1.6)   # 横倒しに
             page.update()
-            time.sleep(0.9)
-            boom.opacity = 1.0
+            time.sleep(0.65)
+            boom.opacity = 1.0                # 💥 がはじける
+            boom.scale = 1.25
             page.update()
-            time.sleep(0.9)
+            time.sleep(0.55)
             boom.opacity = 0.0
             rocket.opacity = 0.25
+            smoke.opacity = 0.8               # 煙がのぼって残る
+            smoke.offset = ft.Offset(0.2, -0.7)
             page.update()
-            time.sleep(0.5)
+            time.sleep(0.9)
+            smoke.opacity = 0.0
+            page.update()
+            time.sleep(0.4)
             try:
                 page.overlay.remove(holder)
             except ValueError:
@@ -1039,17 +1109,18 @@ def main(page: ft.Page):
     _rocket_anims = []
 
     def _rocket_zone(pr, n_req):
-        """カード右上のロケット。承認・却下の進み具合を演出で表す."""
+        """カード右上のロケット (垂直)。承認・却下の進み具合を演出で表す."""
         if pr.get('rejected_final'):
             # 却下確定: 倒れたロケット + 爆発跡
             return ft.Row([ft.Text('💥', size=18, opacity=0.8),
                            ft.Text('🚀', size=20, opacity=0.6,
-                                   rotate=ft.Rotate(1.9))], spacing=0)
-        items = [ft.Text('🚀', size=22,
-                         opacity=1.0 if pr['approved'] else 0.45)]
+                                   rotate=ft.Rotate(_UPRIGHT + 1.6))],
+                          spacing=0)
+        rocket = ft.Text('🚀', size=20, rotate=ft.Rotate(_UPRIGHT),
+                         opacity=1.0 if pr['approved'] else 0.45)
         if pr['rejected']:
             # 却下 1 つ: 煙が立ちのぼる (開いたときに一度だけ)
-            smoke = ft.Text('💨', size=16, opacity=0.0,
+            smoke = ft.Text('💨', size=14, opacity=0.0,
                             offset=ft.Offset(0, 0),
                             animate_opacity=ft.Animation(500),
                             animate_offset=ft.Animation(
@@ -1057,26 +1128,36 @@ def main(page: ft.Page):
 
             def puff(s=smoke):
                 s.opacity = 0.9
-                s.offset = ft.Offset(0.3, -0.9)
+                s.offset = ft.Offset(0.4, -0.5)
                 page.update()
                 time.sleep(1.2)
                 s.opacity = 0.45
                 page.update()
             _rocket_anims.append(puff)
-            items.append(smoke)
-        elif len(pr['approved']) >= max(1, n_req - 1):
-            # 承認 1 つ: 点火 (まだ発射しない。開いたときに一度だけ)
-            fire = ft.Text('🔥', size=16, opacity=0.0,
-                           animate_opacity=ft.Animation(300))
+            return ft.Column(
+                [smoke, rocket], spacing=0,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+        if len(pr['approved']) >= max(1, n_req - 1):
+            # 承認 1 つ: 真下に着火 (まだ発射しない。開いたときに一度だけ)
+            fire = ft.Text('🔥', size=13, opacity=0.0, scale=0.4,
+                           animate_opacity=ft.Animation(200),
+                           animate_scale=ft.Animation(
+                               200, ft.AnimationCurve.EASE_OUT))
 
             def ignite(f=fire):
-                for op in (1.0, 0.5, 1.0, 0.6, 1.0):
-                    f.opacity = op
+                f.opacity = 1.0
+                f.scale = 1.5               # ボッと着火
+                page.update()
+                time.sleep(0.3)
+                for sc in (0.9, 1.35, 1.0, 1.2, 1.05):   # 炎が揺らめく
+                    f.scale = sc
                     page.update()
-                    time.sleep(0.3)
+                    time.sleep(0.22)
             _rocket_anims.append(ignite)
-            items.append(fire)
-        return ft.Row(items, spacing=2)
+            return ft.Column(
+                [rocket, fire], spacing=0,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+        return ft.Column([rocket], spacing=0)
 
     def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
@@ -1243,6 +1324,13 @@ def main(page: ft.Page):
             # 「非表示」にした却下確定の提出は自分の画面から除く
             # (クローズ済みの記録は掃除する)
             localstate.prune_hidden([p['number'] for p in pending], config)
+            # 却下確定した提出は自動で一覧下の「非表示」へ畳む
+            # (「一覧に戻す」で戻せる。戻したあとは再び自動では畳まない)
+            auto_done = localstate.auto_folded(config)
+            for p in pending:
+                if p.get('rejected_final') and p['number'] not in auto_done:
+                    localstate.hide_pr(p['number'], config)
+                    localstate.mark_auto_folded(p['number'], config)
             hidden = localstate.hidden_prs(config)
             folded = [p for p in pending
                       if p.get('rejected_final') and p['number'] in hidden]
@@ -1263,7 +1351,7 @@ def main(page: ft.Page):
                     color='#9ca3af'))
                 for pr in folded:
                     t5_list.controls.append(ft.Row([
-                        ft.Text('#%d %s' % (pr['number'], pr['title']),
+                        ft.Text('💥 #%d %s' % (pr['number'], pr['title']),
                                 size=12, color='#9ca3af', expand=True),
                         ft.TextButton('一覧に戻す',
                                       on_click=on_unhide_pr(pr)),
