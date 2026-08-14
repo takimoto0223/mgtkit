@@ -21,7 +21,9 @@ class _FakePage:
         self.title = ''
         self.padding = None
         self.window = _FakeWindow()
+        self.services = []
         self.added = []
+        self.dialogs = []
 
     def add(self, *controls):
         self.added.extend(controls)
@@ -29,9 +31,19 @@ class _FakePage:
     def update(self):
         pass
 
+    def show_dialog(self, dialog):
+        self.dialogs.append(dialog)
 
-def test_main_builds_ui_without_errors():
+    def pop_dialog(self):
+        if self.dialogs:
+            self.dialogs.pop()
+
+
+def test_main_builds_ui_without_errors(monkeypatch):
     from manager import main as manager_main
+    # 起動時の自動最新化はテストでは動かさない (実リポジトリに触るため)
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
     page = _FakePage()
     manager_main.main(page)
     assert page.title == 'mgtkit アプリマネージャー'

@@ -13,6 +13,9 @@ env/
 mgtkit_out/
 *.log
 
+# 起動時に直接変更を退避するフォルダ (manager/selfupdate.py)
+stash/
+
 # 入力データ (業務ファイルは共有しない)
 *.mgt
 *.xlsx
@@ -36,6 +39,11 @@ dist/
 # ローカル設定・秘密情報
 .env
 *.db
+
+# Claude Code をローカルで使うときの個人ファイル
+CLAUDE.local.md
+.claude/settings.local.json
+*.bak-*
 
 # テスト用フィクスチャは業務ファイル除外の例外として追跡する
 !tests/fixtures/**

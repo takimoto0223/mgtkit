@@ -145,3 +145,72 @@ def test_manager_main_compiles():
     src_path = os.path.join(os.path.dirname(updater.__file__), 'main.py')
     with io.open(src_path, encoding='utf-8') as f:
         compile(f.read(), src_path, 'exec')
+
+
+class TestJoinRequest:
+    def test_has_push_access(self, monkeypatch):
+        monkeypatch.setattr(ghcli, 'run_gh',
+                            lambda args, timeout=60: 'true\n')
+        assert ghcli.has_push_access('o/r') is True
+        monkeypatch.setattr(ghcli, 'run_gh',
+                            lambda args, timeout=60: 'false\n')
+        assert ghcli.has_push_access('o/r') is False
+
+    def test_find_my_join_request(self, monkeypatch):
+        monkeypatch.setattr(
+            ghcli, 'run_gh',
+            lambda args, timeout=60: json.dumps([
+                {'number': 3, 'title': '別の質問', 'state': 'OPEN'},
+                {'number': 5, 'title': '参加申請: 山田太郎 (@yamada)',
+                 'state': 'OPEN'},
+            ]))
+        found = ghcli.find_my_join_request('o/r')
+        assert found['number'] == 5
+
+    def test_find_my_join_request_none(self, monkeypatch):
+        monkeypatch.setattr(ghcli, 'run_gh', lambda args, timeout=60: '[]')
+        assert ghcli.find_my_join_request('o/r') is None
+
+    def test_create_join_request(self, monkeypatch):
+        calls = []
+
+        def fake_run_gh(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'user']:
+                return 'yamada\n'
+            return ''
+
+        monkeypatch.setattr(ghcli, 'run_gh', fake_run_gh)
+        ghcli.create_join_request('o/r', '山田太郎')
+        create = calls[-1]
+        assert create[:4] == ['issue', 'create', '--repo', 'o/r']
+        title = create[create.index('--title') + 1]
+        assert title == '参加申請: 山田太郎 (@yamada)'
+        body = create[create.index('--body') + 1]
+        assert '@yamada' in body and '承認' in body
+        # オーナーへの @メンション (Watch 設定によらず通知を届ける)
+        assert '@o さんへ' in body
+
+
+class TestCollaboratorInvitation:
+    def test_accept_matching_invitation(self, monkeypatch):
+        calls = []
+
+        def fake_run_gh(args, timeout=60):
+            calls.append(args)
+            if args == ['api', '/user/repository_invitations']:
+                return json.dumps([
+                    {'id': 5, 'repository': {'full_name': 'other/repo'}},
+                    {'id': 7, 'repository': {'full_name': 'O/R'}},
+                ])
+            return ''
+
+        monkeypatch.setattr(ghcli, 'run_gh', fake_run_gh)
+        assert ghcli.accept_repo_invitation('o/r') is True
+        assert calls[-1] == ['api', '-X', 'PATCH',
+                             '/user/repository_invitations/7']
+
+    def test_no_invitation_is_noop(self, monkeypatch):
+        monkeypatch.setattr(ghcli, 'run_gh',
+                            lambda args, timeout=60: '[]')
+        assert ghcli.accept_repo_invitation('o/r') is False

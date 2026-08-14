@@ -3,8 +3,8 @@
   "repo": "takimoto0223/mgtkit",
   "base_branch": "main",
   "branch_protection": {
-    "_comment": "required_approvals はチーム人数に応じて 3 → 2 に変更可。scripts/setup_repo_protection.* が読み取る。",
-    "required_approvals": 3,
+    "_comment": "required_approvals はチーム人数に応じて変更可 (現行 2)。scripts/setup_repo_protection.* が読み取るため、変更後は同スクリプトを再実行して GitHub 側にも反映する。",
+    "required_approvals": 2,
     "required_status_checks": ["test"],
     "strict_status_checks": true,
     "enforce_admins": false
@@ -15,9 +15,20 @@
     "port_beta": 8766
   },
   "manager": {
-    "_comment": "Phase 3 以降で使用する予定値。",
+    "_comment": "提出時の安全チェック上限と、コミットメッセージ/PR本文の自動生成に使う Claude モデル。",
     "auto_fix_max_attempts": 3,
     "max_upload_mb": 50,
-    "max_upload_files": 500
+    "max_upload_files": 500,
+    "allowed_extensions": [".py", ".md", ".txt", ".json", ".html", ".css",
+                           ".js", ".yml", ".yaml", ".cfg", ".ini", ".csv",
+                           ".dxf", ".toml"],
+    "claude_model": "claude-opus-5",
+    "_api_pricing_comment": "API 利用料グラフの単価 ($/100万トークン)。claude_model を変えたら Anthropic の料金表に合わせて更新する。usd_jpy_rate は円換算の目安レート。",
+    "api_pricing": {"input_per_mtok": 5.0, "output_per_mtok": 25.0},
+    "usd_jpy_rate": 158,
+    "_rejected_cleanup_comment": "却下が必要数そろった提出を自動で片付けるまでの日数 (.github/workflows/reject-cleanup.yml とマネージャーの残り日数表示が参照)。",
+    "rejected_cleanup_days": 3,
+    "_admins_comment": "リリース操作を特定メンバーに限定する場合のみ名前を並べる。空 = 必要数の承認がそろえば誰でもリリース可。",
+    "admins": []
   }
 }
