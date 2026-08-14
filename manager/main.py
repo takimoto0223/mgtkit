@@ -167,6 +167,21 @@ def main(page: ft.Page):
         padding=ft.Padding.symmetric(vertical=6, horizontal=12),
         content=ft.Text('', size=13, weight=ft.FontWeight.BOLD,
                         color='#713f12'))
+    # リリース公開待ちの案内: バッジと同色の黄色タグ + 今すぐ確認ボタン
+    # (ロケットが起動タブに届いてから、更新の取り込み完了まで表示)
+    t1_preparing_text = ft.Text(
+        '新しい正式版を準備中です (数分かかります)。公開されると自動で'
+        '更新されます。', size=13, weight=ft.FontWeight.BOLD,
+        color='#713f12', expand=True)
+    t1_preparing_tag = ft.Container(
+        visible=False, bgcolor='#fef08a', border_radius=6,
+        padding=ft.Padding.symmetric(vertical=2, horizontal=12),
+        content=ft.Row([
+            t1_preparing_text,
+            ft.IconButton(ft.Icons.REFRESH, icon_size=18,
+                          icon_color='#713f12', tooltip='今すぐ確認',
+                          on_click=lambda e: on_check_now(e)),
+        ], spacing=4))
     # 現行版の更新内容 (常設。何が入っている版かを後から確認できる)
     t1_notes_head = ft.Text('', size=13, weight=ft.FontWeight.BOLD,
                             color='#374151')
@@ -239,11 +254,17 @@ def main(page: ft.Page):
         page.update()
 
     def _show_updated(release):
-        """自動更新の完了を黄色いタグで知らせ、更新内容の常設欄も更新する."""
+        """自動更新の完了を黄色いタグで知らせ、更新内容の常設欄も更新する.
+
+        公開待ちの案内 (準備中タグ・起動タブのバッジ) はここで役目を
+        終えるため消す。
+        """
         t1_update_tag.content.value = ('アプリを %s に更新しました。'
                                        'このまま「起動」してお使い'
                                        'いただけます。' % release['tag'])
         t1_update_tag.visible = True
+        t1_preparing_tag.visible = False
+        set_badge(launch_badge, 0)
         t1_notice.value = ''
         _refresh_current_notes()
         page.update()
@@ -259,6 +280,8 @@ def main(page: ft.Page):
             return False
         if launcher.port_in_use(paths.stable_port(config)):
             _update_state['pending'] = latest
+            t1_preparing_tag.visible = False  # 公開待ちは終わった
+            set_badge(launch_badge, 1)        # 取り込みが済むまでは残す
             t1_notice.value = ('新しい版 %s があります。いまはアプリを使用中'
                                'のため更新していません。アプリを閉じてから'
                                '「起動」を押すと更新されます。'
@@ -282,6 +305,7 @@ def main(page: ft.Page):
             ok = True
         except Exception:
             log.exception('自動更新に失敗しました')
+            t1_preparing_tag.visible = False
             t1_notice.value = ('自動更新に失敗しました。ネットワーク接続を'
                                '確認してください (次回の起動時にもう一度'
                                '試します)。')
@@ -380,6 +404,12 @@ def main(page: ft.Page):
         _launch(update_first=True)
 
     t1_launch_btn.on_click = on_launch_stable
+
+    def on_check_now(_):
+        """公開待ちタグの「今すぐ確認」。時刻スタンプで動きを見せる."""
+        t1_fresh.value = '新しい版がないか確認しています...'
+        page.update()
+        check_update_notice(reschedule=False)
 
     def _download_history_zip(rel, dlg_status):
         """過去の正式版の ZIP をダウンロードフォルダへ保存する."""
@@ -503,6 +533,7 @@ def main(page: ft.Page):
         t1_fresh,
         t1_status,
         t1_update_tag,
+        t1_preparing_tag,
         t1_notice,
         join_notice,
         t1_notes_box,
@@ -1686,6 +1717,7 @@ def main(page: ft.Page):
 
     # ---------------- 組み立て ----------------
 
+    launch_label, launch_badge = tab_label('起動')
     review_label, review_badge = tab_label('β版の確認と承認')
 
     def on_tab_change(e):
@@ -1704,7 +1736,7 @@ def main(page: ft.Page):
             on_change=on_tab_change,
             content=ft.Column([
                 ft.TabBar(tabs=[
-                    ft.Tab(label='起動'),
+                    ft.Tab(label=launch_label),
                     ft.Tab(label='更新版を提出'),
                     ft.Tab(label=review_label),
                 ]),
@@ -1729,8 +1761,12 @@ def main(page: ft.Page):
         最初の 1 分は 10 秒間隔・以降 30 秒間隔で最大 10 分見張る。
         """
         _pending_release['until'] = time.time() + 10 * 60
-        t1_notice.value = ('新しい正式版を準備中です (数分かかります)。'
-                           '公開されると自動で更新されます。')
+        # 起動タブへバッジ + 同色の黄色タグで「準備中」を知らせる
+        # (どちらも更新の取り込みが完了するまで表示し続ける)
+        t1_preparing_text.value = ('新しい正式版を準備中です (数分かかり'
+                                   'ます)。公開されると自動で更新されます。')
+        t1_preparing_tag.visible = True
+        set_badge(launch_badge, 1)
         page.update()
 
         def work():
@@ -1747,10 +1783,11 @@ def main(page: ft.Page):
                     _auto_update(result['latest'])
                     return
             # 期限切れ: 黙って消さず、その後の動きを案内する
+            # (定期チェックが続くため、公開されれば自動で取り込まれる)
             _pending_release['until'] = 0.0
             msg = ('リリースの公開確認ができませんでした。公開されると'
                    '自動で取り込んでお知らせします。')
-            t1_notice.value = msg
+            t1_preparing_text.value = msg
             t5_status.value = msg
             page.update()
         run_bg(work)
@@ -1801,6 +1838,9 @@ def main(page: ft.Page):
                     t1_notice.value = ''
                 t1_fresh.value = '最新の状態です (%s 確認)' % now_hm
                 refresh_local_version(latest=True)
+            else:
+                # 公開待ちの間も「いつ確認したか」を残す (手動確認の応答)
+                t1_fresh.value = '更新の確認: %s (公開待ち)' % now_hm
             page.update()
         run_bg(work)
         if reschedule:

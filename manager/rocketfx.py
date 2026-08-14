@@ -293,7 +293,7 @@ class _Puffs:
             s.opacity = it['op'] * (1.0 - k)
 
 
-def play_launch(page, start_x, start_y, target_x=45, target_y=92,
+def play_launch(page, start_x, start_y, target_x=30, target_y=92,
                 done=None):
     """発射: 点火 → 震え → 加速上昇 → 弧を描いて「起動」タブへ → ✨.
 
