@@ -16,10 +16,10 @@ import flet as ft
 
 import webbrowser
 
-from . import (autofix, conflicts, diffview, feedback, ghcli, history,
-               historyview, launcher, localstate, paths, reviewcache,
-               reviews, rocketfx, selfupdate, settings, submit, updater,
-               usage)
+from . import (autofix, conflicts, diffdialog, diffview, feedback, ghcli,
+               history, historyview, launcher, localstate, paths,
+               reviewcache, reviews, rocketfx, selfupdate, settings,
+               submit, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -646,10 +646,10 @@ def main(page: ft.Page):
                        for line in (text or '').splitlines() or [''])
 
         def open_pending_diff(e):
-            """「詳細」→ β版の差分ページ (承認タブの「差分」と同じ)."""
+            """「詳細」→ β版の差分をアプリ内ダイアログで開く."""
             btn = e.control
             btn.disabled = True
-            st.value = '差分ビューワを準備しています...'
+            st.value = '差分を準備しています...'
             page.update()
 
             def work():
@@ -666,12 +666,11 @@ def main(page: ft.Page):
                         return
                     betas = ghcli.prereleases(data.get('releases') or [])
                     beta = _beta_for(pr['number'], betas)
-                    path = diffview.write_diff_html(
-                        pr, config,
-                        beta_tag=beta['tag'] if beta else None)
-                    webbrowser.open('file:///'
-                                    + path.replace(os.sep, '/'), new=1)
-                    st.value = '差分をブラウザで開きました。'
+                    # 「戻る」で閉じると背後のこの詳細画面に戻る
+                    _open_diff_dialog(pr,
+                                      beta['tag'] if beta else None,
+                                      close_label='戻る')
+                    st.value = ''
                 except Exception as e2:
                     log.exception('diff viewer failed')
                     st.value = '差分を開けませんでした: %s' % e2
@@ -1757,23 +1756,61 @@ def main(page: ft.Page):
                 ]))
         return handler
 
-    def on_show_diff(pr, beta=None):
-        """「差分」クリックで差分ビューワ (HTML) を既定ブラウザで開く."""
-        def handler(_):
-            # 押した瞬間に反応 (二度押しで二重に生成・表示しないように)
-            restore = _freeze_card(pr['number'])
-            _t5_progress('差分ビューワを準備しています...')
+    def _dialog_size():
+        """ダイアログの内容サイズ (ウィンドウの約 8 割ルール)."""
+        if getattr(page, 'web', False):
+            win_w = int(page.width or 760)
+            win_h = int(page.height or 640)
+        else:
+            win_w = int(getattr(page.window, 'width', None) or page.width
+                        or 760)
+            win_h = int(getattr(page.window, 'height', None) or page.height
+                        or 640)
+        return (max(600, int(win_w * 0.8) - 48),
+                min(win_h - 170, int(win_h * 0.8) - 120))
+
+    def _open_diff_dialog(pr, beta_tag, close_label='閉じる'):
+        """差分をアプリ内ダイアログで開く (バックグラウンド用).
+
+        モデルの取得 (git fetch 等) は呼び出し側の bg スレッドで走る。
+        表示後の「ブラウザで開く」は同じモデルから HTML を書き出すだけ
+        (取得のやり直しなし)。
+        """
+        model, workrepo = diffview.build_model(pr, config,
+                                               beta_tag=beta_tag)
+
+        def open_browser(status):
+            status.value = 'ブラウザで開いています...'
+            page.update()
 
             def work():
                 try:
-                    path = diffview.write_diff_html(
-                        pr, config,
-                        beta_tag=beta['tag'] if beta else None)
-                    # new=1: 可能なら新しいウィンドウで開く (ブラウザ依存)
-                    webbrowser.open('file:///' + path.replace(os.sep, '/'),
-                                    new=1)
-                    t5_status.value = ('#%d の差分をブラウザで開きました。'
-                                       % pr['number'])
+                    path = diffview.write_html_from_model(model, workrepo)
+                    webbrowser.open('file:///'
+                                    + path.replace(os.sep, '/'), new=1)
+                    status.value = 'ブラウザで開きました。'
+                except Exception as e:
+                    log.exception('diff browser open failed')
+                    status.value = 'ブラウザで開けませんでした: %s' % e
+                page.update()
+            run_bg(work)
+
+        diffdialog.show(page, model, workrepo, _dialog_size(),
+                        close_label=close_label,
+                        on_open_browser=open_browser)
+
+    def on_show_diff(pr, beta=None):
+        """「差分」クリックで差分をアプリ内ダイアログで開く."""
+        def handler(_):
+            # 押した瞬間に反応 (二度押しで二重に生成・表示しないように)
+            restore = _freeze_card(pr['number'])
+            _t5_progress('差分を準備しています...')
+
+            def work():
+                try:
+                    _open_diff_dialog(pr,
+                                      beta['tag'] if beta else None)
+                    t5_status.value = ''
                 except Exception as e:
                     log.exception('diff viewer failed')
                     t5_status.value = '差分を開けませんでした: %s' % e
