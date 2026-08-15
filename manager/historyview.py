@@ -25,7 +25,7 @@ GRID = '#eef2f7'
 AXIS = '#475569'
 
 PX_PER_DAY = 42
-X0 = 70                 # 初回配布ノードの x
+X0 = 120                # 初回配布ノードの x (左端でラベルが切れない余白)
 AXIS_Y = 40
 RAIL_Y = 180
 CHIP_H = 30
@@ -301,15 +301,26 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         base_x = node_x.get(c['base_tag'])
         if base_x is None:
             continue
-        # 帯はどれも「名前 #番号 + 同じマージン」のコンパクトな箱に
-        # そろえ、合流 (きょう) 側に寄せる。期間は枝の線の長さが表す
+        # 帯はどれも「名前 #番号 + 同じマージン」のコンパクトな箱。
+        # 期間は枝の線の長さが表す
         min_w = _est_w('%s #%s' % (c['author'], c['number'])) + 24
         if c['pending']:
+            # 確認中はきょう線側に寄せる (点線がきょうまで続く文法)
             chip_right = today_x - TODAY_GAP
+            chip_left = max(chip_right - min_w, base_x + 30)
+            chip_right = max(chip_right, chip_left + 12)
         else:
-            chip_right = node_x[c['target_tag']] - MERGE_SPAN
-        chip_left = max(chip_right - min_w, base_x + 30)
-        chip_right = max(chip_right, chip_left + 12)
+            # 取り込み済みは基点ノードと合流ノードの中央に置き、
+            # 両側の水平部分が同じ長さ (変動幅) になるようにする
+            span_l = base_x + 55            # S カーブ + 矢先の分
+            span_r = node_x[c['target_tag']] - 44   # 合流カーブの分
+            if span_r - span_l >= min_w:
+                h = (span_r - span_l - min_w) / 2
+                chip_left = span_l + h
+                chip_right = chip_left + min_w
+            else:
+                chip_left = span_l
+                chip_right = max(span_r, chip_left + 12)
         shapes += _derivation(base_x, chip_left - 9, c['lane'], color)
         if not c['pending']:
             big = c['target_tag'] == current_tag
@@ -352,13 +363,20 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
             label = s['tag'] + (' 初回配布' if s is stables[0] and
                                 not s['pr'] else '')
             ly = RAIL_Y - 31
-            if s['tag'] in upper_bases:
+            lw = _est_w(label, 12.5)
+            # 上へ枝が出るノードはラベルを左へ逃がす。ただし図の左端で
+            # 切れるとき (初回配布など) は右側に置く。中央配置も左端で
+            # 切れるなら右側へ (どの端でも切れない・被らないように)
+            if s['tag'] in upper_bases and x - 8 - lw >= 4:
                 shapes.append(_text(x - 8, ly, label, 12.5, NAVY,
                                     weight=ft.FontWeight.BOLD, end=True))
-            else:
+            elif s['tag'] not in upper_bases and x - lw / 2 >= 4:
                 shapes.append(_text(x, ly, label, 12.5, NAVY,
                                     weight=ft.FontWeight.BOLD,
                                     center=True))
+            else:
+                shapes.append(_text(x + 12, ly, label, 12.5, NAVY,
+                                    weight=ft.FontWeight.BOLD))
             overlays.append(([x - 26, ly, 52, 45], 'stable', s))
 
     chip_by_target = {c['target_tag']: c for c in chips
@@ -379,8 +397,9 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     max_offset = max(0, width - viewport_w)
 
     def set_nav(btn, disabled):
-        # 端に達したらグレーアウト (disabled だけでは色が変わらない)
+        # それ以上動けない端では移動マーク自体を消す (管理者指示)
         btn.disabled = disabled
+        btn.visible = not disabled
         btn.icon_color = '#cbd5e1' if disabled else '#475569'
 
     set_nav(left_btn, initial_offset <= 1)
