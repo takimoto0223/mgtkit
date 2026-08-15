@@ -127,14 +127,25 @@ def build_timeline(releases, merged, pending, today=None):
                       'title': p.get('title') or '',
                       'start': start, 'end': None,
                       'created_full': _when(p, 'created_at'),
+                      'fork_sha': p.get('fork_sha') or '',
                       'base_tag': None, 'target_tag': None,
                       'pending': True, 'lane': -1})
 
-    # 基点: 提出日時以前で最も新しい正式版 (自分の公開版と同じなら
-    # 1 つ前)。時刻まで比較する: 公開と同じ日に作られた提出が、
-    # 公開より前に作られたのに新しい版ベース扱いになるのを防ぐ
+    # 基点 (どの版から作られたか):
+    # 1) 分岐点コミット (fork_sha) がリリースタグの commit と一致すれば
+    #    それが事実 (公開後に古い版から提出されるのは普通にあるため、
+    #    日時からの推定では取り違える)
+    # 2) 分からなければ「提出日時以前で最も新しい正式版」で推定
+    #    (時刻まで比較。自分の公開版と同じなら 1 つ前)
     dates = {s['tag']: s['date'] for s in stables}
+    sha_to_tag = {s['release'].get('tag_sha'): s['tag'] for s in stables
+                  if s['release'].get('tag_sha')}
     for c in chips:
+        fork = c.get('fork_sha')
+        if fork and fork in sha_to_tag \
+                and sha_to_tag[fork] != c['target_tag']:
+            c['base_tag'] = sha_to_tag[fork]
+            continue
         base = None
         created = c.get('created_full') or c['start'].isoformat()
         for s in stables:

@@ -264,6 +264,7 @@ _GRAPHQL_SNAPSHOT = {
             'pullRequests': {'nodes': [
                 {'number': 33, 'title': '組立断面', 'url': 'u',
                  'headRefName': 'feature/fujitaka-20260808-1',
+                 'headRefOid': 'headsha33',
                  'mergeable': 'MERGEABLE',
                  'author': {'login': 'fujitaka'},
                  'reviews': {'nodes': [
@@ -304,6 +305,7 @@ _GRAPHQL_SNAPSHOT = {
                  'isPrerelease': True, 'isDraft': False,
                  'description': '提出 #33 の検証通過版です。',
                  'publishedAt': '2026-08-05T00:00:00Z',
+                 'tagCommit': {'oid': 'tagsha-beta1'},
                  'releaseAssets': {'nodes': [
                      {'name': 'mgtkit.zip', 'downloadUrl': 'http://x/z'}]}},
                 {'tagName': 'v1.0', 'name': 'v1.0', 'isPrerelease': False,
@@ -328,18 +330,21 @@ class TestFetchSnapshot:
                 return _json.dumps(_GRAPHQL_SNAPSHOT)
             if args[0] == 'api' and 'collaborators' in args[1]:
                 return '["yamada", "fujitaka"]'
+            if args[0] == 'api' and 'compare' in args[1]:
+                return 'forksha-33\n'
             raise AssertionError('unexpected gh call: %r' % args)
 
         monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
         snap = reviews.fetch_snapshot({'repo': 'o/r'})
-        # gh は GraphQL 1 回 + collaborators 1 回のみ
+        # gh は GraphQL 1 回 + collaborators 1 回 + 分岐点 (提出ごと) のみ
         assert [c[:2] for c in calls] == [
             ['api', 'graphql'],
-            ['api', 'repos/o/r/collaborators?per_page=100']]
+            ['api', 'repos/o/r/collaborators?per_page=100'],
+            ['api', 'repos/o/r/compare/main...headsha33?per_page=1']]
         assert snap['me'] == 'yamada'
         # ログイン名はこの 1 回でキャッシュされ、追加の gh 呼び出しなし
         assert reviews.current_user() == 'yamada'
-        assert len(calls) == 2
+        assert len(calls) == 3
         # 承認待ち一覧は list_pending と同じ形 (feature/ のみ)
         pr = snap['pending'][0]
         assert [p['number'] for p in snap['pending']] == [33]
@@ -356,6 +361,7 @@ class TestFetchSnapshot:
              'prerelease': True, 'notes': '提出 #33 の検証通過版です。',
              'published_at': '2026-08-05',
              'published_at_full': '2026-08-05T00:00:00Z',
+             'tag_sha': 'tagsha-beta1',
              'assets': [{'name': 'mgtkit.zip', 'url': 'http://x/z'}]}]
         # 済み提出は feature/ ブランチのみ・図に必要な要約だけ
         assert snap['merged'] == [
@@ -366,6 +372,8 @@ class TestFetchSnapshot:
              'merged_at_full': '2026-08-04T10:00:00Z'}]
         # 承認待ちにも提出日が入る (図の帯の左端に使う)
         assert 'created_at' in pr
+        # 分岐点コミットが付く (履歴図の基点の事実)
+        assert pr['fork_sha'] == 'forksha-33'
 
     def test_falls_back_to_rest_on_graphql_error(self, monkeypatch):
         import json as _json
