@@ -16,10 +16,10 @@ import flet as ft
 
 import webbrowser
 
-from . import (autofix, conflicts, diffview, diffwindow, feedback, ghcli,
-               history, historyview, launcher, localstate, paths,
-               reviewcache, reviews, rocketfx, selfupdate, settings,
-               submit, updater, usage)
+from . import (autofix, conflicts, diffview, feedback, ghcli, history,
+               historyview, launcher, localstate, paths, reviewcache,
+               reviews, rocketfx, selfupdate, settings, submit, updater,
+               usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -673,7 +673,9 @@ def main(page: ft.Page):
                     path = diffview.write_diff_html(
                         pr, config,
                         beta_tag=beta['tag'] if beta else None)
-                    st.value = _open_diff_page(path, pr['number'])
+                    webbrowser.open('file:///'
+                                    + path.replace(os.sep, '/'), new=1)
+                    st.value = '差分をブラウザで開きました。'
                 except Exception as e2:
                     log.exception('diff viewer failed')
                     st.value = '差分を開けませんでした: %s' % e2
@@ -1759,25 +1761,8 @@ def main(page: ft.Page):
                 ]))
         return handler
 
-    def _open_diff_page(path, number):
-        """差分 HTML をアプリ専用ウィンドウで開く (バックグラウンド用).
-
-        pywebview (Edge WebView2) のウィンドウを試し、開けない環境
-        (未導入・ランタイム不在) では従来どおりブラウザで開く。
-        HTML はどちらでも同一。戻り値: 状態行に出す文言。
-        """
-        proc = diffwindow.open_diff_window(path,
-                                           'β版の差分 #%d' % number)
-        if proc is not None:
-            time.sleep(2.0)
-            if proc.poll() is None:
-                return '#%d の差分をウィンドウで開きました。' % number
-            log.warning('差分ウィンドウを開けないためブラウザで開きます')
-        webbrowser.open('file:///' + path.replace(os.sep, '/'), new=1)
-        return '#%d の差分をブラウザで開きました。' % number
-
     def on_show_diff(pr, beta=None):
-        """「差分」クリックで差分ビューワ (HTML) を開く."""
+        """「差分」クリックで差分ビューワ (HTML) を既定ブラウザで開く."""
         def handler(_):
             # 押した瞬間に反応 (二度押しで二重に生成・表示しないように)
             restore = _freeze_card(pr['number'])
@@ -1788,7 +1773,11 @@ def main(page: ft.Page):
                     path = diffview.write_diff_html(
                         pr, config,
                         beta_tag=beta['tag'] if beta else None)
-                    t5_status.value = _open_diff_page(path, pr['number'])
+                    # new=1: 可能なら新しいウィンドウで開く (ブラウザ依存)
+                    webbrowser.open('file:///' + path.replace(os.sep, '/'),
+                                    new=1)
+                    t5_status.value = ('#%d の差分をブラウザで開きました。'
+                                       % pr['number'])
                 except Exception as e:
                     log.exception('diff viewer failed')
                     t5_status.value = '差分を開けませんでした: %s' % e
