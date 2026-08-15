@@ -199,6 +199,7 @@ def _build_pending(prs, config):
             'branch': pr['headRefName'],
             'author': (pr.get('author') or {}).get('login', '?'),
             'created_at': (pr.get('createdAt') or '')[:10],
+            'created_at_full': pr.get('createdAt') or '',
             'approved': summary['approved'],
             'rejected': summary['rejected'],
             'rejected_final': len(summary['rejected']) >= n_req,
@@ -331,6 +332,7 @@ def _release_from_graphql(node):
         'prerelease': bool(node.get('isPrerelease')),
         'notes': node.get('description') or '',
         'published_at': (node.get('publishedAt') or '')[:10],
+        'published_at_full': node.get('publishedAt') or '',
         'assets': [{'name': a.get('name'), 'url': a.get('downloadUrl')}
                    for a in assets],
     }
@@ -351,7 +353,9 @@ def _merged_from_prs(prs):
             'title': pr.get('title') or '',
             'author': (pr.get('author') or {}).get('login', '?'),
             'created_at': (pr.get('createdAt') or '')[:10],
+            'created_at_full': pr.get('createdAt') or '',
             'merged_at': (pr.get('mergedAt') or '')[:10],
+            'merged_at_full': pr.get('mergedAt') or '',
         })
     return out
 

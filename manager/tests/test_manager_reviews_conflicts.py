@@ -355,12 +355,15 @@ class TestFetchSnapshot:
             {'tag': 'v1.1-beta.1', 'name': 'v1.1-beta.1',
              'prerelease': True, 'notes': '提出 #33 の検証通過版です。',
              'published_at': '2026-08-05',
+             'published_at_full': '2026-08-05T00:00:00Z',
              'assets': [{'name': 'mgtkit.zip', 'url': 'http://x/z'}]}]
         # 済み提出は feature/ ブランチのみ・図に必要な要約だけ
         assert snap['merged'] == [
             {'number': 29, 'title': '合成梁の検討を追加',
              'author': 'yamada', 'created_at': '2026-08-01',
-             'merged_at': '2026-08-04'}]
+             'created_at_full': '2026-08-01T09:00:00Z',
+             'merged_at': '2026-08-04',
+             'merged_at_full': '2026-08-04T10:00:00Z'}]
         # 承認待ちにも提出日が入る (図の帯の左端に使う)
         assert 'created_at' in pr
 

@@ -65,6 +65,24 @@ class TestBuildTimeline:
         assert by_num[38]['end'] is None and by_num[38]['target_tag'] is None
         assert by_num[40]['base_tag'] == 'v1.6'
 
+    def test_same_day_timestamps_pick_older_base(self):
+        # v1.1 の公開 (09:00) と同じ日でも、それより前 (08:00) に
+        # 作られた提出のベースは v1.0 (実データでの取り違えの再現)
+        rel = [dict(_rel('v1.1', '2026-08-14'),
+                    published_at_full='2026-08-14T09:00:00Z'),
+               dict(_rel('v1.0', '2026-08-06'),
+                    published_at_full='2026-08-06T09:00:00Z')]
+        pend = [{'number': 83, 'title': 'x', 'author': 'tomiri',
+                 'created_at': '2026-08-14',
+                 'created_at_full': '2026-08-14T08:00:00Z'},
+                {'number': 84, 'title': 'y', 'author': 'tomiri',
+                 'created_at': '2026-08-14',
+                 'created_at_full': '2026-08-14T10:00:00Z'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 15))
+        by_num = {c['number']: c for c in tl['chips']}
+        assert by_num[83]['base_tag'] == 'v1.0'   # 公開より前に作成
+        assert by_num[84]['base_tag'] == 'v1.1'   # 公開より後に作成
+
     def test_same_day_submit_release_keeps_base_older(self):
         # 提出日 = 自分の公開日でも基点は自分より前の版になる
         rel = [_rel('v1.1', '2026-08-01'), _rel('v1.0', '2026-07-01')]
