@@ -366,6 +366,23 @@ class TestFullFlow:
         with pytest.raises(submit.SubmitError, match='変更された'):
             submit.prepare_submission(z, {}, repo_env['workrepo'])
 
+    def test_without_use_ai_claude_is_never_called(self, repo_env, tmp_path,
+                                                   gh_mock, monkeypatch):
+        # 本人が選ばない限り API 使用料が発生しないこと (空欄提出)
+        def boom(*a, **k):
+            raise AssertionError('use_ai=False で Claude が呼ばれた')
+        monkeypatch.setattr(submit.claude_helper,
+                            'generate_commit_message', boom)
+        monkeypatch.setattr(submit.claude_helper, 'generate_pr_body', boom)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        result = submit.finalize_submission(prep, [], '', {})
+        assert result['commit_message'] == 'v1.0 を基点とした機能追加の提出'
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        body = create[create.index('--body') + 1]
+        assert '## 更新内容' not in body  # 空欄のまま提出
+
 
 class TestClaudeHelperFallback:
     def test_no_api_key_returns_none(self, monkeypatch):
@@ -373,3 +390,51 @@ class TestClaudeHelperFallback:
         assert claude_helper._client() is None
         assert claude_helper.generate_commit_message('a', 'b') is None
         assert claude_helper.generate_pr_body('a', 'b', 'v1.0') is None
+
+
+class TestFallbackPrBody:
+    """手書き・空欄提出 (Claude なし) の PR 本文が様式を満たすこと."""
+
+    def test_handwritten_becomes_sections(self):
+        body = submit.fallback_pr_body(
+            '2C 断面の対応\n\n- 断面算定を追加', '等辺のみ対応です',
+            'v1.1', '追加: s_check.py')
+        assert '## 更新内容\n\n2C 断面の対応' in body
+        assert ('## ご利用にあたっての制限事項\n\n等辺のみ対応です'
+                in body)
+        assert '追加: s_check.py' in body
+
+    def test_limitations_default_to_none_item(self):
+        body = submit.fallback_pr_body('改善しました', '', 'v1.1', 'x')
+        assert '## ご利用にあたっての制限事項\n\n- なし' in body
+
+    def test_blank_submission_has_no_update_section(self):
+        # 空欄のまま提出 → 更新内容の節を作らない (リリースノートも空欄)
+        from manager import reviews
+        body = submit.fallback_pr_body('', '', 'v1.1', '追加: a.py')
+        assert '## 更新内容' not in body
+        assert '制限事項' not in body
+        assert 'マネージャー経由の提出です (基点: v1.1)' in body
+        assert '追加: a.py' in body
+        assert reviews.release_notes_from_pr(body, 'v1.2') is None
+
+    def test_limitations_only_still_recorded(self):
+        body = submit.fallback_pr_body('', '等辺のみ対応です', 'v1.1', 'x')
+        assert '## ご利用にあたっての制限事項\n\n等辺のみ対応です' in body
+        assert '## 更新内容' not in body
+
+    def test_release_notes_extract_from_fallback_body(self):
+        # 手書きの様式からもリリースノートが機械抽出できる (一気通貫)
+        from manager import reviews
+        body = submit.fallback_pr_body(
+            '2C 断面の対応', '等辺のみ対応です', 'v1.1', '追加: a.py')
+        notes = reviews.release_notes_from_pr(body, 'v1.2')
+        assert '2C 断面の対応' in notes
+        assert '等辺のみ対応です' in notes
+        assert '追加: a.py' not in notes  # ファイル一覧は載せない
+
+    def test_release_notes_omit_empty_limitations(self):
+        from manager import reviews
+        body = submit.fallback_pr_body('改善しました', '', 'v1.1', 'x')
+        notes = reviews.release_notes_from_pr(body, 'v1.2')
+        assert '制限事項' not in notes

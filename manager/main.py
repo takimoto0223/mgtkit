@@ -242,10 +242,12 @@ def main(page: ft.Page):
         リリースノートは「vX.Y リリース。」で始まる書式が多く、版名の
         見出しと並べると重複するため表示時だけ落とす (原文は変えない)。
         """
+        dup = (tag, '%s リリース' % tag, '%sリリース' % tag,
+               '%s リリースノート' % tag, 'mgtkit %s リリースノート' % tag)
         lines = (notes or '').strip().splitlines()
         while lines and (not lines[0].strip()
-                         or lines[0].strip().rstrip('。.') in
-                         (tag, '%s リリース' % tag, '%sリリース' % tag)):
+                         or lines[0].strip().lstrip('#').strip().rstrip('。.')
+                         in dup):
             lines.pop(0)
         return '\n'.join(lines).strip()
 
@@ -855,9 +857,33 @@ def main(page: ft.Page):
 
     t4_status = status_text()
     t4_result = ft.Text('', size=14, selectable=True)
+    # 手書きの人でも様式 (更新内容 / 制限事項) が揃うよう、項目名の下に
+    # 薄いグレーの例 (hint) を常時表示する。空欄なら従来どおり自動生成。
+    # ラベルは TextField に持たせない (未フォーカス時に hint が隠れるため)。
+    # hint は薄いグレーでも本文 (ほぼ黒) と十分差がつく #6b7280 (4.8:1)
+    _t4_hint = ft.TextStyle(color='#6b7280', size=13)
+    _t4_box = dict(border_color='#9ca3af', focused_border_color=NAVY,
+                   width=600, multiline=True)
     t4_commit_msg = ft.TextField(
-        label='変更内容のメモ (空欄なら自動で作成されます)',
-        multiline=True, min_lines=2, max_lines=4)
+        hint_text='例:\n・二丁溝形鋼(2C)の断面算定に対応\n'
+                  '・計算書の文章出力を改善',
+        hint_style=_t4_hint, hint_max_lines=3,
+        min_lines=3, max_lines=5, **_t4_box)
+    t4_limits = ft.TextField(
+        hint_text='例:\n・二丁山形鋼は等辺のみ対応です '
+                  '(不等辺はエラーで停止します)',
+        hint_style=_t4_hint, hint_max_lines=2,
+        min_lines=2, max_lines=4, **_t4_box)
+
+    def _t4_field(caption, note, field):
+        """様式の 1 項目 (項目名 + 補足 + 入力欄)."""
+        return ft.Column([
+            ft.Row([ft.Text(caption, size=13.5, weight=ft.FontWeight.BOLD,
+                            color='#374151'),
+                    ft.Text(note, size=12, color='#6b7280')],
+                   spacing=8, vertical_alignment=ft.CrossAxisAlignment.END),
+            field,
+        ], spacing=6)
     t4_submit_btn = ft.FilledButton('ZIP を選んで提出', icon=ft.Icons.UPLOAD,
                                     bgcolor=NAVY, color='#ffffff')
 
@@ -865,19 +891,21 @@ def main(page: ft.Page):
         t4_status.value = msg
         page.update()
 
-    def _do_finalize(prep, deletions, existing_branch=None):
+    def _do_finalize(prep, deletions, existing_branch=None, use_ai=False):
         def work():
             try:
                 result = submit.finalize_submission(
                     prep, deletions, t4_commit_msg.value or '',
                     config, on_progress=_submit_progress,
-                    existing_branch=existing_branch)
+                    existing_branch=existing_branch,
+                    limitations=t4_limits.value or '', use_ai=use_ai)
                 t4_status.value = ''
                 t4_result.value = (
                     '提出しました。検証を通過するとβ版として発行され、'
                     '「β版の確認と承認」タブに表示されます。\n'
                     '提出内容: %s' % result['pr_url'])
                 t4_commit_msg.value = ''
+                t4_limits.value = ''
             except (submit.SubmitError, ghcli.GhError, GitError) as e:
                 t4_status.value = str(e)
             except Exception as e:
@@ -912,6 +940,33 @@ def main(page: ft.Page):
                 % (p['number'], p['title'][:30])) for p in my_prs]
             dest_dd = ft.Dropdown(label='提出先', options=options, value='')
             items.append(dest_dd)
+        # 更新内容・制限事項とも空欄なら、説明の作り方を本人に選ばせる
+        # (API 使用料がかかる自動生成を黙って実行しない)。キー未登録なら
+        # 自動生成は使えないため選択肢を出さず空欄のまま提出する
+        gen_rg = None
+        blank = (not (t4_commit_msg.value or '').strip()
+                 and not (t4_limits.value or '').strip())
+        if blank and settings.api_key(config):
+            gen_rg = ft.RadioGroup(value='blank', content=ft.Column([
+                ft.Radio(value='blank',
+                         label='空欄のまま提出する (無料)'),
+                ft.Radio(value='ai',
+                         label='Claude で自動作成する '
+                               '(API 使用料が数十円かかります)'),
+            ], spacing=0))
+            items.append(ft.Container(
+                bgcolor='#ffffff', border_radius=8, padding=12,
+                content=ft.Column([
+                    ft.Text('「更新内容」と「制限事項」が空欄です。'
+                            'どうしますか?',
+                            size=13, weight=ft.FontWeight.BOLD),
+                    gen_rg,
+                    ft.Text('自動作成では、提出する変更内容から更新内容と'
+                            '制限事項がまとめられます。空欄のまま提出すると、'
+                            '正式版になったときの更新内容の表示も空欄に'
+                            'なります。',
+                            size=12, color='#4b5563'),
+                ], spacing=6)))
         if del_checks:
             items.append(ft.Text(
                 '基点にあったのに ZIP に無いファイルがあります。'
@@ -936,7 +991,8 @@ def main(page: ft.Page):
             page.pop_dialog()
             deletions = [c.label for c in del_checks if c.value]
             existing = (dest_dd.value or None) if dest_dd else None
-            _do_finalize(prep, deletions, existing)
+            use_ai = bool(gen_rg is not None and gen_rg.value == 'ai')
+            _do_finalize(prep, deletions, existing, use_ai)
 
         page.show_dialog(ft.AlertDialog(
             modal=True, title=ft.Text('提出内容の確認'),
@@ -1067,8 +1123,10 @@ def main(page: ft.Page):
                 '計算結果 (mgtkit_out)・PDF や実行ファイル (.bat など) '
                 'コード以外のファイルは自動で除外されます。',
                 size=12, color='#555555'),
-        t4_commit_msg,
-        t4_submit_btn,
+        _t4_field('更新内容', '空欄なら自動で作成されます', t4_commit_msg),
+        _t4_field('ご利用にあたっての制限事項',
+                  '使えない条件など。空欄なら自動で作成されます', t4_limits),
+        ft.Container(t4_submit_btn, margin=ft.Margin(0, 16, 0, 0)),
         t4_status,
         t4_result,
         ft.Divider(),
