@@ -81,6 +81,8 @@ def fetch_releases(repo, limit=30):
             'prerelease': bool(r.get('prerelease')),
             'notes': r.get('body') or '',
             'published_at': (r.get('published_at') or '')[:10],
+            # 同日に複数の出来事があるときの前後関係の判定用 (履歴図)
+            'published_at_full': r.get('published_at') or '',
             'assets': [{'name': a.get('name'), 'url': a.get('url')}
                        for a in (r.get('assets') or [])],
         })

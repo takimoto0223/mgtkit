@@ -84,10 +84,20 @@ def build_timeline(releases, merged, pending, today=None):
     feats = [dict(m) for m in merged if parse_date(m.get('merged_at'))]
     feats.sort(key=lambda m: (parse_date(m['merged_at']), m['number']))
 
-    # 新しい順に「公開日以前で最も新しい取り込み」を対応付ける
+    def _when(item, key):
+        """前後関係の比較キー。時刻付き (…_full) があれば優先する.
+
+        ISO 形式の文字列同士は辞書順の比較で時刻の前後になる。
+        同じ日に提出と公開があるケースの取り違え防止 (日付だけだと
+        公開より前に作られた提出が新しい版ベース扱いになる)。
+        """
+        return item.get(key + '_full') or item.get(key) or ''
+
+    # 新しい順に「公開日時以前で最も新しい取り込み」を対応付ける
     i = len(feats) - 1
     for s in reversed(stables):
-        while i >= 0 and parse_date(feats[i]['merged_at']) > s['date']:
+        pub = _when(s['release'], 'published_at')
+        while i >= 0 and _when(feats[i], 'merged_at')[:len(pub)] > pub:
             i -= 1
         if i >= 0:
             s['pr'] = feats[i]
@@ -103,6 +113,7 @@ def build_timeline(releases, merged, pending, today=None):
                       'number': pr.get('number'),
                       'title': pr.get('title') or '',
                       'start': start, 'end': s['date'],
+                      'created_full': _when(pr, 'created_at'),
                       'base_tag': None, 'target_tag': s['tag'],
                       'pending': False, 'lane': -1})
     for p in pending:
@@ -115,15 +126,22 @@ def build_timeline(releases, merged, pending, today=None):
                       'number': p.get('number'),
                       'title': p.get('title') or '',
                       'start': start, 'end': None,
+                      'created_full': _when(p, 'created_at'),
                       'base_tag': None, 'target_tag': None,
                       'pending': True, 'lane': -1})
 
-    # 基点: 提出日以前で最も新しい正式版 (自分の公開版と同じなら 1 つ前)
+    # 基点: 提出日時以前で最も新しい正式版 (自分の公開版と同じなら
+    # 1 つ前)。時刻まで比較する: 公開と同じ日に作られた提出が、
+    # 公開より前に作られたのに新しい版ベース扱いになるのを防ぐ
     dates = {s['tag']: s['date'] for s in stables}
     for c in chips:
         base = None
+        created = c.get('created_full') or c['start'].isoformat()
         for s in stables:
-            if s['date'] <= c['start'] and s['tag'] != c['target_tag']:
+            pub = _when(s['release'], 'published_at') \
+                or s['date'].isoformat()
+            n = min(len(pub), len(created))
+            if pub[:n] <= created[:n] and s['tag'] != c['target_tag']:
                 base = s['tag']
         if base is None and stables:
             for s in stables:
