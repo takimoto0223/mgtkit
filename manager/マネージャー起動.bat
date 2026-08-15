@@ -13,9 +13,9 @@ if errorlevel 1 echo ※ 最新化できませんでした。手元の版のま�
 set "PY=python"
 where py >nul 2>nul && set "PY=py"
 
-%PY% -c "import flet, webview" >nul 2>nul
+%PY% -c "import flet" >nul 2>nul
 if errorlevel 1 (
-    echo 必要ライブラリをインストールしています...
+    echo 必要ライブラリ ^(flet^) をインストールしています...
     %PY% -m pip install -r manager\requirements.txt
     if errorlevel 1 (
         echo インストールに失敗しました。ネットワーク接続を確認してください。

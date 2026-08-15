@@ -1,6 +1,4 @@
 # アプリマネージャー用依存 (mgtkit 本体の requirements.txt とは独立)
 flet==0.86.5
-# 差分ビューワをアプリ専用ウィンドウで表示 (Windows の Edge WebView2 利用)
-pywebview==6.2.1
 # コミットメッセージ・PR 本文の自動生成 (ANTHROPIC_API_KEY 設定時のみ使用)
 anthropic==0.120.2
