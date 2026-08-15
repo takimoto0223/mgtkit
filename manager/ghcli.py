@@ -89,6 +89,19 @@ def fetch_releases(repo, limit=30):
     return releases
 
 
+def merge_base_sha(repo, base, head):
+    """base ブランチと head (SHA/ブランチ) の分岐点コミット SHA.
+
+    履歴図で「どの版から作られた提出か」を推定ではなく事実で出すために
+    使う。per_page=1 で応答を小さくする (compare はコミット一覧付き)。
+    """
+    out = run_gh(['api',
+                  'repos/%s/compare/%s...%s?per_page=1'
+                  % (repo, base, head),
+                  '--jq', '.merge_base_commit.sha'])
+    return out.strip()
+
+
 def latest_stable(releases):
     """リリース一覧から最新の正式版を返す (無ければ None)."""
     for r in releases:

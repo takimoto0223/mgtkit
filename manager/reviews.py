@@ -173,8 +173,9 @@ def list_pending(config=None):
     """
     out = ghcli.run_gh([
         'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
-        '--json', 'number,title,url,author,headRefName,createdAt,'
-                  'reviews,statusCheckRollup,mergeable,comments'])
+        '--json', 'number,title,url,author,headRefName,headRefOid,'
+                  'createdAt,reviews,statusCheckRollup,mergeable,'
+                  'comments'])
     try:
         prs = json.loads(out)
     except ValueError:
@@ -200,6 +201,7 @@ def _build_pending(prs, config):
             'author': (pr.get('author') or {}).get('login', '?'),
             'created_at': (pr.get('createdAt') or '')[:10],
             'created_at_full': pr.get('createdAt') or '',
+            'head_sha': pr.get('headRefOid') or '',
             'approved': summary['approved'],
             'rejected': summary['rejected'],
             'rejected_final': len(summary['rejected']) >= n_req,
@@ -223,7 +225,7 @@ query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 50) {
       nodes {
-        number title url headRefName mergeable createdAt
+        number title url headRefName headRefOid mergeable createdAt
         author { login }
         reviews(first: 100) {
           nodes { state body submittedAt author { login } }
@@ -252,6 +254,7 @@ query($owner: String!, $name: String!) {
     releases(first: 30, orderBy: {field: CREATED_AT, direction: DESC}) {
       nodes {
         tagName name isPrerelease isDraft description publishedAt
+        tagCommit { oid }
         releaseAssets(first: 10) { nodes { name downloadUrl } }
       }
     }
@@ -275,13 +278,45 @@ def fetch_snapshot(config=None, on_progress=None):
 
     progress('最新の提出状況とβ版・リリースの一覧を確認しています...')
     try:
-        return _snapshot_via_graphql(config)
+        snap = _snapshot_via_graphql(config)
     except Exception:
         log.info('一括取得に失敗したため従来の方法で取得します',
                  exc_info=True)
-    progress('うまく取得できなかったため、方法を変えて確認し直して'
-             'います...')
-    return _snapshot_via_rest(config)
+        progress('うまく取得できなかったため、方法を変えて確認し直して'
+                 'います...')
+        snap = _snapshot_via_rest(config)
+    _attach_fork_points(snap['pending'], config)
+    return snap
+
+
+def _attach_fork_points(pending, config):
+    """承認待ちの各提出に分岐点コミット (fork_sha) を付ける.
+
+    履歴図の「どの版から作られたか」は日付では取り違えるため
+    (公開後に古い版の内容が提出されることが普通にある)、git の
+    merge-base を事実として使う。承認待ちは件数が少ないので
+    1 件ずつ並列に問い合わせる。失敗した提出は付けない
+    (図は日時からの推定にフォールバックする)。
+    """
+    slug = paths.repo_slug(config)
+    base = ((config or {}).get('base_branch')
+            if isinstance(config, dict) else None) or 'main'
+
+    def fetch(p):
+        def run():
+            try:
+                p['fork_sha'] = ghcli.merge_base_sha(slug, base,
+                                                     p['head_sha'])
+            except ghcli.GhError:
+                log.info('分岐点の取得に失敗 (#%s)。日時から推定します',
+                         p.get('number'), exc_info=True)
+        return threading.Thread(target=run, daemon=True)
+
+    threads = [fetch(p) for p in pending if p.get('head_sha')]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
 
 def _snapshot_via_graphql(config):
@@ -316,6 +351,7 @@ def _pr_from_graphql(node):
         'headRefName': node.get('headRefName') or '',
         'mergeable': node.get('mergeable') or '',
         'createdAt': node.get('createdAt') or '',
+        'headRefOid': node.get('headRefOid') or '',
         'author': node.get('author') or {},
         'reviews': (node.get('reviews') or {}).get('nodes') or [],
         'comments': (node.get('comments') or {}).get('nodes') or [],
@@ -333,6 +369,7 @@ def _release_from_graphql(node):
         'notes': node.get('description') or '',
         'published_at': (node.get('publishedAt') or '')[:10],
         'published_at_full': node.get('publishedAt') or '',
+        'tag_sha': (node.get('tagCommit') or {}).get('oid') or '',
         'assets': [{'name': a.get('name'), 'url': a.get('downloadUrl')}
                    for a in assets],
     }

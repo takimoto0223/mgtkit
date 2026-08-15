@@ -65,6 +65,22 @@ class TestBuildTimeline:
         assert by_num[38]['end'] is None and by_num[38]['target_tag'] is None
         assert by_num[40]['base_tag'] == 'v1.6'
 
+    def test_fork_sha_beats_timestamp_estimate(self):
+        # 公開の後に古い版の内容が提出されたケース: 日時推定では v1.1
+        # ベースに見えるが、分岐点コミットがある場合はそれが事実
+        rel = [dict(_rel('v1.1', '2026-08-14'),
+                    published_at_full='2026-08-14T09:00:00Z',
+                    tag_sha='sha-v11'),
+               dict(_rel('v1.0', '2026-08-06'),
+                    published_at_full='2026-08-06T09:00:00Z',
+                    tag_sha='sha-v10')]
+        pend = [{'number': 83, 'title': 'x', 'author': 'tomiri',
+                 'created_at': '2026-08-14',
+                 'created_at_full': '2026-08-14T10:00:00Z',
+                 'fork_sha': 'sha-v10'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 15))
+        assert tl['chips'][0]['base_tag'] == 'v1.0'
+
     def test_same_day_timestamps_pick_older_base(self):
         # v1.1 の公開 (09:00) と同じ日でも、それより前 (08:00) に
         # 作られた提出のベースは v1.0 (実データでの取り違えの再現)
