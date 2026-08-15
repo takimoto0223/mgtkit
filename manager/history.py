@@ -106,6 +106,10 @@ def build_timeline(releases, merged, pending, today=None):
                       'base_tag': None, 'target_tag': s['tag'],
                       'pending': False, 'lane': -1})
     for p in pending:
+        if p.get('rejected_final'):
+            # 必要数の却下がそろった提出は図に出さない (承認タブでも
+            # 既定で非表示のもの。再提出されれば新しい提出として現れる)
+            continue
         start = parse_date(p.get('created_at')) or today
         chips.append({'author': p.get('author') or '?',
                       'number': p.get('number'),
