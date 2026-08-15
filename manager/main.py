@@ -859,18 +859,21 @@ def main(page: ft.Page):
     t4_result = ft.Text('', size=14, selectable=True)
     # 手書きの人でも様式 (更新内容 / 制限事項) が揃うよう、項目名の下に
     # 薄いグレーの例 (hint) を常時表示する。空欄なら従来どおり自動生成。
-    # ラベルは TextField に持たせない (未フォーカス時に hint が隠れるため)
-    _t4_hint = ft.TextStyle(color='#9ca3af', size=13)
+    # ラベルは TextField に持たせない (未フォーカス時に hint が隠れるため)。
+    # hint は薄いグレーでも本文 (ほぼ黒) と十分差がつく #6b7280 (4.8:1)
+    _t4_hint = ft.TextStyle(color='#6b7280', size=13)
+    _t4_box = dict(border_color='#9ca3af', focused_border_color=NAVY,
+                   width=600, multiline=True)
     t4_commit_msg = ft.TextField(
         hint_text='例:\n・二丁溝形鋼(2C)の断面算定に対応\n'
                   '・計算書の文章出力を改善',
         hint_style=_t4_hint, hint_max_lines=3,
-        multiline=True, min_lines=3, max_lines=5)
+        min_lines=3, max_lines=5, **_t4_box)
     t4_limits = ft.TextField(
-        hint_text='例: 二丁山形鋼は等辺のみ対応です '
+        hint_text='例:\n・二丁山形鋼は等辺のみ対応です '
                   '(不等辺はエラーで停止します)',
         hint_style=_t4_hint, hint_max_lines=2,
-        multiline=True, min_lines=2, max_lines=4)
+        min_lines=2, max_lines=4, **_t4_box)
 
     def _t4_field(caption, note, field):
         """様式の 1 項目 (項目名 + 補足 + 入力欄)."""
@@ -1094,8 +1097,8 @@ def main(page: ft.Page):
                 size=12, color='#555555'),
         _t4_field('更新内容', '空欄なら自動で作成されます', t4_commit_msg),
         _t4_field('ご利用にあたっての制限事項',
-                  '使えない条件など。なければ空欄', t4_limits),
-        t4_submit_btn,
+                  '使えない条件など。空欄なら自動で作成されます', t4_limits),
+        ft.Container(t4_submit_btn, margin=ft.Margin(0, 16, 0, 0)),
         t4_status,
         t4_result,
         ft.Divider(),
