@@ -39,6 +39,17 @@ BINARY_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip',
 # C:\Users\(自分)\mgtkit\... に展開されるため、その見え方に合わせる
 DISPLAY_ROOT = 'mgtkit'
 
+# ダウンロードの印はアプリ全体で Material の ⬇ (トレイ + 矢印) に統一
+# (更新ログの「ZIP を保存」と同じ見た目をリンクの文字色で描く)
+_DL_ICON_SVG = (
+    '<svg width="13" height="13" viewBox="0 0 13 13" '
+    'style="vertical-align:-2px;margin-right:3px">'
+    '<path d="M6.5 1 v7 M3.2 5 l3.3 3.3 L9.8 5" stroke="currentColor" '
+    'stroke-width="1.8" fill="none" stroke-linecap="round" '
+    'stroke-linejoin="round"/>'
+    '<path d="M1.5 11.5 h10" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round"/></svg>')
+
 
 def _git_bytes(workrepo, args):
     """バイト列が要る git 出力 (ファイル内容)。失敗は None."""
@@ -416,7 +427,7 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, base_ref):
     b64 = base64.b64encode(buf.getvalue()).decode('ascii')
 
     btn = ('<a class="dl" id="dlbtn" href="#">'
-           '⬇ β版データ (確認用) をダウンロード</a>')
+           + _DL_ICON_SVG + ' β版データ (確認用) をダウンロード</a>')
     cards = ''.join(
         '<div class="rcard %s"><h3>%s</h3><div class="fig">%s</div>'
         '<p>%s</p></div>' % (cls, title, svg, text)
@@ -436,7 +447,7 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, base_ref):
         '<a class="mcancel" id="dlcancel" href="#">キャンセル</a>'
         '<a class="mgo" id="dlgo" download="#%d_確認用.zip" '
         'href="data:application/zip;base64,%s">'
-        '⬇ リスクを理解した上でダウンロード</a>'
+        '%s リスクを理解した上でダウンロード</a>'
         '</div></div></div>'
         '<script>(function(){'
         'var o=document.getElementById("dlovl");'
@@ -449,7 +460,7 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, base_ref):
         'o.addEventListener("click",function(e){'
         'if(e.target===o)o.classList.remove("show");});'
         '})();</script>'
-        % (cards, meta['number'], b64))
+        % (cards, meta['number'], b64, _DL_ICON_SVG))
     return btn, modal
 
 
