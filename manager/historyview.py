@@ -119,33 +119,28 @@ def _derivation(base_x, arrow_back, lane, color):
     return shapes
 
 
-MERGE_SPAN = 55         # 帯の右端 → 合流先ノードの水平距離
-
-
 def _merge_arrow(chip_right, node_x, lane, color, big_node):
-    """帯の右端 → 少し水平に出てから本線へ滑らかにカーブして合流.
+    """帯の右端 → 水平に出て 1/4 円弧でノードに縦に刺さる矢印.
 
-    いきなり斜めに出さず、水平部分 → カーブ → 浅い角度 (約 22°) で
-    ノードの縁に矢先が刺さる (管理者指示の見た目)。
+    派生 (_derivation) の鏡映で、左右のカーブの滑らかさをそろえる
+    (管理者指示)。矢先はノードの縁に縦向きで刺さる。
     """
     _, line_y = _lane_geom(lane)
     sign = 1 if lane < 0 else -1    # +1 = 本線より下
     r = 14 if big_node else 9
-    ang = -sign * math.radians(22)
-    ux, uy = math.cos(ang), math.sin(ang)
-    ex = node_x - (r + 1) * ux      # 矢先の先端 = ノードの縁
-    ey = RAIL_Y - (r + 1) * uy
-    bx, by = ex - 9 * ux, ey - 9 * uy       # 矢先の根元 = 曲線の終点
-    span = node_x - chip_right
-    sx = chip_right + max(6, span - 44)     # 水平部分の終わり
-    c1x = sx + (bx - sx) * 0.5
-    c2x, c2y = bx - 14 * ux, by - 14 * uy
-    shapes = [cv.Path([
-        cv.Path.MoveTo(chip_right, line_y),
-        cv.Path.LineTo(sx, line_y),
-        cv.Path.CubicTo(c1x, line_y, c2x, c2y, bx, by),
-    ], paint=_stroke(color, 2.4))]
-    shapes.append(_arrow_head(ex, ey, ang, color))
+    tip_y = RAIL_Y + sign * (r + 1)         # 矢先の先端 = ノードの縁
+    back_y = RAIL_Y + sign * (r + 10)       # 矢先の根元 = 曲線の終点
+    dy = line_y - back_y
+    dx = min(46, max(18, node_x - chip_right))
+    elements = [cv.Path.MoveTo(chip_right, line_y)]
+    if node_x - dx > chip_right:
+        elements.append(cv.Path.LineTo(node_x - dx, line_y))
+    elements.append(cv.Path.CubicTo(node_x - dx * 0.45, line_y,
+                                    node_x, back_y + dy * 0.55,
+                                    node_x, back_y))
+    shapes = [cv.Path(elements, paint=_stroke(color, 2.4))]
+    shapes.append(_arrow_head(node_x, tip_y,
+                              math.radians(-90 * sign), color))
     return shapes
 
 
@@ -313,7 +308,7 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
             # 取り込み済みは基点ノードと合流ノードの中央に置き、
             # 両側の水平部分が同じ長さ (変動幅) になるようにする
             span_l = base_x + 55            # S カーブ + 矢先の分
-            span_r = node_x[c['target_tag']] - 44   # 合流カーブの分
+            span_r = node_x[c['target_tag']] - 46   # 合流カーブの分
             if span_r - span_l >= min_w:
                 h = (span_r - span_l - min_w) / 2
                 chip_left = span_l + h
