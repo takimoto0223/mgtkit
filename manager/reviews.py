@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from . import claude_helper, feedback, ghcli, paths
+from . import feedback, ghcli, paths
 from .autofix import AUTOFIX_PREFIX, _summarize_checks
 from .gitcli import ensure_work_repo, run_git
 from .submit import workrepo_dir
@@ -693,6 +693,56 @@ def next_stable_version(config=None):
     return 'v%d.%d' % (major, minor + 1)
 
 
+# PR 本文のうちリリースノートへ転載する節 (claude_helper.generate_pr_body の
+# 様式と対)。「制限事項」は見出しの表記ゆれを許容するため部分一致で拾う
+_NOTES_LIMITS_KEY = '制限事項'
+_NOTES_NO_LIMITS = re.compile(r'^[-*・]?\s*(特に)?(なし|ありません)[。.]?$')
+
+
+def _pr_body_sections(body):
+    """PR 本文を「## 見出し」ごとに分割する。### 以下は本文側に含める.
+
+    「# 提出時の警告」のような # 見出しも区切りとして扱う (転載対象の節に
+    紛れ込ませないため)。戻り値: {見出し: 本文} (出現順)。
+    """
+    sections = {}
+    current = None
+    lines = []
+    for line in (body or '').replace('\r\n', '\n').split('\n'):
+        m = re.match(r'^#{1,2}\s+(.+?)\s*$', line)
+        if m:
+            if current and current not in sections:
+                sections[current] = '\n'.join(lines).strip()
+            current = m.group(1)
+            lines = []
+        elif current is not None:
+            lines.append(line)
+    if current and current not in sections:
+        sections[current] = '\n'.join(lines).strip()
+    return sections
+
+
+def release_notes_from_pr(pr_body, version):
+    """PR 本文の様式から利用者向けリリースノートを組み立てる (API 不使用).
+
+    提出時に自動生成される「## 更新内容」「## ご利用にあたっての制限事項」を
+    そのまま転載する。レビュー担当者向けの節 (影響範囲・変更ファイルの説明・
+    注意・提出時の警告) は載せない。制限事項が「- なし」だけなら節ごと省く。
+    「## 更新内容」が見つからなければ None (呼び出し側が定型文へ戻す)。
+    """
+    sections = _pr_body_sections(pr_body)
+    content = sections.get('更新内容')
+    if not content:
+        return None
+    parts = ['# mgtkit %s リリースノート' % version, '', '## 更新内容', '',
+             content]
+    limits = next((v for k, v in sections.items()
+                   if _NOTES_LIMITS_KEY in k), '').strip()
+    if limits and not _NOTES_NO_LIMITS.match(limits):
+        parts += ['', '## ご利用にあたっての制限事項', '', limits]
+    return '\n'.join(parts)
+
+
 def release(pr_number, config=None, on_progress=None):
     """squash merge → 正式版タグ + Releases 登録 (release ワークフローを起動).
 
@@ -725,8 +775,8 @@ def release(pr_number, config=None, on_progress=None):
 
     version = next_stable_version(config)
     progress('リリースノートを作成しています...')
-    notes = claude_helper.generate_release_notes(
-        detail.get('title', ''), detail.get('body', ''), version)
+    # 提出時に生成済みの PR 本文から転載する (ここでは API を使わない)
+    notes = release_notes_from_pr(detail.get('body', ''), version)
     if not notes:
         notes = '%s リリース。\n\n%s' % (version, detail.get('title', ''))
 

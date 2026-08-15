@@ -242,10 +242,12 @@ def main(page: ft.Page):
         リリースノートは「vX.Y リリース。」で始まる書式が多く、版名の
         見出しと並べると重複するため表示時だけ落とす (原文は変えない)。
         """
+        dup = (tag, '%s リリース' % tag, '%sリリース' % tag,
+               '%s リリースノート' % tag, 'mgtkit %s リリースノート' % tag)
         lines = (notes or '').strip().splitlines()
         while lines and (not lines[0].strip()
-                         or lines[0].strip().rstrip('。.') in
-                         (tag, '%s リリース' % tag, '%sリリース' % tag)):
+                         or lines[0].strip().lstrip('#').strip().rstrip('。.')
+                         in dup):
             lines.pop(0)
         return '\n'.join(lines).strip()
 
