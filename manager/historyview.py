@@ -265,9 +265,17 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     shapes.append(cv.Line(X0, AXIS_Y, width - 10, AXIS_Y,
                           paint=_stroke('#e5e7eb', 1)))
 
-    # きょう線 (文字を貫通しないよう、線はラベルの下から始める)
-    shapes.append(cv.Line(today_x, 62, today_x, grid_bottom,
-                          paint=_stroke('#64748b', 1.5, dash=[5, 4])))
+    # きょう線は波線にする (確認中の帯の破線と見分けるため。
+    # 文字を貫通しないよう、線はラベルの下から始める)
+    wave = [cv.Path.MoveTo(today_x, 62)]
+    wy, amp, step, side = 62, 2.5, 8, 1
+    while wy < grid_bottom:
+        wave.append(cv.Path.QuadraticTo(today_x + side * amp * 2,
+                                        wy + step / 2, today_x,
+                                        wy + step))
+        wy += step
+        side = -side
+    shapes.append(cv.Path(wave, paint=_stroke('#64748b', 1.5)))
     shapes.append(_text(today_x, 47, 'きょう %s' % history.fmt_date(today),
                         11, AXIS, weight=ft.FontWeight.BOLD, center=True))
 
@@ -307,15 +315,30 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
             shapes.append(cv.Circle(x, RAIL_Y, 14, paint=_fill(NAVY)))
             shapes.append(cv.Circle(x, RAIL_Y, 14,
                                     paint=_stroke('#f59e0b', 6)))
-            by = RAIL_Y - 72
-            shapes.append(cv.Rect(x - 48, by, 96, 24, border_radius=7,
+            # バッジは枝と重ならない側に置く: 上が空いていれば上、
+            # 次に下、両方ふさがっていればノードの右 (本線の上)
+            def _busy(lane_test):
+                return any((c['base_tag'] == s['tag']
+                            or c['target_tag'] == s['tag'])
+                           and lane_test(c['lane']) for c in chips)
+            if not _busy(lambda ln: ln >= 1):
+                bx0, by0 = x - 48, RAIL_Y - 72
+            elif not _busy(lambda ln: ln < 0):
+                bx0, by0 = x - 48, RAIL_Y + 48
+            else:
+                bx0, by0 = x + 22, RAIL_Y - 12
+            shapes.append(cv.Rect(bx0, by0, 96, 24, border_radius=7,
                                   paint=_fill('#fef08a')))
-            shapes.append(cv.Rect(x - 48, by, 96, 24, border_radius=7,
+            shapes.append(cv.Rect(bx0, by0, 96, 24, border_radius=7,
                                   paint=_stroke('#a16207', 1)))
-            shapes.append(_text(x, by + 4, '%s 現行版' % s['tag'], 12.5,
+            shapes.append(_text(bx0 + 48, by0 + 4,
+                                '%s 現行版' % s['tag'], 12.5,
                                 '#713f12', weight=ft.FontWeight.BOLD,
                                 center=True))
-            overlays.append(([x - 48, by, 96, 60], 'stable', s))
+            overlays.append(([min(bx0, x - 16), min(by0, RAIL_Y - 16),
+                              max(bx0 + 96, x + 16) - min(bx0, x - 16),
+                              max(by0 + 24, RAIL_Y + 16)
+                              - min(by0, RAIL_Y - 16)], 'stable', s))
         else:
             shapes.append(cv.Circle(x, RAIL_Y, 9, paint=_fill('#ffffff')))
             shapes.append(cv.Circle(x, RAIL_Y, 9, paint=_stroke(NAVY, 3)))
