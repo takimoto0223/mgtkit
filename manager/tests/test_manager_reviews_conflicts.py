@@ -291,6 +291,7 @@ _GRAPHQL_SNAPSHOT = {
             'merged': {'nodes': [
                 {'number': 29, 'title': '合成梁の検討を追加',
                  'headRefName': 'feature/yamada-20260801-1',
+                 'headRefOid': 'headsha29',
                  'createdAt': '2026-08-01T09:00:00Z',
                  'mergedAt': '2026-08-04T10:00:00Z',
                  'author': {'login': 'yamada'}},
@@ -336,15 +337,18 @@ class TestFetchSnapshot:
 
         monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
         snap = reviews.fetch_snapshot({'repo': 'o/r'})
-        # gh は GraphQL 1 回 + collaborators 1 回 + 分岐点 (提出ごと) のみ
-        assert [c[:2] for c in calls] == [
+        # gh は GraphQL 1 回 + collaborators 1 回 + 分岐点 (提出ごと)。
+        # 分岐点は並列のため順不同で比較する
+        assert [c[:2] for c in calls[:2]] == [
             ['api', 'graphql'],
-            ['api', 'repos/o/r/collaborators?per_page=100'],
-            ['api', 'repos/o/r/compare/main...headsha33?per_page=1']]
+            ['api', 'repos/o/r/collaborators?per_page=100']]
+        assert sorted(c[1] for c in calls[2:]) == [
+            'repos/o/r/compare/main...headsha29?per_page=1',
+            'repos/o/r/compare/main...headsha33?per_page=1']
         assert snap['me'] == 'yamada'
         # ログイン名はこの 1 回でキャッシュされ、追加の gh 呼び出しなし
         assert reviews.current_user() == 'yamada'
-        assert len(calls) == 3
+        assert len(calls) == 4
         # 承認待ち一覧は list_pending と同じ形 (feature/ のみ)
         pr = snap['pending'][0]
         assert [p['number'] for p in snap['pending']] == [33]
@@ -369,11 +373,34 @@ class TestFetchSnapshot:
              'author': 'yamada', 'created_at': '2026-08-01',
              'created_at_full': '2026-08-01T09:00:00Z',
              'merged_at': '2026-08-04',
-             'merged_at_full': '2026-08-04T10:00:00Z'}]
+             'merged_at_full': '2026-08-04T10:00:00Z',
+             'head_sha': 'headsha29', 'fork_sha': 'forksha-33'}]
         # 承認待ちにも提出日が入る (図の帯の左端に使う)
         assert 'created_at' in pr
         # 分岐点コミットが付く (履歴図の基点の事実)
         assert pr['fork_sha'] == 'forksha-33'
+
+    def test_known_forks_skip_refetch(self, monkeypatch):
+        import json as _json
+        calls = []
+
+        def fake(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'graphql']:
+                return _json.dumps(_GRAPHQL_SNAPSHOT)
+            if args[0] == 'api' and 'collaborators' in args[1]:
+                return '["yamada", "fujitaka"]'
+            if args[0] == 'api' and 'compare' in args[1]:
+                raise AssertionError('既知の分岐点を取り直している')
+            raise AssertionError('unexpected gh call: %r' % args)
+
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
+        snap = reviews.fetch_snapshot(
+            {'repo': 'o/r'},
+            known_forks={'33:headsha33': 'memo-33',
+                         '29:headsha29': 'memo-29'})
+        assert snap['pending'][0]['fork_sha'] == 'memo-33'
+        assert snap['merged'][0]['fork_sha'] == 'memo-29'
 
     def test_falls_back_to_rest_on_graphql_error(self, monkeypatch):
         import json as _json
@@ -395,6 +422,8 @@ class TestFetchSnapshot:
             if args[0] == 'api' and 'collaborators' in args[1]:
                 return '[]'
             if args[0] == 'api' and 'releases' in args[1]:
+                return '[]'
+            if args[0] == 'api' and 'matching-refs' in args[1]:
                 return '[]'
             raise AssertionError('unexpected gh call: %r' % args)
 
