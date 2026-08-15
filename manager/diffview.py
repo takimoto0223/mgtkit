@@ -382,7 +382,48 @@ def _dl_readme(meta, changed, dl_deleted):
     return '\n'.join(lines)
 
 
-def _download_link(meta, dl_files, dl_deleted, workrepo, base_ref):
+def build_review_zip(model, workrepo, max_mb=None):
+    """確認用データ ZIP のバイト列を組み立てる (HTML・ダイアログ共通).
+
+    一式 = 「最新の正式版 + この提出の変更」(= β版の中身)。
+    提出ブランチの木をそのまま使うと、基点時点の古いファイル
+    (その後 main 側で削除・移動されたもの) が紛れ込むため、
+    最新の正式版を土台に変更ファイルだけを重ねる。
+    version.json はあえて入れない (この一式をそのまま提出の土台に
+    できないようにするため)。
+    max_mb 指定時、超えたら None (HTML への base64 埋め込み用の上限)。
+    """
+    dl_files, dl_deleted = model['dl_files'], model['dl_deleted']
+    full = {}
+    for p in run_git(['ls-tree', '-r', '--name-only', model['base_ref']],
+                     cwd=workrepo).splitlines():
+        p = p.strip()
+        if not p or not _is_dist_scope(p):
+            continue
+        data = _git_bytes(workrepo,
+                          ['show', '%s:%s' % (model['base_ref'], p)])
+        if data is not None:
+            full[p] = data
+    for path, data in dl_files:      # この提出で追加・変更されたファイル
+        full[path] = data
+    for p in dl_deleted:             # この提出で削除されたファイル
+        full.pop(p, None)
+    if max_mb is not None and sum(len(d) for d in full.values()) \
+            + sum(len(d) for _, d in dl_files) > max_mb * 1024 * 1024:
+        return None
+    changed = [p for p, _ in dl_files]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('確認用データについて.txt',
+                    _dl_readme(model, changed, dl_deleted))
+        for path, data in sorted(full.items()):
+            zf.writestr('一式/%s/%s' % (DISPLAY_ROOT, path), data)
+        for path, data in dl_files:
+            zf.writestr('変更のみ/%s/%s' % (DISPLAY_ROOT, path), data)
+    return buf.getvalue()
+
+
+def _download_link(model, workrepo):
     """「β版データ (確認用) をダウンロード」ボタンとリスク確認モーダルの HTML.
 
     β版一覧に置くと誤って開発の土台にする人が出るため、差分ビューワの
@@ -391,40 +432,12 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, base_ref):
     β版まるごと) と「変更のみ」(中身チェック用) の両方を入れる。
     戻り値: (ボタン HTML, モーダル HTML)。出さないときは ('', '')。
     """
-    if not dl_files:
+    if not model['dl_files']:
         return '', ''
-    # 一式 = 「最新の正式版 + この提出の変更」(= β版の中身)。
-    # 提出ブランチの木をそのまま使うと、基点時点の古いファイル
-    # (その後 main 側で削除・移動されたもの) が紛れ込むため、
-    # 最新の正式版を土台に変更ファイルだけを重ねる。
-    # version.json はあえて入れない (この一式をそのまま提出の土台に
-    # できないようにするため)
-    full = {}
-    for p in run_git(['ls-tree', '-r', '--name-only', base_ref],
-                     cwd=workrepo).splitlines():
-        p = p.strip()
-        if not p or not _is_dist_scope(p):
-            continue
-        data = _git_bytes(workrepo, ['show', '%s:%s' % (base_ref, p)])
-        if data is not None:
-            full[p] = data
-    for path, data in dl_files:      # この提出で追加・変更されたファイル
-        full[path] = data
-    for p in dl_deleted:             # この提出で削除されたファイル
-        full.pop(p, None)
-    if sum(len(d) for d in full.values()) \
-            + sum(len(d) for _, d in dl_files) > MAX_DL_MB * 1024 * 1024:
+    data = build_review_zip(model, workrepo, max_mb=MAX_DL_MB)
+    if data is None:
         return '', ''
-    changed = [p for p, _ in dl_files]
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('確認用データについて.txt',
-                    _dl_readme(meta, changed, dl_deleted))
-        for path, data in sorted(full.items()):
-            zf.writestr('一式/%s/%s' % (DISPLAY_ROOT, path), data)
-        for path, data in dl_files:
-            zf.writestr('変更のみ/%s/%s' % (DISPLAY_ROOT, path), data)
-    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    b64 = base64.b64encode(data).decode('ascii')
 
     btn = ('<a class="dl" id="dlbtn" href="#">'
            + _DL_ICON_SVG + ' β版データ (確認用) をダウンロード</a>')
@@ -460,27 +473,34 @@ def _download_link(meta, dl_files, dl_deleted, workrepo, base_ref):
         'o.addEventListener("click",function(e){'
         'if(e.target===o)o.classList.remove("show");});'
         '})();</script>'
-        % (cards, meta['number'], b64, _DL_ICON_SVG))
+        % (cards, model['number'], b64, _DL_ICON_SVG))
     return btn, modal
 
 
-def build_html(meta, base_ref, head_ref, workrepo):
-    """差分ビューワの HTML 全体を組み立てて文字列で返す.
+def collect_model(meta, base_ref, head_ref, workrepo):
+    """差分モデル (表示技術に依存しないデータ) を組み立てる.
 
-    meta: dict(number, title, author, beta=None)
-    base_ref/head_ref: 比較する 2 つの git リファレンス
+    HTML (render_html) とアプリ内ダイアログ (diffdialog) の共通データ。
+    戻り値 dict:
+      number/title/author/beta: meta の転載 / has_notes: 説明の有無
+      n_add/n_del: 追加・削除行数の合計
+      files: [{path, status, status_jp, tag_cls, note, kind,
+               adds, dels, changed, rows}]
+        kind: 'diff' | 'binary' | 'big'。rows は kind=='diff' のみ
+        (collapse_context 済みの行ペア)
+      dl_files: [(path, bytes)] / dl_deleted: [path] / base_ref:
+        確認用データ ZIP の構築用
     """
     mb = run_git(['merge-base', base_ref, head_ref], cwd=workrepo).strip()
     out = run_git(['diff', '--name-status', '%s..%s' % (mb, head_ref)],
                   cwd=workrepo)
-    files = [line.split('\t', 1) for line in out.splitlines()
-             if line.strip()]
+    raw = [line.split('\t', 1) for line in out.splitlines()
+           if line.strip()]
     notes = meta.get('notes') or {}
 
-    sums, sections = [], []
-    dl_files, dl_deleted = [], []
+    files, dl_files, dl_deleted = [], [], []
     n_add = n_del = 0
-    for status, path in ((s[0], p) for s, p in files):
+    for status, path in ((s[0], p) for s, p in raw):
         jp, cls = _STATUS_JP.get(status, ('変更', 'tagM'))
         # 確認用データ ZIP 用に提出後の内容を控える (削除ファイルは一覧のみ)
         if status == 'D':
@@ -491,38 +511,74 @@ def build_html(meta, base_ref, head_ref, workrepo):
             if data is not None:
                 dl_files.append((path, data))
         note = notes.get(path)
-        anchor = 'f-%s' % path.replace('/', '-').replace('.', '-')
         ext = ('.' + path.rsplit('.', 1)[-1].lower()) if '.' in path else ''
         old = [] if status == 'A' else _file_lines(workrepo, mb, path)
         new = [] if status == 'D' else _file_lines(workrepo, head_ref, path)
+        entry = {'path': path, 'status': status, 'status_jp': jp,
+                 'tag_cls': cls, 'note': note, 'kind': 'diff',
+                 'adds': 0, 'dels': 0, 'changed': 0, 'rows': None}
 
         if ext in BINARY_EXTS or old is None or new is None:
+            entry['kind'] = 'binary'
+            files.append(entry)
+            continue
+
+        rows = side_by_side(old, new)
+        entry['changed'] = sum(1 for r in rows if r[0] != 'same')
+        entry['adds'] = sum(1 for r in rows
+                            if r[0] in ('add', 'change') and r[3])
+        entry['dels'] = sum(1 for r in rows
+                            if r[0] in ('del', 'change') and r[1])
+        n_add += entry['adds']
+        n_del += entry['dels']
+        if entry['changed'] > MAX_CHANGED_LINES:
+            entry['kind'] = 'big'
+        else:
+            entry['rows'] = collapse_context(rows)
+        files.append(entry)
+
+    return {'number': meta['number'], 'title': meta['title'],
+            'author': meta.get('author', '?'), 'beta': meta.get('beta'),
+            'has_notes': bool(notes), 'n_add': n_add, 'n_del': n_del,
+            'files': files, 'dl_files': dl_files,
+            'dl_deleted': dl_deleted, 'base_ref': base_ref}
+
+
+def build_html(meta, base_ref, head_ref, workrepo):
+    """差分ビューワの HTML 全体を組み立てて文字列で返す.
+
+    meta: dict(number, title, author, beta=None)
+    base_ref/head_ref: 比較する 2 つの git リファレンス
+    """
+    return render_html(collect_model(meta, base_ref, head_ref, workrepo),
+                       workrepo)
+
+
+def render_html(model, workrepo):
+    """collect_model のモデルから差分ビューワ HTML を組み立てる."""
+    sums, sections = [], []
+    for e in model['files']:
+        path, note = e['path'], e['note']
+        jp, cls = e['status_jp'], e['tag_cls']
+        anchor = 'f-%s' % path.replace('/', '-').replace('.', '-')
+        if e['kind'] == 'binary':
             sums.append((jp, cls, path, anchor, '(表示対象外)', note))
             sections.append(_file_section(
                 anchor, path, '',
                 '<p class="note">画像・バイナリ形式のため差分表示の'
                 '対象外です。</p>', note))
             continue
-
-        rows = side_by_side(old, new)
-        changed = sum(1 for r in rows if r[0] != 'same')
-        adds = sum(1 for r in rows if r[0] in ('add', 'change') and r[3])
-        dels = sum(1 for r in rows if r[0] in ('del', 'change') and r[1])
-        n_add += adds
-        n_del += dels
         stat = ('<span class="stat"><b class="add">+%d</b> / '
-                '<b class="del">-%d</b></span>' % (adds, dels))
+                '<b class="del">-%d</b></span>' % (e['adds'], e['dels']))
         sums.append((jp, cls, path, anchor, stat, note))
-
-        if changed > MAX_CHANGED_LINES:
+        if e['kind'] == 'big':
             sections.append(_file_section(
                 anchor, path, stat,
                 '<p class="note">%d 行の変更があります。大きすぎるため'
-                '全体は省略しました。</p>' % changed, note))
+                '全体は省略しました。</p>' % e['changed'], note))
             continue
-
         body = []
-        for kind, lno, lt, rno, rt in collapse_context(rows):
+        for kind, lno, lt, rno, rt in e['rows']:
             if kind == 'gap':
                 body.append('<tr class="gap"><td colspan="4">… 変更のない '
                             '%d 行 …</td></tr>' % lt)
@@ -550,11 +606,10 @@ def build_html(meta, base_ref, head_ref, workrepo):
         for jp, cls, path, anchor, stat, note in sums)
     notes_caveat = ('<br>※ 各ファイルの青枠の説明は提出時に自動生成された'
                     'ものです (その後の自動修正・統合は反映されません)。'
-                    if notes else '')
-    dl_html, dl_modal = _download_link(meta, dl_files, dl_deleted,
-                                       workrepo, base_ref)
-    beta = ('・ β版 %s ' % html.escape(meta['beta'])) if meta.get('beta') \
-        else ''
+                    if model['has_notes'] else '')
+    dl_html, dl_modal = _download_link(model, workrepo)
+    beta = ('・ β版 %s ' % html.escape(model['beta'])) \
+        if model.get('beta') else ''
     return (
         '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">'
         '<title>#%d の差分</title><style>%s</style></head><body>'
@@ -576,17 +631,19 @@ def build_html(meta, base_ref, head_ref, workrepo):
         '= 削除された行。%s</p></div>'
         '<h2 class="sec-h">&lt;2&gt; ファイル比較</h2>%s</div>'
         '<a class="top" href="#">▲ 先頭へ</a>%s</body></html>'
-        % (meta['number'], _CSS, meta['number'],
-           html.escape(meta['title']), html.escape(meta['author']), beta,
-           n_add, n_del, dl_html, len(files), sum_rows, notes_caveat,
+        % (model['number'], _CSS, model['number'],
+           html.escape(model['title']), html.escape(model['author']),
+           beta, model['n_add'], model['n_del'], dl_html,
+           len(model['files']), sum_rows, notes_caveat,
            ''.join(sections), dl_modal))
 
 
-def write_diff_html(pr, config=None, workrepo=None, beta_tag=None):
-    """提出 pr の差分ビューワ HTML を一時フォルダに書き出す.
+def build_model(pr, config=None, workrepo=None, beta_tag=None):
+    """提出 pr の差分モデルを取得する (アプリ内ダイアログ用).
 
     pr: reviews.list_pending の要素 (number/title/author/branch を使用)。
-    戻り値: HTML ファイルのパス (ブラウザで開くのは呼び出し側)。
+    戻り値: (model, workrepo)。workrepo は確認用データ ZIP の構築と
+    「ブラウザで開く」(render_html) に使い回す。
     """
     if workrepo is None:
         workrepo = ensure_work_repo(paths.repo_slug(config),
@@ -603,13 +660,28 @@ def write_diff_html(pr, config=None, workrepo=None, beta_tag=None):
         log.warning('PR #%s の本文取得に失敗 (説明なしで表示します)',
                     pr['number'])
         body = ''
-    text = build_html(
-        {'number': pr['number'], 'title': pr['title'],
-         'author': pr.get('author', '?'), 'beta': beta_tag,
-         'notes': parse_file_notes(body)},
-        'origin/%s' % base, 'origin/%s' % pr['branch'], workrepo)
+    meta = {'number': pr['number'], 'title': pr['title'],
+            'author': pr.get('author', '?'), 'beta': beta_tag,
+            'notes': parse_file_notes(body)}
+    return (collect_model(meta, 'origin/%s' % base,
+                          'origin/%s' % pr['branch'], workrepo),
+            workrepo)
+
+
+def write_html_from_model(model, workrepo):
+    """モデルから HTML を一時フォルダへ書き出す (「ブラウザで開く」用)."""
     out = os.path.join(tempfile.gettempdir(),
-                       'mgtkit_diff_%d.html' % pr['number'])
+                       'mgtkit_diff_%d.html' % model['number'])
     with open(out, 'w', encoding='utf-8') as f:
-        f.write(text)
+        f.write(render_html(model, workrepo))
     return out
+
+
+def write_diff_html(pr, config=None, workrepo=None, beta_tag=None):
+    """提出 pr の差分ビューワ HTML を一時フォルダに書き出す.
+
+    pr: reviews.list_pending の要素 (number/title/author/branch を使用)。
+    戻り値: HTML ファイルのパス (ブラウザで開くのは呼び出し側)。
+    """
+    model, workrepo = build_model(pr, config, workrepo, beta_tag)
+    return write_html_from_model(model, workrepo)

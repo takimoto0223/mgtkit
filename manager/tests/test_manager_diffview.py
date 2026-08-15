@@ -245,17 +245,21 @@ class TestBuildHtml:
 class TestWriteDiffHtml:
     @pytest.fixture()
     def env(self, tmp_path, monkeypatch):
-        """git/gh をモックし、build_html へ渡った meta を記録する."""
+        """git/gh をモックし、collect_model へ渡った meta を記録する."""
         calls = {'git': [], 'meta': None}
         monkeypatch.setattr(diffview, 'run_git',
                             lambda args, cwd=None, timeout=120:
                             calls['git'].append(args) or '')
 
-        def fake_build(meta, b, h, w):
+        def fake_collect(meta, b, h, w):
             calls['meta'] = meta
+            return {'number': meta['number']}
+
+        def fake_render(model, w):
             return '<html>ok</html>'
 
-        monkeypatch.setattr(diffview, 'build_html', fake_build)
+        monkeypatch.setattr(diffview, 'collect_model', fake_collect)
+        monkeypatch.setattr(diffview, 'render_html', fake_render)
         monkeypatch.setattr(diffview.tempfile, 'gettempdir',
                             lambda: str(tmp_path))
         monkeypatch.setattr(
@@ -287,3 +291,35 @@ class TestWriteDiffHtml:
         monkeypatch.setattr(diffview.ghcli, 'run_gh', boom)
         diffview.write_diff_html(self.PR, {'repo': 'o/r'}, workrepo='wr')
         assert env['meta']['notes'] == {}
+
+
+class TestDiffDialogItems:
+    """アプリ内ダイアログ (diffdialog) が同じモデルから組み立つこと.
+
+    flet は CI の依存に含めないため、未導入環境では自動スキップされる
+    (test_manager_ui.py と同じ方針)。
+    """
+
+    META = {'number': 33, 'title': '組立断面の対応', 'author': 'fujitaka',
+            'beta': 'v1.1-beta.2'}
+
+    def test_items_and_offsets(self, diff_repo):
+        pytest.importorskip('flet')
+        from manager import diffdialog
+        model = diffview.collect_model(self.META, 'main', 'feature',
+                                       diff_repo)
+        items, offsets = diffdialog.build_items(model, lambda p: None)
+        # 全ファイルにジャンプ先があり、並び順どおり単調増加
+        assert set(offsets) == {e['path'] for e in model['files']}
+        vals = [offsets[e['path']] for e in model['files']]
+        assert vals == sorted(vals)
+        # 一覧 + 見出し + ファイルごとの本体で、ファイル数より十分多い
+        assert len(items) > len(model['files']) * 2
+
+    def test_model_matches_html_numbers(self, diff_repo):
+        # ダイアログとブラウザ (HTML) が同じ数字を出すこと
+        model = diffview.collect_model(self.META, 'main', 'feature',
+                                       diff_repo)
+        page = diffview.render_html(model, diff_repo)
+        assert ('+%d' % model['n_add']) in page
+        assert ('-%d' % model['n_del']) in page
