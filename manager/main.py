@@ -746,13 +746,12 @@ def main(page: ft.Page):
                     content=ft.Text('確認中', size=10.5,
                                     weight=ft.FontWeight.BOLD,
                                     color='#92400e')),
+                # 確認中の行にはダウンロードの印を置かない (無効表示で
+                # あっても「β版を保存できる」誤解につながるため =
+                # 管理者指示。β版のデータは差分ページの注意付き導線のみ)
                 ft.Text('%s 提出' % history.fmt_date(c['start'],
                                                      with_year=True),
                         size=11, color='#475569'),
-                ft.OutlinedButton('ZIP を保存', icon=ft.Icons.DOWNLOAD,
-                                  disabled=True,
-                                  tooltip='正式版として公開されると'
-                                          '保存できます'),
             ], '#fafafa', on_click=(lambda _, c=c:
                                     open_detail('chip', c))))
         return rows
