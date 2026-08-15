@@ -278,13 +278,20 @@ def generate_merge(conflict_files, policy_instruction):
         return None
 
 
-def generate_pr_body(diff_summary, diff_text, base_version, notes=''):
+def generate_pr_body(diff_summary, diff_text, base_version, notes='',
+                     limitations=''):
     """diff から PR 本文 (更新点のまとめ) を生成する.
 
     「## 更新内容」「## ご利用にあたっての制限事項」の 2 節は、正式リリース時に
     reviews.release_notes_from_pr がそのままリリースノートへ転載する様式
     (リリース時は API を使わない)。節名を変えるときは両方を揃えること。
+    limitations: 提出者が手書きした制限事項。生成結果の制限事項の節へ
+    必ず反映させる (様式・submit.fallback_pr_body と対)。
     """
+    if limitations:
+        notes = ((notes + '\n\n') if notes else '') + (
+            '# 提出者が記入した制限事項\n(「## ご利用にあたっての制限事項」に'
+            '必ずそのまま含めること)\n%s' % limitations)
     prompt = (
         'あなたは構造設計ツール mgtkit のリポジトリ管理を手伝っています。\n'
         'メンバーが %s を基点に改造したファイル一式を提出しました。\n'

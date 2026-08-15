@@ -857,9 +857,30 @@ def main(page: ft.Page):
 
     t4_status = status_text()
     t4_result = ft.Text('', size=14, selectable=True)
+    # 手書きの人でも様式 (更新内容 / 制限事項) が揃うよう、項目名の下に
+    # 薄いグレーの例 (hint) を常時表示する。空欄なら従来どおり自動生成。
+    # ラベルは TextField に持たせない (未フォーカス時に hint が隠れるため)
+    _t4_hint = ft.TextStyle(color='#9ca3af', size=13)
     t4_commit_msg = ft.TextField(
-        label='変更内容のメモ (空欄なら自動で作成されます)',
+        hint_text='例:\n・二丁溝形鋼(2C)の断面算定に対応\n'
+                  '・計算書の文章出力を改善',
+        hint_style=_t4_hint, hint_max_lines=3,
+        multiline=True, min_lines=3, max_lines=5)
+    t4_limits = ft.TextField(
+        hint_text='例: 二丁山形鋼は等辺のみ対応です '
+                  '(不等辺はエラーで停止します)',
+        hint_style=_t4_hint, hint_max_lines=2,
         multiline=True, min_lines=2, max_lines=4)
+
+    def _t4_field(caption, note, field):
+        """様式の 1 項目 (項目名 + 補足 + 入力欄)."""
+        return ft.Column([
+            ft.Row([ft.Text(caption, size=13.5, weight=ft.FontWeight.BOLD,
+                            color='#374151'),
+                    ft.Text(note, size=12, color='#6b7280')],
+                   spacing=8, vertical_alignment=ft.CrossAxisAlignment.END),
+            field,
+        ], spacing=6)
     t4_submit_btn = ft.FilledButton('ZIP を選んで提出', icon=ft.Icons.UPLOAD,
                                     bgcolor=NAVY, color='#ffffff')
 
@@ -873,13 +894,15 @@ def main(page: ft.Page):
                 result = submit.finalize_submission(
                     prep, deletions, t4_commit_msg.value or '',
                     config, on_progress=_submit_progress,
-                    existing_branch=existing_branch)
+                    existing_branch=existing_branch,
+                    limitations=t4_limits.value or '')
                 t4_status.value = ''
                 t4_result.value = (
                     '提出しました。検証を通過するとβ版として発行され、'
                     '「β版の確認と承認」タブに表示されます。\n'
                     '提出内容: %s' % result['pr_url'])
                 t4_commit_msg.value = ''
+                t4_limits.value = ''
             except (submit.SubmitError, ghcli.GhError, GitError) as e:
                 t4_status.value = str(e)
             except Exception as e:
@@ -1069,7 +1092,9 @@ def main(page: ft.Page):
                 '計算結果 (mgtkit_out)・PDF や実行ファイル (.bat など) '
                 'コード以外のファイルは自動で除外されます。',
                 size=12, color='#555555'),
-        t4_commit_msg,
+        _t4_field('更新内容', '空欄なら自動で作成されます', t4_commit_msg),
+        _t4_field('ご利用にあたっての制限事項',
+                  '使えない条件など。なければ空欄', t4_limits),
         t4_submit_btn,
         t4_status,
         t4_result,

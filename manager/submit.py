@@ -354,14 +354,30 @@ def _diff_summary(changes, intentional_deletions):
     return '\n'.join(lines)
 
 
+def fallback_pr_body(update_text, limitations, base_version, summary):
+    """Claude なしでも様式 (更新内容 / 制限事項) を満たす PR 本文.
+
+    reviews.release_notes_from_pr がこの様式から正式版のリリースノートを
+    機械抽出するため、手書きの提出でも節の構成を自動生成と揃える。
+    """
+    update = (update_text or '').strip() or (
+        'マネージャー経由の提出です (基点: %s)。' % base_version)
+    return ('## 更新内容\n\n%s\n\n'
+            '## ご利用にあたっての制限事項\n\n%s\n\n'
+            '## 変更ファイルの説明\n\n```\n%s\n```\n'
+            % (update, (limitations or '').strip() or '- なし', summary))
+
+
 def finalize_submission(prep, intentional_deletions, commit_message='',
-                        config=None, on_progress=None, existing_branch=None):
+                        config=None, on_progress=None, existing_branch=None,
+                        limitations=''):
     """準備済みの提出を確定する.
 
     intentional_deletions: 「意図的な削除」とユーザーが確認したファイル。
     それ以外の削除候補 (入れ忘れ) は基点の内容を維持する。
     existing_branch: 指定すると新規 PR を作らず、既存の提出 (同一 PR) に
     修正版として積む (差し戻し後の再提出フロー)。
+    limitations: 提出者が手書きした「ご利用にあたっての制限事項」(任意)。
     戻り値: dict(pr_url, branch, commit_message)
     """
     def progress(msg):
@@ -426,11 +442,11 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
             notes = ('# 提出時の警告 (承認時に確認)\n- '
                      + '\n- '.join(prep['safety']['warnings']))
         body = claude_helper.generate_pr_body(
-            summary, diff_text, prep['base_version'], notes)
+            summary, diff_text, prep['base_version'], notes,
+            limitations=limitations)
         if not body:
-            body = ('## 更新内容\n\nマネージャー経由の提出です'
-                    ' (基点: %s)。\n\n```\n%s\n```\n' %
-                    (prep['base_version'], summary))
+            body = fallback_pr_body(message, limitations,
+                                    prep['base_version'], summary)
         if notes:
             body += '\n\n' + notes
         title = message.splitlines()[0][:70]

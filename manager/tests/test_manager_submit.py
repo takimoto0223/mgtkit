@@ -373,3 +373,37 @@ class TestClaudeHelperFallback:
         assert claude_helper._client() is None
         assert claude_helper.generate_commit_message('a', 'b') is None
         assert claude_helper.generate_pr_body('a', 'b', 'v1.0') is None
+
+
+class TestFallbackPrBody:
+    """手書き提出 (Claude なし) でも PR 本文が様式を満たすこと."""
+
+    def test_handwritten_becomes_sections(self):
+        body = submit.fallback_pr_body(
+            '2C 断面の対応\n\n- 断面算定を追加', '等辺のみ対応です',
+            'v1.1', '追加: s_check.py')
+        assert '## 更新内容\n\n2C 断面の対応' in body
+        assert ('## ご利用にあたっての制限事項\n\n等辺のみ対応です'
+                in body)
+        assert '追加: s_check.py' in body
+
+    def test_empty_inputs_use_defaults(self):
+        body = submit.fallback_pr_body('', '', 'v1.1', '追加: a.py')
+        assert 'マネージャー経由の提出です (基点: v1.1)' in body
+        assert '## ご利用にあたっての制限事項\n\n- なし' in body
+
+    def test_release_notes_extract_from_fallback_body(self):
+        # 手書きの様式からもリリースノートが機械抽出できる (一気通貫)
+        from manager import reviews
+        body = submit.fallback_pr_body(
+            '2C 断面の対応', '等辺のみ対応です', 'v1.1', '追加: a.py')
+        notes = reviews.release_notes_from_pr(body, 'v1.2')
+        assert '2C 断面の対応' in notes
+        assert '等辺のみ対応です' in notes
+        assert '追加: a.py' not in notes  # ファイル一覧は載せない
+
+    def test_release_notes_omit_empty_limitations(self):
+        from manager import reviews
+        body = submit.fallback_pr_body('改善しました', '', 'v1.1', 'x')
+        notes = reviews.release_notes_from_pr(body, 'v1.2')
+        assert '制限事項' not in notes
