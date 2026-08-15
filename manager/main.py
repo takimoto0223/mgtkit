@@ -1123,9 +1123,10 @@ def main(page: ft.Page):
                 '計算結果 (mgtkit_out)・PDF や実行ファイル (.bat など) '
                 'コード以外のファイルは自動で除外されます。',
                 size=12, color='#555555'),
-        _t4_field('更新内容', '空欄なら自動で作成されます', t4_commit_msg),
+        _t4_field('更新内容', '空欄でも提出できます (扱いは提出時に選択)',
+                  t4_commit_msg),
         _t4_field('ご利用にあたっての制限事項',
-                  '使えない条件など。空欄なら自動で作成されます', t4_limits),
+                  '使えない条件など。空欄でも提出できます', t4_limits),
         ft.Container(t4_submit_btn, margin=ft.Margin(0, 16, 0, 0)),
         t4_status,
         t4_result,
