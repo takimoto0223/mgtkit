@@ -230,9 +230,19 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
 
     node_x = {s['tag']: X(s['date']) for s in stables}
 
+    # 現行版バッジの置き場所 (枝と重ならない側): 上 → 下 → ノードの右
+    def _cur_busy(lane_test):
+        return any((c['base_tag'] == current_tag
+                    or c['target_tag'] == current_tag)
+                   and lane_test(c['lane']) for c in chips)
+    badge_side = ('top' if not _cur_busy(lambda ln: ln >= 1) else
+                  'bottom' if not _cur_busy(lambda ln: ln < 0) else
+                  'right')
+
     # きょうの線: 基本は「きょう」の実位置。ただし確認中の帯に
-    # 「名前 #番号」が入るだけの幅が足りなければ右へ広げる
-    # (現行版 → きょう線のマージンは可変でよい = 管理者指示)
+    # 「名前 #番号」が入るだけの幅と、きょう線の手前のマージンが
+    # 足りなければ右へ広げる (可変でよい = 管理者指示)
+    TODAY_GAP = 16          # 帯・バッジ と きょう線の間に必ず取る間隔
     today_x = max(X(today), X(stables[-1]['date']))
     for c in chips:
         if not c['pending']:
@@ -241,7 +251,9 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         left = max(X(c['start']),
                    (base_x + 30) if base_x is not None else X0)
         today_x = max(today_x, left + _est_w(
-            '%s #%s' % (c['author'], c['number'])) + 30)
+            '%s #%s' % (c['author'], c['number'])) + 24 + TODAY_GAP)
+    if badge_side == 'right' and current_tag in node_x:
+        today_x = max(today_x, node_x[current_tag] + 118 + TODAY_GAP)
     width = today_x + RIGHT_PAD
     upper_bases = {c['base_tag'] for c in chips if c['lane'] == 1}
     depth = max([-c['lane'] for c in chips if c['lane'] < 0] or [1])
@@ -289,16 +301,15 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         base_x = node_x.get(c['base_tag'])
         if base_x is None:
             continue
+        # 帯はどれも「名前 #番号 + 同じマージン」のコンパクトな箱に
+        # そろえ、合流 (きょう) 側に寄せる。期間は枝の線の長さが表す
         min_w = _est_w('%s #%s' % (c['author'], c['number'])) + 24
         if c['pending']:
-            chip_right = today_x - 3
-            chip_left = max(X(c['start']), base_x + 30)
+            chip_right = today_x - TODAY_GAP
         else:
             chip_right = node_x[c['target_tag']] - MERGE_SPAN
-            # ラベルが入る幅を優先しつつ、基点ノードより左には出さない
-            chip_left = max(min(X(c['start']), chip_right - min_w),
-                            base_x + 30)
-            chip_right = max(chip_right, chip_left + 12)
+        chip_left = max(chip_right - min_w, base_x + 30)
+        chip_right = max(chip_right, chip_left + 12)
         shapes += _derivation(base_x, chip_left - 9, c['lane'], color)
         if not c['pending']:
             big = c['target_tag'] == current_tag
@@ -317,13 +328,9 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
                                     paint=_stroke('#f59e0b', 6)))
             # バッジは枝と重ならない側に置く: 上が空いていれば上、
             # 次に下、両方ふさがっていればノードの右 (本線の上)
-            def _busy(lane_test):
-                return any((c['base_tag'] == s['tag']
-                            or c['target_tag'] == s['tag'])
-                           and lane_test(c['lane']) for c in chips)
-            if not _busy(lambda ln: ln >= 1):
+            if badge_side == 'top':
                 bx0, by0 = x - 48, RAIL_Y - 72
-            elif not _busy(lambda ln: ln < 0):
+            elif badge_side == 'bottom':
                 bx0, by0 = x - 48, RAIL_Y + 48
             else:
                 bx0, by0 = x + 22, RAIL_Y - 12
