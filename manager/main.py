@@ -54,6 +54,29 @@ def main(page: ft.Page):
     def run_bg(fn):
         threading.Thread(target=fn, daemon=True).start()
 
+    # 押した瞬間に必ず画面を反応させるための共通部品。
+    # 人は反応がないと何度もクリックするため、ボタンを押したら
+    # 「無効化 + 進行中の文言」を先に表示し、時間のかかる処理は
+    # すべて run_bg で裏に回す (このファイル全体の方針)。
+
+    def dialog_busy(btn, note, msg):
+        """ダイアログの確定ボタンを押した瞬間の反応 (二度押し防止つき).
+
+        btn を無効化し、note (エラー表示欄) に灰色で進行中の文言を出す。
+        失敗したら dialog_error で押せる状態に戻す。
+        """
+        btn.disabled = True
+        note.color = '#555555'
+        note.value = msg
+        page.update()
+
+    def dialog_error(btn, note, msg):
+        """ダイアログ内の失敗表示。ボタンを押せる状態に戻す."""
+        btn.disabled = False
+        note.color = '#b91c1c'
+        note.value = msg
+        page.update()
+
     def tab_label(text):
         """タブ名 + 件数バッジ (黄色い丸に数字)。バッジ Container を返す."""
         badge = ft.Container(
@@ -892,6 +915,10 @@ def main(page: ft.Page):
         page.update()
 
     def _do_finalize(prep, deletions, existing_branch=None, use_ai=False):
+        # ダイアログを閉じた直後に反応を見せる (裏の処理は数十秒かかる)
+        t4_status.value = '提出しています...'
+        page.update()
+
         def work():
             try:
                 result = submit.finalize_submission(
@@ -981,11 +1008,18 @@ def main(page: ft.Page):
                                  color='#555555'))
 
         def close(_):
+            # 先にダイアログを閉じて反応を見せ、作業ファイルの掃除は裏で
             page.pop_dialog()
-            submit.cleanup(prep)
             t4_submit_btn.disabled = False
             t4_status.value = '提出を取り消しました。'
             page.update()
+
+            def tidy():
+                try:
+                    submit.cleanup(prep)
+                except Exception:
+                    log.exception('提出の後片付けに失敗しました')
+            run_bg(tidy)
 
         def proceed(_):
             page.pop_dialog()
@@ -1050,8 +1084,10 @@ def main(page: ft.Page):
     t4_pr_list = ft.Column([], spacing=8)
     t4_fix_status = status_text()
 
-    def on_autofix(pr):
+    def on_autofix(pr, btn):
         def handler(_):
+            # 押した瞬間に反応 (二度押しで修正ループが二重に走らないように)
+            btn.disabled = True
             t4_fix_status.value = '自動修正を開始します...'
             page.update()
 
@@ -1067,7 +1103,9 @@ def main(page: ft.Page):
                 except Exception as e:
                     log.exception('autofix failed')
                     t4_fix_status.value = '自動修正に失敗しました: %s' % e
-                page.update()
+                finally:
+                    btn.disabled = False
+                    page.update()
             run_bg(work)
         return handler
 
@@ -1100,10 +1138,11 @@ def main(page: ft.Page):
                     ft.Text(label, size=12, color=color),
                 ], spacing=2, expand=True)]
                 if pr['status'] == 'failure':
-                    row.append(ft.FilledButton(
+                    fix_btn = ft.FilledButton(
                         '自動修正を試す', icon=ft.Icons.BUILD,
-                        on_click=on_autofix(pr),
-                        bgcolor=AMBER, color='#ffffff'))
+                        bgcolor=AMBER, color='#ffffff')
+                    fix_btn.on_click = on_autofix(pr, fix_btn)
+                    row.append(fix_btn)
                 t4_pr_list.controls.append(ft.Container(
                     bgcolor='#f5f7fa', border_radius=6, padding=12,
                     content=ft.Row(row)))
@@ -1148,8 +1187,10 @@ def main(page: ft.Page):
         t5_status.value = msg
         page.update()
 
-    def try_beta(release):
+    def try_beta(pr, release):
         def handler(_):
+            # 押した瞬間に反応 (二度押しで二重に取得・起動しないように)
+            restore = _freeze_card(pr['number'])
             t5_status.value = '%s を準備しています...' % release['tag']
             page.update()
 
@@ -1174,7 +1215,9 @@ def main(page: ft.Page):
                         Exception) as e:
                     log.exception('β版の起動に失敗しました')
                     t5_status.value = str(e) or 'β版の起動に失敗しました。'
-                page.update()
+                finally:
+                    restore()
+                    page.update()
             run_bg(work)
         return handler
 
@@ -1185,6 +1228,8 @@ def main(page: ft.Page):
         err = ft.Text('', size=12, color='#b91c1c')
 
         def save(_):
+            dialog_busy(save_btn, err, '保存しています...')
+
             def work():
                 try:
                     feedback.update_feedback(fb['comment_id'], fb['tag'],
@@ -1194,23 +1239,25 @@ def main(page: ft.Page):
                     page.update()
                     on_refresh_reviews(None)
                 except (feedback.FeedbackError, ghcli.GhError) as e:
-                    err.value = str(e)
-                    page.update()
+                    dialog_error(save_btn, err, str(e))
             run_bg(work)
 
+        save_btn = ft.FilledButton('保存', on_click=save,
+                                   bgcolor=NAVY, color='#ffffff')
         page.show_dialog(ft.AlertDialog(
             modal=True, title=ft.Text('フィードバックの編集'),
             content=ft.Column([field, err], tight=True, width=560),
             actions=[ft.TextButton('キャンセル',
                                    on_click=lambda _: page.pop_dialog()),
-                     ft.FilledButton('保存', on_click=save,
-                                     bgcolor=NAVY, color='#ffffff')]))
+                     save_btn]))
 
     def _delete_feedback_dialog(fb):
         """自分のフィードバックの削除確認ダイアログ."""
         err = ft.Text('', size=12, color='#b91c1c')
 
         def do_delete(_):
+            dialog_busy(del_btn, err, '削除しています...')
+
             def work():
                 try:
                     feedback.delete_feedback(fb['comment_id'], config)
@@ -1219,10 +1266,11 @@ def main(page: ft.Page):
                     page.update()
                     on_refresh_reviews(None)
                 except (feedback.FeedbackError, ghcli.GhError) as e:
-                    err.value = str(e)
-                    page.update()
+                    dialog_error(del_btn, err, str(e))
             run_bg(work)
 
+        del_btn = ft.FilledButton('削除する', on_click=do_delete,
+                                  bgcolor='#b91c1c', color='#ffffff')
         page.show_dialog(ft.AlertDialog(
             modal=True, title=ft.Text('フィードバックの削除'),
             content=ft.Column([
@@ -1232,8 +1280,7 @@ def main(page: ft.Page):
             ], tight=True, width=560),
             actions=[ft.TextButton('キャンセル',
                                    on_click=lambda _: page.pop_dialog()),
-                     ft.FilledButton('削除する', on_click=do_delete,
-                                     bgcolor='#b91c1c', color='#ffffff')]))
+                     del_btn]))
 
     def on_feedback_dialog(pr, beta, me):
         """フィードバック一覧 (誰が・いつ・内容) + β版があれば投稿欄.
@@ -1304,6 +1351,8 @@ def main(page: ft.Page):
                 items += [ft.Divider(), field, err]
 
                 def send(_):
+                    dialog_busy(send_btn, err, '送信しています...')
+
                     def work():
                         try:
                             n = feedback.post_feedback(beta, field.value,
@@ -1315,13 +1364,12 @@ def main(page: ft.Page):
                             on_refresh_reviews(None)
                         except (feedback.FeedbackError,
                                 ghcli.GhError) as e:
-                            err.value = str(e)
-                            page.update()
+                            dialog_error(send_btn, err, str(e))
                     run_bg(work)
 
-                actions.append(ft.FilledButton('送信', on_click=send,
-                                               bgcolor=NAVY,
-                                               color='#ffffff'))
+                send_btn = ft.FilledButton('送信', on_click=send,
+                                           bgcolor=NAVY, color='#ffffff')
+                actions.append(send_btn)
             page.show_dialog(ft.AlertDialog(
                 modal=True,
                 title=ft.Text('#%d のフィードバック' % pr['number']),
@@ -1338,6 +1386,8 @@ def main(page: ft.Page):
             err = ft.Text('', size=12, color='#b91c1c')
 
             def do_withdraw(_):
+                dialog_busy(wd_btn, err, '取り下げの処理をしています...')
+
                 def work():
                     try:
                         reviews.withdraw(pr['number'], reason.value, config)
@@ -1347,10 +1397,11 @@ def main(page: ft.Page):
                         page.update()
                         on_refresh_reviews(None)
                     except (reviews.ReviewError, ghcli.GhError) as e:
-                        err.value = str(e)
-                        page.update()
+                        dialog_error(wd_btn, err, str(e))
                 run_bg(work)
 
+            wd_btn = ft.FilledButton('取り下げる', on_click=do_withdraw,
+                                     bgcolor='#b91c1c', color='#ffffff')
             page.show_dialog(ft.AlertDialog(
                 modal=True, title=ft.Text('#%d を取り下げ' % pr['number']),
                 content=ft.Column([
@@ -1360,9 +1411,7 @@ def main(page: ft.Page):
                 ], tight=True, width=560),
                 actions=[ft.TextButton('キャンセル',
                                        on_click=lambda _: page.pop_dialog()),
-                         ft.FilledButton('取り下げる', on_click=do_withdraw,
-                                         bgcolor='#b91c1c',
-                                         color='#ffffff')]))
+                         wd_btn]))
         return handler
 
     def on_approve(pr):
@@ -1475,6 +1524,24 @@ def main(page: ft.Page):
         for b in _card_buttons.get(pr_number, []):
             b.disabled = True
 
+    def _freeze_card(pr_number):
+        """カードの操作ボタンを一時的に無効化する (二度押し防止).
+
+        押した瞬間に呼び、処理が終わったら戻り値の関数で元の状態に戻す
+        (統合待ちカードの「元から無効のボタン」を誤って有効化しないよう、
+        個々の無効状態を覚えて復元する)。一覧を描き直す流れではボタンごと
+        作り直されるため、復元を呼ばなくてもよい。
+        """
+        btns = list(_card_buttons.get(pr_number, []))
+        states = [b.disabled for b in btns]
+        for b in btns:
+            b.disabled = True
+
+        def restore():
+            for b, d in zip(btns, states):
+                b.disabled = d
+        return restore
+
     def _play_launch(pr_number, done=None):
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
         弧を描いて「起動」タブへ → ✨ と弾けて消える."""
@@ -1490,10 +1557,12 @@ def main(page: ft.Page):
     def on_cancel_review(pr):
         """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
         def handler(_):
+            # 押した瞬間に反応 (送信が終わるまでカードの二度押しを防ぐ)
+            restore = _freeze_card(pr['number'])
+            _t5_progress('#%d の取り消しを送信しています...' % pr['number'])
+
             def work():
                 try:
-                    _t5_progress('#%d の取り消しを送信しています...'
-                                 % pr['number'])
                     reviews.cancel_my_review(pr['number'], config)
                     # 却下確定が解けたときのため、非表示・自動畳みの記録を
                     # 掃除する (再び確定したらまた自動で畳める)
@@ -1503,28 +1572,39 @@ def main(page: ft.Page):
                                        % pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
                     t5_status.value = str(e)
+                    # 失敗時は表示内容が変わらず一覧が作り直されないため、
+                    # ここで戻さないとボタンが無効のまま残る
+                    restore()
                 page.update()
                 on_refresh_reviews(None)
             run_bg(work)
         return handler
 
+    def _rerender_local(status):
+        """畳む・戻すなどこの PC 内だけの操作の即時反映.
+
+        手元のスナップショットで一覧を描き直すだけで、ネットワークへは
+        取りに行かない (取得を挟むと表示の反応が数秒遅れるため)。
+        """
+        data = reviewcache.get()
+        if data is None:
+            on_refresh_reviews(None)
+            return
+        _render_reviews(data, stale=True, animate=False, status=status)
+
     def on_hide_pr(pr):
         """却下確定した提出を一覧の下に畳む (自分の画面のみ)."""
         def handler(_):
             localstate.hide_pr(pr['number'], config)
-            t5_status.value = ('#%d を一覧の下に畳みました (自分の画面のみ。'
-                               '「一覧に戻す」で戻せます)。' % pr['number'])
-            page.update()
-            on_refresh_reviews(None)
+            _rerender_local('#%d を一覧の下に畳みました (自分の画面のみ。'
+                            '「一覧に戻す」で戻せます)。' % pr['number'])
         return handler
 
     def on_unhide_pr(pr):
         """畳んだ提出を一覧に戻す."""
         def handler(_):
             localstate.unhide_pr(pr['number'], config)
-            t5_status.value = '#%d を一覧に戻しました。' % pr['number']
-            page.update()
-            on_refresh_reviews(None)
+            _rerender_local('#%d を一覧に戻しました。' % pr['number'])
         return handler
 
     def on_reject(pr):
@@ -1602,6 +1682,8 @@ def main(page: ft.Page):
     def on_show_diff(pr, beta=None):
         """「差分」クリックで差分ビューワ (HTML) を既定ブラウザで開く."""
         def handler(_):
+            # 押した瞬間に反応 (二度押しで二重に生成・表示しないように)
+            restore = _freeze_card(pr['number'])
             _t5_progress('差分ビューワを準備しています...')
 
             def work():
@@ -1617,12 +1699,17 @@ def main(page: ft.Page):
                 except Exception as e:
                     log.exception('diff viewer failed')
                     t5_status.value = '差分を開けませんでした: %s' % e
-                page.update()
+                finally:
+                    restore()
+                    page.update()
             run_bg(work)
         return handler
 
     def on_resolve_conflict(pr):
         def handler(_):
+            # 押した瞬間に反応 (調査中の二度押しを防ぐ。ダイアログ表示
+            # またはエラー表示の時点でボタンを元に戻す)
+            restore = _freeze_card(pr['number'])
             _t5_progress('最新版との衝突を調べています...')
 
             def work():
@@ -1632,6 +1719,7 @@ def main(page: ft.Page):
                 except (conflicts.ConflictError, GitError,
                         ghcli.GhError) as e:
                     t5_status.value = str(e)
+                    restore()
                     page.update()
                     return
 
@@ -1645,14 +1733,25 @@ def main(page: ft.Page):
                 ]))
 
                 def cancel(_):
-                    conflicts.abort(analysis)
+                    # 先にダイアログを閉じて反応を見せ、後片付けは裏で行う
                     page.pop_dialog()
-                    t5_status.value = '統合を取り消しました。'
-                    page.update()
+                    _t5_progress('統合を取り消しています...')
+
+                    def undo():
+                        try:
+                            conflicts.abort(analysis)
+                            t5_status.value = '統合を取り消しました。'
+                        except Exception as e:
+                            log.exception('conflict abort failed')
+                            t5_status.value = (str(e)
+                                               or '統合の取り消しに'
+                                                  '失敗しました。')
+                        page.update()
+                    run_bg(undo)
 
                 def execute(_):
                     page.pop_dialog()
-                    page.update()
+                    _t5_progress('最新版との統合を進めています...')
 
                     def run_resolve():
                         try:
@@ -1690,6 +1789,7 @@ def main(page: ft.Page):
                         ft.FilledButton('統合を実行', on_click=execute,
                                         bgcolor=NAVY, color='#ffffff'),
                     ]))
+                restore()
                 page.update()
             run_bg(work)
         return handler
@@ -1799,7 +1899,7 @@ def main(page: ft.Page):
             buttons.append(ft.FilledButton(
                 'β版 %s を試す' % beta['tag'], icon=ft.Icons.SCIENCE,
                 disabled=locked,
-                on_click=try_beta(beta),
+                on_click=try_beta(pr, beta),
                 bgcolor='#e5e7eb' if locked else AMBER,
                 color='#9ca3af' if locked else '#ffffff'))
         fb_all = pr.get('feedback') or []
