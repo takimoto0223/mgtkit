@@ -952,16 +952,21 @@ def main(page: ft.Page):
                          label='空欄のまま提出する (無料)'),
                 ft.Radio(value='ai',
                          label='Claude で自動作成する '
-                               '(数十円ほどの API 使用料がかかります)'),
+                               '(API 使用料が数十円かかります)'),
             ], spacing=0))
-            items.append(ft.Column([
-                ft.Text('「更新内容」が空欄です。提出の説明をどうしますか?',
-                        size=13, weight=ft.FontWeight.BOLD),
-                gen_rg,
-                ft.Text('空欄のまま提出すると、正式版になったときの'
-                        '更新内容の表示も空欄になります。',
-                        size=12, color='#6b7280'),
-            ], spacing=6))
+            items.append(ft.Container(
+                bgcolor='#ffffff', border_radius=8, padding=12,
+                content=ft.Column([
+                    ft.Text('「更新内容」と「制限事項」が空欄です。'
+                            'どうしますか?',
+                            size=13, weight=ft.FontWeight.BOLD),
+                    gen_rg,
+                    ft.Text('自動作成では、提出する変更内容から更新内容と'
+                            '制限事項がまとめられます。空欄のまま提出すると、'
+                            '正式版になったときの更新内容の表示も空欄に'
+                            'なります。',
+                            size=12, color='#4b5563'),
+                ], spacing=6)))
         if del_checks:
             items.append(ft.Text(
                 '基点にあったのに ZIP に無いファイルがあります。'
