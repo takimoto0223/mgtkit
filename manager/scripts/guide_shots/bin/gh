@@ -44,7 +44,7 @@ RELEASES = [
      'assets': [{'name': 'mgtkit-v1.1.zip', 'url': 'x'}]},
     {'tag_name': 'v1.0', 'name': 'v1.0', 'prerelease': False, 'draft': False,
      'body': 'v1.0 リリース。\n\n初回配布版です。',
-     'published_at': '2026-08-06T09:00:00Z',
+     'published_at': '2026-08-01T09:00:00Z',
      'assets': [{'name': 'mgtkit-v1.0.zip', 'url': 'x'}]},
 ]
 
@@ -100,8 +100,8 @@ MERGED = [
      'createdAt': '2026-08-07T10:31:00Z', 'mergedAt': '2026-08-14T07:17:33Z'},
     {'number': 15, 'title': '計算書の文章出力の改善',
      'author': {'login': 'tanaka-hanako'},
-     'headRefName': 'feature/tanaka-hanako-20260805-1',
-     'createdAt': '2026-08-05T09:00:00Z', 'mergedAt': '2026-08-06T08:50:00Z'},
+     'headRefName': 'feature/tanaka-hanako-20260804-1',
+     'createdAt': '2026-08-04T09:00:00Z', 'mergedAt': '2026-08-07T08:50:00Z'},
 ]
 
 
