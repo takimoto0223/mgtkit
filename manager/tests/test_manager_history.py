@@ -96,6 +96,13 @@ class TestBuildTimeline:
         c2 = history.person_color('sato', tl['authors'])
         assert c1 == c2 and c1 in history.PERSON_COLORS
 
+    def test_rejected_pending_is_hidden(self):
+        pend = PENDING + [{'number': 42, 'title': 'x', 'author': 'sato',
+                           'created_at': '2026-08-15',
+                           'rejected_final': True}]
+        tl = history.build_timeline(RELEASES, MERGED, pend, today=TODAY)
+        assert 42 not in [c['number'] for c in tl['chips']]
+
     def test_merged_pr_without_release_is_ignored(self):
         # リリースに対応しない取り込み (失敗など) は帯にならない
         mg = MERGED + [_merged(99, 'x', '2026-08-15', '2026-08-15')]

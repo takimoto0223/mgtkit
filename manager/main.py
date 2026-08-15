@@ -249,6 +249,31 @@ def main(page: ft.Page):
             lines.pop(0)
         return '\n'.join(lines).strip()
 
+    _window_fitted = {'done': False}
+
+    def _fit_window_to_notes(notes):
+        """起動時のウィンドウを更新内容が折り返し無しで読める大きさに.
+
+        規定値 (760x640) は固定せず、現行版のリリースノートの最長行が
+        折り返さない幅・全行が入る高さに合わせる (画面からあふれない
+        よう上限つき)。起動時に 1 回だけ。手でのリサイズは妨げない。
+        """
+        if _window_fitted['done']:
+            return
+        lines = (notes or '').splitlines()
+        if not lines:
+            return
+        widest = max(sum(13 if ord(ch) > 0x2500 else 7.2 for ch in line)
+                     for line in lines)
+        try:
+            page.window.width = int(min(1240, max(760, widest + 150)))
+            page.window.height = int(min(1000, max(640,
+                                                   360 + len(lines) * 21)))
+            _window_fitted['done'] = True
+            page.update()
+        except AttributeError:
+            pass
+
     def _refresh_current_notes(releases=None):
         """「現行版の更新内容」の常設表示を最新化する."""
         if releases is None:
@@ -267,6 +292,7 @@ def main(page: ft.Page):
             t1_notes_ai_body.value = ai or ''
             t1_notes_ai_box.visible = bool(ai)
             t1_notes_box.visible = True
+            _fit_window_to_notes(t1_notes_body.value)
         page.update()
 
     def _show_updated(release):
@@ -744,24 +770,25 @@ def main(page: ft.Page):
         def open_detail(kind, payload):
             _show_history_detail(kind, payload, tl)
 
+        # ダイアログの幅・高さはウィンドウの 8 割を目安にする (管理者
+        # 指示)。図の下に公開済みの行が少なくとも見える高さは確保する
+        if getattr(page, 'web', False):
+            # Web 表示 (UI レビュー用) はブラウザの画面サイズを使う
+            win_w = int(page.width or 760)
+            win_h = int(page.height or 640)
+        else:
+            win_w = int(getattr(page.window, 'width', None) or page.width
+                        or 760)
+            win_h = int(getattr(page.window, 'height', None) or page.height
+                        or 640)
+        col_w = max(600, int(win_w * 0.8) - 48)
         fig = historyview.build_figure(
-            tl, local_v, today, open_detail,
+            tl, local_v, today, open_detail, viewport_w=col_w - 4,
             font_family=getattr(page.theme, 'font_family', None))
         controls = []
         if fig:
             controls.append(fig['control'])
-            controls.append(ft.Text(
-                '読み方: 本線の丸 = 正式版 (大きい丸 = 現行版) · 丸から'
-                '斜めの線が刺さる帯 = その版を基に提出された更新 (色 = '
-                '提出した人、左端 = 提出した日) · 帯から本線へ上がる矢印が'
-                '届いた点 = 正式版として公開 · 点線の帯 = まだ確認中 · '
-                '同じ時期の提出は上下に分かれます',
-                size=11, color='#4b5563'))
-            controls.append(ft.Text(
-                '操作: ◀▶ か横スクロールで過去の版へ · 帯や丸にマウスを'
-                '乗せると要約 · 押すと更新内容が開きます (ZIP 保存は'
-                'その画面から)',
-                size=11, color='#4b5563'))
+            controls.append(historyview.build_legend())
         else:
             controls.append(ft.Text('過去の更新ログはまだありません。',
                                     size=13, color='#555555'))
@@ -770,8 +797,14 @@ def main(page: ft.Page):
             '直近の 30 件までを表示しています。それより前の版が必要な'
             'ときは管理者に相談してください。', size=11, color='#6b7280'))
         controls.append(dlg_status)
-        body_col = ft.Column(controls, width=640, height=440, spacing=8,
-                             scroll=ft.ScrollMode.AUTO, tight=True)
+        # ダイアログ全体 (タイトル + 内容 + ボタン ≈ 内容 + 165px) が
+        # ウィンドウの約 8 割になるよう内容の高さを決める
+        fig_h = fig['height'] if fig else 60
+        col_h = min(win_h - 170,
+                    max(int(win_h * 0.8) - 165, fig_h + 220))
+        body_col = ft.Column(controls, width=col_w, height=col_h,
+                             spacing=8, scroll=ft.ScrollMode.AUTO,
+                             tight=True)
         _history_ctx['body_col'] = body_col
         _history_ctx['fig'] = fig
         page.show_dialog(ft.AlertDialog(
