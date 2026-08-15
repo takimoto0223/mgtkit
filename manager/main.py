@@ -604,15 +604,11 @@ def main(page: ft.Page):
                         ft.Text(ai, size=12, color='#78350f',
                                 selectable=True),
                     ], spacing=6, tight=True)))
-            content.append(ft.Row([
-                ft.OutlinedButton(
-                    'ZIP を保存', icon=ft.Icons.DOWNLOAD,
-                    on_click=_download_history_zip(rel, st)),
-                st,
-            ], spacing=10))
+            # ZIP の保存ボタンは一覧の行と重複するためここには置かない
+            # (管理者指示)。案内だけ残す
             content.append(ft.Text(
-                '提出済みの計算書を当時の版で再現したいときは、この版の'
-                ' ZIP を保存して使ってください。', size=11,
+                '提出済みの計算書を当時の版で再現したいときは、一覧の'
+                'この版の「ZIP を保存」を使ってください。', size=11,
                 color='#4b5563'))
 
         _history_ctx['open'] = False    # 詳細表示中は図を開き直さない
@@ -692,7 +688,7 @@ def main(page: ft.Page):
                        ft.TextButton('詳細 (β版の差分)',
                                      on_click=open_pending_diff)]
         else:
-            est_h = 130 + _est_lines(normal) * 19
+            est_h = 90 + _est_lines(normal) * 19
             if ai:
                 est_h += 62 + _est_lines(ai) * 17
             actions = [ft.TextButton('戻る', on_click=back_to_figure),

@@ -544,6 +544,7 @@ def build_legend():
         item(g_merge, '正式版として公開'),
         item(g_wait, '確認中'),
     ], spacing=16, wrap=True, run_spacing=4)
-    hint = ft.Text('帯や丸を押すと更新内容が開きます (ZIP 保存はそこから)',
+    hint = ft.Text('帯や丸を押すと更新内容が開きます '
+                   '(ZIP 保存は下の一覧から)',
                    size=11, color='#4b5563')
     return ft.Column([legend, hint], spacing=4, tight=True)
