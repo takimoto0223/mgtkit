@@ -3,16 +3,20 @@
   mgtkit アプリマネージャー 使い方ガイド (原稿)
 
   この HTML が「アプリマネージャー使い方ガイド.pdf」の元データです。
-  図は HTML/CSS のモック描画 (画像ファイルなし) で、この 1 枚で完結します。
 
-  PDF 化の手順 (Chromium の印刷機能を使う):
-    - Playwright: page.goto(この HTML) して
-      page.pdf(format='A4', print_background=True,
-               display_header_footer=True, header_template='<div></div>',
-               footer_template=ページ番号 (pageNumber/totalPages),
-               margin=dict(top='14mm', bottom='14mm', left='0', right='0'))
-    - 内容を変えたら目次のページ番号 (.toc .p) も実際の章開始ページに
-      合わせて直すこと
+  - 図 (img/) は本物のマネージャー UI を架空データ (偽名) で起動して
+    撮影した実画面。撮り直す手順は manager/scripts/guide_shots/ を参照
+  - フォントは Noto Sans JP (フルセット TTF)。リポジトリには含めない。
+    npm の noto-sans-cjk-jp パッケージの woff を fonttools で TTF 化し、
+    この HTML と同じ場所の fonts/NotoSansJP-400.ttf / -700.ttf に置く
+    (無くても表示は代替フォントで成立する。PDF 化時は必須)
+  - PDF 化: Chromium (Playwright) で page.goto(この HTML) →
+    page.pdf(format='A4', print_background=True,
+             display_header_footer=True, header_template='<div></div>',
+             footer_template=ページ番号 (pageNumber/totalPages),
+             margin=dict(top='14mm', bottom='14mm', left='0', right='0'))
+  - 内容を変えたら目次のページ番号 (.toc .p) を実際の章開始ページに
+    合わせて直すこと
 -->
 <html lang="ja">
 <head>
@@ -22,8 +26,12 @@
   @page { size: A4; margin: 18mm 16mm; }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
+  @font-face { font-family: 'Noto Sans JP'; font-weight: 400;
+    src: url('fonts/NotoSansJP-400.ttf'); }
+  @font-face { font-family: 'Noto Sans JP'; font-weight: bold;
+    src: url('fonts/NotoSansJP-700.ttf'); }
   body {
-    font-family: 'IPAPGothic', sans-serif;
+    font-family: 'Noto Sans JP', 'IPAPGothic', sans-serif;
     color: #1f2937; font-size: 10.5pt; line-height: 1.75;
   }
   h1 { color: #1e3a5f; font-size: 17pt; margin: 0 0 2mm; }
@@ -49,6 +57,8 @@
   }
   .note { color: #555555; font-size: 9.5pt; }
   .figure { margin: 5mm 0; page-break-inside: avoid; }
+  .figure img { width: 100%; border: 1px solid #d8dee6;
+                border-radius: 8px; }
   .figcap { color: #64748b; font-size: 8.5pt; margin-top: 2mm; }
   table.trouble { border-collapse: collapse; width: 100%; margin: 3mm 0; }
   table.trouble th, table.trouble td {
@@ -150,11 +160,11 @@
   <div><span class="n">2</span><span>アプリを使う (起動タブ)</span><span class="d">2 回目からの起動方法</span><span class="p">4</span></div>
   <div><span class="n">3</span><span>最新版への更新は自動です</span><span class="d">黄色いタグのお知らせと「過去の更新ログ」</span><span class="p">5</span></div>
   <div><span class="n">4</span><span>更新版を提出する (更新版を提出タブ)</span><span class="d">更新内容・制限事項の記入、ZIP 提出、費用の目安</span><span class="p">6</span></div>
-  <div><span class="n">5</span><span>β版を確認して承認する (β版の確認と承認タブ)</span><span class="d">試用・フィードバック・承認/却下・自動リリース</span><span class="p">8</span></div>
-  <div><span class="n">6</span><span>差分ビューワ — 変更内容をくわしく確認する</span><span class="d">ファイルごとの説明・確認用データのダウンロード</span><span class="p">10</span></div>
-  <div><span class="n">7</span><span>API の利用量を確認する</span><span class="d">右上の棒グラフから料金の目安を表示</span><span class="p">11</span></div>
-  <div><span class="n">8</span><span>困ったとき</span><span class="d">よくある症状と対処</span><span class="p">12</span></div>
-  <div><span class="n">付録</span><span>Claude API キーの取得方法</span><span class="d">Claude Console での発行手順 (4 ステップ)</span><span class="p">13</span></div>
+  <div><span class="n">5</span><span>β版を確認して承認する (β版の確認と承認タブ)</span><span class="d">試用・フィードバック・承認/却下・自動リリース</span><span class="p">9</span></div>
+  <div><span class="n">6</span><span>差分ビューワ — 変更内容をくわしく確認する</span><span class="d">ファイルごとの説明・確認用データのダウンロード</span><span class="p">11</span></div>
+  <div><span class="n">7</span><span>API の利用量を確認する</span><span class="d">右上の棒グラフから料金の目安を表示</span><span class="p">12</span></div>
+  <div><span class="n">8</span><span>困ったとき</span><span class="d">よくある症状と対処</span><span class="p">13</span></div>
+  <div><span class="n">付録</span><span>Claude API キーの取得方法</span><span class="d">Claude Console での発行手順 (4 ステップ)</span><span class="p">14</span></div>
 </div>
 
 <h2>1. はじめての準備 (最初の 1 回だけ)</h2>
@@ -168,15 +178,8 @@
 <p class="note">参加申請は自動です — 初回起動時に「参加申請」が自動送信され、管理者が承認すると提出・承認に参加できるようになります (承認までの間も、起動・更新・β版の試用・フィードバックはそのまま使えます)。承認されたあとも特別な操作は不要で、マネージャーを起動するだけで参加が完了します。</p>
 
 <div class="figure">
-  <div class="backdrop"><div class="dialog">
-    <div class="dtitle">はじめに登録してください</div>
-    <p style="margin:0 0 1mm">mgtkit マネージャーの利用には、名前と本人の Claude API キーの登録が必要です。</p>
-    <p class="fieldnote" style="margin:0 0 3mm">キーはこの PC の中にだけ保存され、提出時に「自動作成」を選んだときと、検証失敗時の自動修正に本人のキーとして使われます。</p>
-    <div class="field" style="color:#374151">名前 (例: 山田太郎)</div>
-    <div class="field" style="color:#374151">Claude API キー (sk-ant- で始まる文字列) &nbsp;👁</div>
-    <div style="text-align:right; margin-top:3mm"><span class="btn navy">登録してはじめる</span></div>
-  </div></div>
-  <div class="figcap">初回起動時の登録画面。キーは自分の PC の中にだけ保存され、外部には送られません。</div>
+  <img src="img/real_firstrun.png" alt="">
+  <div class="figcap">初回起動時の登録画面 (実画面)。キーは自分の PC の中にだけ保存され、外部には送られません。</div>
 </div>
 
 <div class="callout">Claude API キー (sk-ant- で始まる文字列) は、提出時に「自動作成」を選んだときの説明文の作成と、検証失敗時の自動修正に「本人のキー」として使われます。どちらも本人が選んだ操作のときだけ使われ、黙って課金されることはありません (費用の目安は 4 章)。取得方法は<b>巻末の付録</b>を参照してください。</div>
@@ -185,20 +188,7 @@
 <p>2 回目からは <code>C:\Users\(自分)\mgtkit\manager\マネージャー起動.bat</code> をダブルクリックするだけです。起動のたびにマネージャー自体も自動で最新の状態に更新されます。「起動」ボタンで mgtkit がブラウザで開きます。</p>
 
 <div class="figure">
-  <div class="app">
-    <div class="app-head"><span class="logo">mgtkit</span><span class="t">アプリマネージャー</span><span class="icon">▍▍▎</span></div>
-    <div class="tabs"><span class="on">起動</span><span>更新版を提出</span><span>β版の確認と承認 <span class="badge">2</span></span></div>
-    <div class="body" style="min-height:95mm">
-      <div style="font-weight:bold; font-size:10.5pt; color:#111827">現行版 v1.1 (最新)</div>
-      <div class="muted" style="margin:1mm 0 2.5mm">配布日: 2026-08-14</div>
-      <div style="margin-bottom:2.5mm"><span class="btn navy">▶ 起動</span>&nbsp; <span class="btn gray">過去の更新ログ</span></div>
-      <div class="muted">最新の状態です (11:28 確認)</div>
-      <div class="notesbox">
-        <b>現行版 (v1.1) の更新内容</b><br>
-        ・組立断面「二丁溝形鋼(2C)」「二丁山形鋼(2L)」に対応 …
-      </div>
-    </div>
-  </div>
+  <img src="img/real_launch.png" alt="">
   <div class="figcap">起動タブ。いま使っている版とその更新内容が表示されます。「最新の状態です (時刻)」で確認状況が常に分かります。</div>
 </div>
 
@@ -207,10 +197,8 @@
 <h2>3. 最新版への更新は自動です</h2>
 <p>更新の操作は不要になりました。マネージャーが起動時と 10 分ごとの確認で新しい正式版を見つけると、<b>自動で取り込み</b>、起動タブに黄色いタグでお知らせします。</p>
 <div class="figure">
-  <div class="app"><div class="body" style="padding:3.5mm 5mm">
-    <div class="ytag">アプリを v1.2 に更新しました。このまま「起動」してお使いいただけます。</div>
-  </div></div>
-  <div class="figcap">更新が済むと起動タブに黄色いタグが出ます。一度起動すると畳まれます。</div>
+  <img src="img/real_history.png" alt="">
+  <div class="figcap">「過去の更新ログ」。だれがどの版を基に作り、いつ正式版になったかが図と一覧で分かります。「ZIP を保存」で過去版も取得できます。</div>
 </div>
 <ul>
   <li><b>アプリの画面を開いたまま</b>のときは、作業を壊さないよう自動では取り込みません。「アプリを閉じてから起動し直すと更新されます」の案内が出て、次の「起動」のときに 更新 → 起動 が行われます (使用中に「起動」を押した場合は「更新して開く / あとにする」の確認が出ます)。</li>
@@ -228,18 +216,8 @@
 </ol>
 
 <div class="figure">
-  <div class="app">
-    <div class="app-head"><span class="logo">mgtkit</span><span class="t">アプリマネージャー</span><span class="icon">▍▍▎</span></div>
-    <div class="tabs"><span>起動</span><span class="on">更新版を提出</span><span>β版の確認と承認 <span class="badge">2</span></span></div>
-    <div class="body" style="min-height:85mm">
-      <div><span class="fieldcap">更新内容</span> <span class="fieldnote">空欄でも提出できます (扱いは提出時に選択)</span></div>
-      <div class="field">例:<br>・二丁溝形鋼(2C)の断面算定に対応<br>・計算書の文章出力を改善</div>
-      <div><span class="fieldcap">ご利用にあたっての制限事項</span> <span class="fieldnote">使えない条件など。空欄でも提出できます</span></div>
-      <div class="field">例:<br>・二丁山形鋼は等辺のみ対応です (不等辺はエラーで停止します)</div>
-      <div style="margin-top:3mm"><span class="btn navy">⬆ ZIP を選んで提出</span></div>
-    </div>
-  </div>
-  <div class="figcap">更新版を提出タブ。記入欄の薄いグレーの文は記入例です (書き始めると消えます)。提出後の検証状況もこのタブで確認できます。</div>
+  <img src="img/real_submit.png" alt="">
+  <div class="figcap">更新版を提出タブ (実画面)。記入欄の薄いグレーの文は記入例です (書き始めると消えます)。提出後の検証状況もこのタブで確認できます。</div>
 </div>
 
 <p class="note">迷ったらフォルダ丸ごと ZIP で OK です。取得した版から変更したファイルだけが提出され、個人設定 (API キーなど)・計算結果 (mgtkit_out)・テストや開発用フォルダは自動で除外されます。実行ファイル (.exe .bat など) や PDF が ZIP に入っていてもエラーにはならず、更新情報としては読まれません (自動で除外されます)。万一 API キーの文字列がコード内に紛れていた場合のみ、検出して提出をブロックします。</p>
@@ -248,19 +226,8 @@
 <h3>記入を空欄のまま提出するとき — 無料と自動作成を選べます</h3>
 <p>「更新内容」「制限事項」の両方が空欄のまま提出しようとすると、確認画面で次の 2 つから選べます。</p>
 <div class="figure">
-  <div class="backdrop"><div class="dialog">
-    <div class="dtitle">提出内容の確認</div>
-    <p style="margin:0 0 1mm">追加 1 件 / 変更 2 件のファイルを提出します。</p>
-    <p class="fieldnote" style="margin:0 0 3mm">変更のないファイルは送られません。個人設定 (API キーなど) や計算結果は自動で除外済みです。</p>
-    <div class="whitebox" style="border:1px solid #e5e7eb">
-      <div style="font-weight:bold; margin-bottom:1.5mm">「更新内容」と「制限事項」が空欄です。どうしますか?</div>
-      <div class="radio"><span class="ro sel"></span><span>空欄のまま提出する (無料)</span></div>
-      <div class="radio"><span class="ro"></span><span>Claude で自動作成する (API 使用料が数十円かかります)</span></div>
-      <div class="fieldnote" style="margin-top:1.5mm; color:#4b5563">自動作成では、提出する変更内容から更新内容と制限事項がまとめられます。空欄のまま提出すると、正式版になったときの更新内容の表示も空欄になります。</div>
-    </div>
-    <div style="text-align:right; margin-top:3.5mm"><span style="color:#1e3a5f">キャンセル</span>&nbsp;&nbsp;<span class="btn navy">提出する</span></div>
-  </div></div>
-  <div class="figcap">両方空欄のときだけ出る選択です。自分で記入した場合はその内容がそのまま使われます (無料)。</div>
+  <img src="img/real_submit_dialog.png" alt="">
+  <div class="figcap">両方空欄のときだけ出る選択です (実画面)。自分で記入した場合はその内容がそのまま使われます (無料)。</div>
 </div>
 </div>
 
@@ -283,37 +250,22 @@
   <li>「フィードバック n 件」で、メンバーの感想・不具合報告を一覧できます。試した気づきもここから送信できます (承認の判断材料になります)。自分が書いたフィードバックは後から編集・削除できます。</li>
   <li>「差分」を押すと、ブラウザで詳細ビューワが開きます (次章参照)。</li>
   <li>問題なければ「承認」、問題があれば「却下」(理由の入力が必須。提出者に伝わります)。もう一度押すと取り消せます (「承認を取り消す」「却下を取り消す」)。</li>
-  <li>2 人の承認がそろうと、ロケットが発射して自動で正式版としてリリースされ、全員に配布されます。リリースされた提出のβ版は一覧から自動で消えます (検証NG・却下・変更のぶつかり (統合待ち) があるあいだは発射されません)。</li>
+  <li>2 人の承認がそろうと、自動で正式版としてリリースされ、全員に配布されます。リリースされた提出のβ版は一覧から自動で消えます (検証NG・却下・変更のぶつかり (統合待ち) があるあいだはリリースされません)。</li>
 </ol>
 <div class="figure">
-  <div class="app">
-    <div class="app-head"><span class="logo">mgtkit</span><span class="t">アプリマネージャー</span><span class="icon">▍▍▎</span></div>
-    <div class="tabs"><span>起動</span><span>更新版を提出</span><span class="on">β版の確認と承認 <span class="badge">2</span></span></div>
-    <div class="body" style="min-height:90mm">
-      <div style="margin-bottom:2.5mm"><span class="btn line">⟳ 一覧を取得</span></div>
-      <div class="card">
-        <div style="display:flex"><b>#12 CSV出力機能の追加</b><span style="margin-left:auto">🔥</span></div>
-        <div style="margin:1mm 0"><span class="chip" style="background:#fef9c3; color:#713f12">承認 1/2</span> <span style="color:#16a34a; font-size:8pt">検証OK</span> <span class="muted">提出者: sato-jiro</span></div>
-        <div style="color:#16a34a; font-size:8pt; margin-bottom:1.5mm">承認済み: suzuki-ichiro (あと 1 人の承認で自動リリース)</div>
-        <span class="btn navy" style="background:#b45309">▲ β版 v1.2-beta.2 を試す</span> <span class="btn line">フィードバック 2 件</span> <span class="btn line">差分</span> <span class="btn green">承認</span> <span class="btn line">却下</span>
-      </div>
-      <div class="card">
-        <div style="display:flex"><b>#11 検定比図の凡例改善</b><span style="margin-left:auto">💨</span></div>
-        <div style="margin:1mm 0"><span class="chip" style="background:#fef9c3; color:#713f12">承認 0/2</span> <span class="chip" style="background:#fee2e2; color:#991b1b">却下あり</span> <span class="muted">提出者: suzuki-ichiro</span></div>
-        <div style="color:#dc2626; font-size:8pt; margin-bottom:1.5mm">sato-jiro さんが却下: 長期の検定比が旧版と合いません</div>
-        <span class="btn navy" style="background:#b45309">▲ β版 v1.2-beta.1 を試す</span> <span class="btn line">フィードバック 0 件</span> <span class="btn line">差分</span> <span class="btn green">承認</span> <span class="btn line">却下</span>
-      </div>
-    </div>
-  </div>
-  <div class="figcap">β版の確認と承認タブ。提出ごとに、β版の試用・フィードバック・承認状況・検証結果がひと目で分かります。</div>
+  <img src="img/real_beta.png" alt="">
+  <div class="figcap">β版の確認と承認タブ (実画面)。提出ごとに、β版の試用・フィードバック・承認状況・検証結果がひと目で分かります。</div>
 </div>
-<p>承認・却下の進み具合はカード右上のロケットでも表現されます — 承認 1 つで点火 🔥 (発射準備)、2 つで発射 🚀 (自動リリース)、却下 1 つで煙 💨、却下が 2 つそろうと転倒・爆発 💥 して一覧下の「非表示」へ自動で移動します (「一覧に戻す」で表示に戻せます)。</p>
+<div class="figure">
+  <img src="img/real_feedback.png" alt="">
+  <div class="figcap">「フィードバック n 件」を押すと、誰が・いつ・どんな内容を送ったかが一覧でき、その場で自分のフィードバックも送信できます (実画面)。</div>
+</div>
 <p class="note">自分の提出は自分では承認できません。また 1 人でも却下があるとリリースされません (修正版の再提出で解消します)。</p>
 <div style="page-break-inside: avoid">
 <h3>提出の状態と操作</h3>
 <ul>
   <li>提出者本人には「取り下げ」が表示されます。取り下げると提出とβ版は一覧から自動で消えます。</li>
-  <li>却下が 2 人そろうと「却下確定」になり、爆発演出のあと一覧下の「非表示」へ自動で移動し、3 日後に自動で片付きます (「一覧に戻す」でグレー表示のカードに戻せます。却下の取り消しもそこから可能です)。</li>
+  <li>却下が 2 人そろうと「却下確定」になり、一覧下の「非表示」へ自動で移動し、3 日後に自動で片付きます (「一覧に戻す」でグレー表示のカードに戻せます。却下の取り消しもそこから可能です)。</li>
   <li>提出の後に正式版が進んで同じ箇所の変更がぶつかった場合は「統合待ち」になり、承認・却下はいったん止まります。提出者が「最新版と統合」を押すと解消され、承認は仕切り直しになるので改めて確認してください。</li>
 </ul>
 </div>
@@ -325,48 +277,16 @@
   <li><b>〈2〉ファイル比較</b> — 変更前 (左) と変更後 (右) を並べて表示。赤 = 変更前、緑 = 変更後・追加、紺 = 削除された行。変更のない行は折りたたまれます。</li>
 </ul>
 <div class="figure">
-  <div class="app">
-    <div class="body" style="padding:3.5mm 4mm">
-      <div style="display:flex; gap:3mm; font-size:8.6pt; min-height:60mm">
-        <div style="flex:1; border:1px solid #e5e7eb; border-radius:5px; padding:2.5mm 3mm">
-          <b>〈1〉フォルダ比較</b>
-          <div style="border:1px solid #93c5fd; background:#eff6ff; border-radius:4px; padding:1.6mm 2.2mm; margin:1.6mm 0">
-            <code>s_check.py</code><br><span style="color:#1d4ed8">2C・2L 断面の検定 TC2_analysis() などの追加</span>
-          </div>
-          <div style="border:1px solid #93c5fd; background:#eff6ff; border-radius:4px; padding:1.6mm 2.2mm">
-            <code>secprops.py</code><br><span style="color:#1d4ed8">組立断面の断面性能 BC2 / BL2 の追加</span>
-          </div>
-        </div>
-        <div style="flex:1.2; border:1px solid #e5e7eb; border-radius:5px; padding:2.5mm 3mm">
-          <b>〈2〉ファイル比較</b>
-          <div style="display:flex; gap:1.5mm; margin-top:1.6mm; font-size:7pt; font-family:monospace">
-            <div style="flex:1; background:#fef2f2; border-radius:3px; padding:1.4mm 2mm; color:#991b1b">- cut = 18<br>&nbsp;&nbsp;…</div>
-            <div style="flex:1; background:#f0fdf4; border-radius:3px; padding:1.4mm 2mm; color:#166534">+ cut = 20<br>+ sections[18] = c2<br><span style="color:#1e3a5f">− old_limit (削除)</span></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="figcap">差分ビューワ。ファイルごとの説明 (青枠) は「自動作成」を選んだ提出に付きます。</div>
+  <img src="img/real_diff.png" alt="">
+  <div class="figcap">差分ビューワ (実画面)。ファイルごとの説明 (青枠) は「自動作成」を選んだ提出に付きます。</div>
 </div>
 <p class="note">右上の「⬇ β版データ (確認用) をダウンロード」から、確認用データ (<code>#N_確認用.zip</code>) を取得できます。中身は「一式」(そのまま動作チェックに使えるβ版まるごと) と「変更のみ」(変更されたファイルだけ。中身チェック用) です。ダウンロード前に、資料「バージョン管理と同時開発のしくみ」4.2 の 3 つのリスクを確認する画面が出ます。ダウンロードしたデータは動作チェック・中身チェック用です。機能追加の作業は、これまでどおりマネージャーで取得した版のコピーで行ってください。</p>
 
 <h2>7. API の利用量を確認する</h2>
 <p>画面右上の棒グラフのマークを押すと、このマネージャー経由で使った Claude API の利用量と料金の目安が確認できます (月の小計 → 直近 30 日のグラフ → 日ごとの利用料 → 通算合計)。</p>
 <div class="figure">
-  <div class="backdrop"><div class="dialog">
-    <div class="dtitle" style="font-size:10.5pt">API 利用量 (この PC のマネージャー経由分)</div>
-    <div style="color:#1e3a5f; font-weight:bold; font-size:9.5pt">2026-08 の小計: $0.03 (約¥5)</div>
-    <div style="background:#f8fafc; border:1px solid #eef2f7; border-radius:5px; height:16mm; margin:2mm 0; position:relative">
-      <div style="position:absolute; right:18mm; bottom:2mm; width:2.6mm; height:11mm; background:#1e3a5f; border-radius:2px"></div>
-      <div style="position:absolute; left:2.5mm; bottom:0.6mm" class="muted">30日前</div>
-      <div style="position:absolute; right:2.5mm; bottom:0.6mm" class="muted">今日</div>
-    </div>
-    <div style="font-size:8.4pt">日ごとの利用料 (新しい順)<br>08/14: $0.03 (約¥5)・1回・入力 1,187 / 出力 992 tok</div>
-    <div style="border-top:1px solid #e5e7eb; margin-top:2.5mm; padding-top:2mm; font-size:8.6pt"><b>通算合計: $0.03 (約¥5)・1回・入力 1,187 / 出力 992 tok</b></div>
-    <div class="fieldnote" style="margin-top:1.5mm">※ 金額は単価設定からの目安です。正確な請求額は Claude Console で確認してください。他の PC や他のアプリでの利用は含みません。</div>
-  </div></div>
-  <div class="figcap">API 利用量の画面。表示されるのはこの PC のマネージャー経由分のみの「目安」です。</div>
+  <img src="img/real_usage.png" alt="">
+  <div class="figcap">API 利用量の画面 (実画面)。表示されるのはこの PC のマネージャー経由分のみの「目安」です。</div>
 </div>
 
 <h2>8. 困ったとき</h2>
