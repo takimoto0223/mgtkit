@@ -613,12 +613,16 @@ def main(page: ft.Page):
                 ' ZIP を保存して使ってください。', size=11,
                 color='#4b5563'))
 
+        _history_ctx['open'] = False    # 詳細表示中は図を開き直さない
+
         def close_all(_):
+            _history_ctx['open'] = False
             page.pop_dialog()   # この画面
             page.pop_dialog()   # 背後の過去の更新ログ
             page.update()
 
         def back_to_figure(_):
+            _history_ctx['open'] = True
             page.pop_dialog()
             page.update()
 
@@ -753,35 +757,67 @@ def main(page: ft.Page):
                                     open_detail('chip', c))))
         return rows
 
+    def _history_fp(data):
+        """図の見た目に効く部分の指紋 (裏の再取得で変わったときだけ
+        開き直すための比較キー)."""
+        rel = [(r.get('tag'), r.get('published_at_full'),
+                r.get('published_at'), r.get('tag_sha'),
+                bool(r.get('prerelease')), r.get('notes'))
+               for r in (data.get('releases') or [])]
+        pend = [(p.get('number'), p.get('fork_sha'),
+                 p.get('created_at_full'), p.get('title'),
+                 p.get('author'), bool(p.get('rejected_final')))
+                for p in (data.get('pending') or [])]
+        return json.dumps([rel, data.get('merged') or [], pend],
+                          ensure_ascii=False, sort_keys=True)
+
     def on_show_history(_):
         """過去の更新ログ: 誰がどの版を基に作りどこで正式版になったかの
-        時系列図 + 一覧。行・帯を押すと更新内容 (ZIP 保存はそこ)."""
+        時系列図 + 一覧。行・帯を押すと更新内容 (ZIP 保存はそこ)。
+
+        手元のスナップショットを即表示しつつ、裏で必ず最新を取得して
+        内容が変わっていたら開き直す (古い基点判定が見え続けないため)。
+        """
         data = reviewcache.get() or reviewcache.load_from_disk(config)
-        if data is None or data.get('merged') is None:
-            # 手元に材料がない (または古い形式) → その場で一括取得
+        if data is not None and data.get('merged') is not None:
+            _open_history_dialog(data)
+        else:
+            data = None
             body = ft.Column([ft.Text('過去の更新ログを読み込んで'
                                       'います...', size=13,
                                       color='#555555')],
                              width=640, height=120)
+            _history_ctx['open'] = True
+
+            def close_loading(_):
+                _history_ctx['open'] = False
+                page.pop_dialog()
+
             page.show_dialog(ft.AlertDialog(
                 title=ft.Text('過去の更新ログ'), content=body,
-                actions=[ft.TextButton(
-                    '閉じる', on_click=lambda _: page.pop_dialog())]))
+                actions=[ft.TextButton('閉じる',
+                                       on_click=close_loading)]))
             page.update()
 
-            def work():
-                try:
-                    fresh = _fetch_review_snapshot()
-                except (reviews.ReviewError, ghcli.GhError) as e:
+        def work():
+            try:
+                fresh = _fetch_review_snapshot()
+            except (reviews.ReviewError, ghcli.GhError) as e:
+                if data is None:
                     body.controls = [ft.Text(str(e), size=13,
                                              color='#b91c1c')]
                     page.update()
-                    return
-                if fresh is not None:
-                    _open_history_dialog(fresh)
-            run_bg(work)
-            return
-        _open_history_dialog(data)
+                return
+            fresh = fresh or reviewcache.get()
+            if fresh is None:
+                return
+            if data is not None and (_history_fp(fresh)
+                                     == _history_fp(data)):
+                return          # 変化なし: 開いたままの画面を触らない
+            if not _history_ctx.get('open'):
+                return          # もう閉じている (or 詳細を見ている)
+            _open_history_dialog(fresh)
+        run_bg(work)
 
     def _open_history_dialog(data):
         today = datetime.date.today()
@@ -832,11 +868,16 @@ def main(page: ft.Page):
                              tight=True)
         _history_ctx['body_col'] = body_col
         _history_ctx['fig'] = fig
+        _history_ctx['open'] = True
+
+        def close(_):
+            _history_ctx['open'] = False
+            page.pop_dialog()
+
         page.show_dialog(ft.AlertDialog(
             title=ft.Text('過去の更新ログ'),
             content=body_col,
-            actions=[ft.TextButton('閉じる',
-                                   on_click=lambda _: page.pop_dialog())]))
+            actions=[ft.TextButton('閉じる', on_click=close)]))
         page.update()
         if fig:
             async def scroll_to_current():
@@ -2128,7 +2169,10 @@ def main(page: ft.Page):
         破棄されたときは None。取得失敗は ReviewError / GhError を送出。
         """
         seq = reviewcache.next_seq()
-        snap = reviews.fetch_snapshot(config, on_progress=on_progress)
+        prev = reviewcache.get() or reviewcache.load_from_disk(config)
+        snap = reviews.fetch_snapshot(
+            config, on_progress=on_progress,
+            known_forks=reviews.fork_memo(prev))
         return reviewcache.put(snap['pending'], snap['releases'],
                                snap['me'], seq=seq, config=config,
                                merged=snap.get('merged'))

@@ -89,6 +89,28 @@ def fetch_releases(repo, limit=30):
     return releases
 
 
+def tag_shas(repo):
+    """タグ名 → コミット SHA の対応表 (履歴図の分岐点照合用).
+
+    リリースのタグは軽量タグ (コミット直指し) で作られる前提。
+    注釈付きタグ (object.type == 'tag') は対応表に入れない
+    (図は日時からの推定にフォールバックする)。
+    """
+    out = run_gh(['api',
+                  'repos/%s/git/matching-refs/tags?per_page=100' % repo])
+    try:
+        refs = json.loads(out)
+    except ValueError:
+        raise GhError('タグ一覧の応答を解釈できませんでした。')
+    shas = {}
+    for r in refs:
+        obj = r.get('object') or {}
+        if obj.get('type') == 'commit':
+            shas[(r.get('ref') or '')[len('refs/tags/'):]] = \
+                obj.get('sha') or ''
+    return shas
+
+
 def merge_base_sha(repo, base, head):
     """base ブランチと head (SHA/ブランチ) の分岐点コミット SHA.
 

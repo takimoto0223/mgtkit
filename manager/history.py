@@ -114,6 +114,7 @@ def build_timeline(releases, merged, pending, today=None):
                       'title': pr.get('title') or '',
                       'start': start, 'end': s['date'],
                       'created_full': _when(pr, 'created_at'),
+                      'fork_sha': pr.get('fork_sha') or '',
                       'base_tag': None, 'target_tag': s['tag'],
                       'pending': False, 'lane': -1})
     for p in pending:

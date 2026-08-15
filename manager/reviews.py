@@ -247,7 +247,7 @@ query($owner: String!, $name: String!) {
     merged: pullRequests(states: MERGED, first: 40,
                          orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number title headRefName createdAt mergedAt
+        number title headRefName headRefOid createdAt mergedAt
         author { login }
       }
     }
@@ -263,14 +263,16 @@ query($owner: String!, $name: String!) {
 '''
 
 
-def fetch_snapshot(config=None, on_progress=None):
+def fetch_snapshot(config=None, on_progress=None, known_forks=None):
     """承認タブ用の一括取得: 承認待ち一覧 + リリース一覧 + ログイン名.
 
     まず GraphQL 1 回 (プロセス起動 1 回・往復 1 回) で取得し、
     通信失敗や想定外の応答のときは従来の取得 (pr list + リリース一覧の
     並列) へ自動でフォールバックする。
     on_progress: 進行状況をユーザーへ伝えるコールバック (平易な日本語)。
-    戻り値: dict(pending, releases, me)。
+    known_forks: 前回までに判明した分岐点 {"番号:headSHA": forkSHA}。
+    渡すと変わっていない提出の問い合わせを省略できる。
+    戻り値: dict(pending, releases, me, merged)。
     """
     def progress(msg):
         if on_progress:
@@ -285,19 +287,36 @@ def fetch_snapshot(config=None, on_progress=None):
         progress('うまく取得できなかったため、方法を変えて確認し直して'
                  'います...')
         snap = _snapshot_via_rest(config)
-    _attach_fork_points(snap['pending'], config)
+    _attach_fork_points(snap['pending'] + snap.get('merged', []),
+                        config, known_forks)
     return snap
 
 
-def _attach_fork_points(pending, config):
-    """承認待ちの各提出に分岐点コミット (fork_sha) を付ける.
+def fork_memo(snapshot):
+    """スナップショットから既知の分岐点の対応表を作る (再問い合わせ削減).
+
+    分岐点はブランチが更新されない限り変わらないため
+    「番号:headSHA」をキーにする (更新されたら取り直しになる)。
+    """
+    memo = {}
+    for p in ((snapshot or {}).get('pending') or []) \
+            + ((snapshot or {}).get('merged') or []):
+        if p.get('fork_sha') and p.get('head_sha'):
+            memo['%s:%s' % (p.get('number'), p['head_sha'])] = \
+                p['fork_sha']
+    return memo
+
+
+def _attach_fork_points(items, config, known=None):
+    """提出 (承認待ち + 取り込み済み) に分岐点コミット (fork_sha) を付ける.
 
     履歴図の「どの版から作られたか」は日付では取り違えるため
     (公開後に古い版の内容が提出されることが普通にある)、git の
-    merge-base を事実として使う。承認待ちは件数が少ないので
-    1 件ずつ並列に問い合わせる。失敗した提出は付けない
+    merge-base を事実として使う。既知のものは known で省略し、
+    新しいものだけ並列に問い合わせる。失敗した提出は付けない
     (図は日時からの推定にフォールバックする)。
     """
+    known = known or {}
     slug = paths.repo_slug(config)
     base = ((config or {}).get('base_branch')
             if isinstance(config, dict) else None) or 'main'
@@ -312,7 +331,15 @@ def _attach_fork_points(pending, config):
                          p.get('number'), exc_info=True)
         return threading.Thread(target=run, daemon=True)
 
-    threads = [fetch(p) for p in pending if p.get('head_sha')]
+    threads = []
+    for p in items:
+        if not p.get('head_sha'):
+            continue
+        key = '%s:%s' % (p.get('number'), p['head_sha'])
+        if key in known:
+            p['fork_sha'] = known[key]
+            continue
+        threads.append(fetch(p))
     for t in threads:
         t.start()
     for t in threads:
@@ -393,6 +420,7 @@ def _merged_from_prs(prs):
             'created_at_full': pr.get('createdAt') or '',
             'merged_at': (pr.get('mergedAt') or '')[:10],
             'merged_at_full': pr.get('mergedAt') or '',
+            'head_sha': pr.get('headRefOid') or '',
         })
     return out
 
@@ -402,7 +430,8 @@ def list_merged(config=None):
     out = ghcli.run_gh([
         'pr', 'list', '--repo', paths.repo_slug(config),
         '--state', 'merged', '--limit', '40',
-        '--json', 'number,title,author,headRefName,createdAt,mergedAt'])
+        '--json', 'number,title,author,headRefName,headRefOid,'
+                  'createdAt,mergedAt'])
     try:
         prs = json.loads(out)
     except ValueError:
@@ -430,11 +459,19 @@ def _snapshot_via_rest(config):
         except (ReviewError, ghcli.GhError):
             return []
 
+    def tags_safe():
+        # 同上 (図の分岐点照合用。無ければ日時からの推定になる)
+        try:
+            return ghcli.tag_shas(paths.repo_slug(config))
+        except ghcli.GhError:
+            return {}
+
     threads = [
         fetch('pending', lambda: (list_pending(config), current_user())),
         fetch('releases',
               lambda: ghcli.fetch_releases(paths.repo_slug(config))),
         fetch('merged', merged_safe),
+        fetch('tags', tags_safe),
     ]
     for t in threads:
         t.start()
@@ -443,7 +480,11 @@ def _snapshot_via_rest(config):
     if errors:
         raise errors[0]
     pending, me = results['pending']
-    return {'pending': pending, 'releases': results['releases'], 'me': me,
+    releases = results['releases']
+    shas = results.get('tags') or {}
+    for r in releases:
+        r.setdefault('tag_sha', shas.get(r['tag'], ''))
+    return {'pending': pending, 'releases': releases, 'me': me,
             'merged': results.get('merged') or []}
 
 
