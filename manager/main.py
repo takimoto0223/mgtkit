@@ -538,7 +538,8 @@ def main(page: ft.Page):
                           if not c['pending']}
         st = ft.Text('', size=12, color='#555555', selectable=True)
 
-        if kind == 'chip' and payload['pending']:
+        is_pending = kind == 'chip' and payload['pending']
+        if is_pending:
             c = payload
             color = history.person_color(c['author'], authors)
             meta = ('%s #%s · %s を基に作成 · %s 提出'
@@ -557,6 +558,7 @@ def main(page: ft.Page):
                                     '取り込まれると、正式版として公開'
                                     'されます。', size=12,
                                     color='#92400e')),
+                st,
             ]
             title = '提出 #%s の内容' % c['number']
         else:
@@ -647,21 +649,60 @@ def main(page: ft.Page):
             return sum(max(1, len(line) // 40 + 1)
                        for line in (text or '').splitlines() or [''])
 
-        if kind == 'chip' and payload['pending']:
-            est_h = 200
+        def open_pending_diff(e):
+            """「詳細」→ β版の差分ページ (承認タブの「差分」と同じ)."""
+            btn = e.control
+            btn.disabled = True
+            st.value = '差分ビューワを準備しています...'
+            page.update()
+
+            def work():
+                try:
+                    data = (reviewcache.get()
+                            or reviewcache.load_from_disk(config) or {})
+                    pr = next((p for p in data.get('pending') or []
+                               if p.get('number') == payload['number']),
+                              None)
+                    if pr is None:
+                        st.value = ('この提出の情報が見つかりません'
+                                    'でした。少し待ってからもう一度'
+                                    'お試しください。')
+                        return
+                    betas = ghcli.prereleases(data.get('releases') or [])
+                    beta = _beta_for(pr['number'], betas)
+                    path = diffview.write_diff_html(
+                        pr, config,
+                        beta_tag=beta['tag'] if beta else None)
+                    webbrowser.open('file:///'
+                                    + path.replace(os.sep, '/'), new=1)
+                    st.value = '差分をブラウザで開きました。'
+                except Exception as e2:
+                    log.exception('diff viewer failed')
+                    st.value = '差分を開けませんでした: %s' % e2
+                finally:
+                    btn.disabled = False
+                    page.update()
+            run_bg(work)
+
+        if is_pending:
+            est_h = 230
+            # 「図へ戻る」と「閉じる」はほぼ同じ動作なので、
+            # 戻る (図へ) と 詳細 (β版の差分) の 2 つにする (管理者指示)
+            actions = [ft.TextButton('戻る', on_click=back_to_figure),
+                       ft.TextButton('詳細 (β版の差分)',
+                                     on_click=open_pending_diff)]
         else:
             est_h = 130 + _est_lines(normal) * 19
             if ai:
                 est_h += 62 + _est_lines(ai) * 17
+            actions = [ft.TextButton('戻る', on_click=back_to_figure),
+                       ft.TextButton('閉じる', on_click=close_all)]
         page.show_dialog(ft.AlertDialog(
             title=ft.Text(title),
             content=ft.Column(content, width=560, tight=True, spacing=10,
                               height=min(430, est_h),
                               scroll=ft.ScrollMode.AUTO),
-            actions=[
-                ft.TextButton('図へ戻る', on_click=back_to_figure),
-                ft.TextButton('閉じる', on_click=close_all),
-            ]))
+            actions=actions))
         page.update()
 
     def _tl_rows(tl, local_v, dlg_status, open_detail):
