@@ -891,14 +891,14 @@ def main(page: ft.Page):
         t4_status.value = msg
         page.update()
 
-    def _do_finalize(prep, deletions, existing_branch=None):
+    def _do_finalize(prep, deletions, existing_branch=None, use_ai=False):
         def work():
             try:
                 result = submit.finalize_submission(
                     prep, deletions, t4_commit_msg.value or '',
                     config, on_progress=_submit_progress,
                     existing_branch=existing_branch,
-                    limitations=t4_limits.value or '')
+                    limitations=t4_limits.value or '', use_ai=use_ai)
                 t4_status.value = ''
                 t4_result.value = (
                     '提出しました。検証を通過するとβ版として発行され、'
@@ -940,6 +940,28 @@ def main(page: ft.Page):
                 % (p['number'], p['title'][:30])) for p in my_prs]
             dest_dd = ft.Dropdown(label='提出先', options=options, value='')
             items.append(dest_dd)
+        # 更新内容・制限事項とも空欄なら、説明の作り方を本人に選ばせる
+        # (API 使用料がかかる自動生成を黙って実行しない)。キー未登録なら
+        # 自動生成は使えないため選択肢を出さず空欄のまま提出する
+        gen_rg = None
+        blank = (not (t4_commit_msg.value or '').strip()
+                 and not (t4_limits.value or '').strip())
+        if blank and settings.api_key(config):
+            gen_rg = ft.RadioGroup(value='blank', content=ft.Column([
+                ft.Radio(value='blank',
+                         label='空欄のまま提出する (無料)'),
+                ft.Radio(value='ai',
+                         label='Claude で自動作成する '
+                               '(数十円ほどの API 使用料がかかります)'),
+            ], spacing=0))
+            items.append(ft.Column([
+                ft.Text('「更新内容」が空欄です。提出の説明をどうしますか?',
+                        size=13, weight=ft.FontWeight.BOLD),
+                gen_rg,
+                ft.Text('空欄のまま提出すると、正式版になったときの'
+                        '更新内容の表示も空欄になります。',
+                        size=12, color='#6b7280'),
+            ], spacing=6))
         if del_checks:
             items.append(ft.Text(
                 '基点にあったのに ZIP に無いファイルがあります。'
@@ -964,7 +986,8 @@ def main(page: ft.Page):
             page.pop_dialog()
             deletions = [c.label for c in del_checks if c.value]
             existing = (dest_dd.value or None) if dest_dd else None
-            _do_finalize(prep, deletions, existing)
+            use_ai = bool(gen_rg is not None and gen_rg.value == 'ai')
+            _do_finalize(prep, deletions, existing, use_ai)
 
         page.show_dialog(ft.AlertDialog(
             modal=True, title=ft.Text('提出内容の確認'),

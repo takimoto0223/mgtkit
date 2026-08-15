@@ -355,22 +355,30 @@ def _diff_summary(changes, intentional_deletions):
 
 
 def fallback_pr_body(update_text, limitations, base_version, summary):
-    """Claude なしでも様式 (更新内容 / 制限事項) を満たす PR 本文.
+    """手書きの内容 (または空欄) から API を使わず PR 本文を組み立てる.
 
     reviews.release_notes_from_pr がこの様式から正式版のリリースノートを
     機械抽出するため、手書きの提出でも節の構成を自動生成と揃える。
+    更新内容が空欄なら「## 更新内容」の節を作らない (リリースノートも
+    空欄になる。管理者の指示 2026-08)。
     """
-    update = (update_text or '').strip() or (
-        'マネージャー経由の提出です (基点: %s)。' % base_version)
-    return ('## 更新内容\n\n%s\n\n'
-            '## ご利用にあたっての制限事項\n\n%s\n\n'
-            '## 変更ファイルの説明\n\n```\n%s\n```\n'
-            % (update, (limitations or '').strip() or '- なし', summary))
+    update = (update_text or '').strip()
+    limits = (limitations or '').strip()
+    parts = []
+    if update:
+        parts += ['## 更新内容', '', update, '',
+                  '## ご利用にあたっての制限事項', '', limits or '- なし', '']
+    elif limits:
+        parts += ['## ご利用にあたっての制限事項', '', limits, '']
+    parts += ['## 変更ファイルの説明', '',
+              'マネージャー経由の提出です (基点: %s)。' % base_version, '',
+              '```', summary, '```']
+    return '\n'.join(parts) + '\n'
 
 
 def finalize_submission(prep, intentional_deletions, commit_message='',
                         config=None, on_progress=None, existing_branch=None,
-                        limitations=''):
+                        limitations='', use_ai=False):
     """準備済みの提出を確定する.
 
     intentional_deletions: 「意図的な削除」とユーザーが確認したファイル。
@@ -378,6 +386,9 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
     existing_branch: 指定すると新規 PR を作らず、既存の提出 (同一 PR) に
     修正版として積む (差し戻し後の再提出フロー)。
     limitations: 提出者が手書きした「ご利用にあたっての制限事項」(任意)。
+    use_ai: True なら提出のまとめ (コミットメッセージ・PR 本文) を Claude で
+    自動生成する (API 使用料は提出者負担のため、UI で本人が選んだときのみ
+    True にする)。False なら手書きの内容から API を使わず組み立てる。
     戻り値: dict(pr_url, branch, commit_message)
     """
     def progress(msg):
@@ -422,11 +433,12 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         diff_text = run_git(['diff', '--cached'], cwd=workrepo)
 
         message = (commit_message or '').strip()
-        if not message:
+        if not message and use_ai:
             progress('コミットメッセージを自動生成しています...')
             message = claude_helper.generate_commit_message(
-                summary, diff_text) or ('%s を基点とした機能追加の提出'
-                                        % prep['base_version'])
+                summary, diff_text) or ''
+        if not message:
+            message = '%s を基点とした機能追加の提出' % prep['base_version']
 
         progress('変更を記録しています...')
         run_git(['-c', 'user.name=%s' % user,
@@ -436,16 +448,17 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         progress('GitHub へ送信しています...')
         run_git(['push', '-u', 'origin', branch], cwd=workrepo, timeout=300)
 
-        progress('提出内容のまとめを作成しています...')
         notes = ''
         if prep['safety']['warnings']:
             notes = ('# 提出時の警告 (承認時に確認)\n- '
                      + '\n- '.join(prep['safety']['warnings']))
-        body = claude_helper.generate_pr_body(
-            summary, diff_text, prep['base_version'], notes,
-            limitations=limitations)
+        body = None
+        if use_ai:
+            progress('提出内容のまとめを作成しています...')
+            body = claude_helper.generate_pr_body(
+                summary, diff_text, prep['base_version'], notes)
         if not body:
-            body = fallback_pr_body(message, limitations,
+            body = fallback_pr_body(commit_message, limitations,
                                     prep['base_version'], summary)
         if notes:
             body += '\n\n' + notes

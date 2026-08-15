@@ -775,10 +775,10 @@ def release(pr_number, config=None, on_progress=None):
 
     version = next_stable_version(config)
     progress('リリースノートを作成しています...')
-    # 提出時に生成済みの PR 本文から転載する (ここでは API を使わない)
-    notes = release_notes_from_pr(detail.get('body', ''), version)
-    if not notes:
-        notes = '%s リリース。\n\n%s' % (version, detail.get('title', ''))
+    # 提出時に用意済みの PR 本文から転載する (ここでは API を使わない)。
+    # 更新内容が書かれていない提出 (空欄のまま提出) は空欄でリリースする
+    # (管理者の指示 2026-08。Releases 側は「vX.Y リリース」だけになる)
+    notes = release_notes_from_pr(detail.get('body', ''), version) or ''
 
     progress('%s のリリースを開始しています...' % version)
     ghcli.run_gh(['workflow', 'run', 'release.yml', '--repo',
