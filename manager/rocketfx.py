@@ -293,9 +293,12 @@ class _Puffs:
             s.opacity = it['op'] * (1.0 - k)
 
 
-def play_launch(page, start_x, start_y, target_x=90, target_y=92,
+def play_launch(page, start_x, start_y, target_x=30, target_y=92,
                 done=None):
-    """発射: 点火 → 震え → 加速上昇 → 弧を描いて「更新」タブへ → ✨.
+    """発射: 点火 → 震え → 加速上昇 → 弧を描いて「起動」タブへ → ✨.
+
+    到達点の既定は「起動」タブ付近 (リリースは自動更新となって
+    起動タブの黄色いタグに現れるため、その予告として飛ばす)。
 
     (start_x, start_y) はカード右のロケット定位置 (機体中心)。
     """
@@ -341,7 +344,7 @@ def play_launch(page, start_x, start_y, target_x=90, target_y=92,
                 embers.spawn(start_x, start_y + 24 - 105 * p * p * 0.4,
                              side * 0.2, 30, 0.5, 3, 5, 0.9)
         elif t < 1.95:
-            # 弧を描いて「更新」タブへ (機首は進行方向)
+            # 弧を描いて「起動」タブへ (機首は進行方向)
             q = (t - 1.15) / 0.8
             e = 1 - (1 - q) * (1 - q)
             p0x, p0y = start_x, top_y

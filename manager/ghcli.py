@@ -81,10 +81,25 @@ def fetch_releases(repo, limit=30):
             'prerelease': bool(r.get('prerelease')),
             'notes': r.get('body') or '',
             'published_at': (r.get('published_at') or '')[:10],
+            # 同日に複数の出来事があるときの前後関係の判定用 (履歴図)
+            'published_at_full': r.get('published_at') or '',
             'assets': [{'name': a.get('name'), 'url': a.get('url')}
                        for a in (r.get('assets') or [])],
         })
     return releases
+
+
+def merge_base_sha(repo, base, head):
+    """base ブランチと head (SHA/ブランチ) の分岐点コミット SHA.
+
+    履歴図で「どの版から作られた提出か」を推定ではなく事実で出すために
+    使う。per_page=1 で応答を小さくする (compare はコミット一覧付き)。
+    """
+    out = run_gh(['api',
+                  'repos/%s/compare/%s...%s?per_page=1'
+                  % (repo, base, head),
+                  '--jq', '.merge_base_commit.sha'])
+    return out.strip()
 
 
 def latest_stable(releases):

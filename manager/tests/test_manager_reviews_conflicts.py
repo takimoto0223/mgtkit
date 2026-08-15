@@ -264,6 +264,7 @@ _GRAPHQL_SNAPSHOT = {
             'pullRequests': {'nodes': [
                 {'number': 33, 'title': '組立断面', 'url': 'u',
                  'headRefName': 'feature/fujitaka-20260808-1',
+                 'headRefOid': 'headsha33',
                  'mergeable': 'MERGEABLE',
                  'author': {'login': 'fujitaka'},
                  'reviews': {'nodes': [
@@ -287,11 +288,24 @@ _GRAPHQL_SNAPSHOT = {
                  'reviews': {'nodes': []}, 'comments': {'nodes': []},
                  'commits': {'nodes': []}},
             ]},
+            'merged': {'nodes': [
+                {'number': 29, 'title': '合成梁の検討を追加',
+                 'headRefName': 'feature/yamada-20260801-1',
+                 'createdAt': '2026-08-01T09:00:00Z',
+                 'mergedAt': '2026-08-04T10:00:00Z',
+                 'author': {'login': 'yamada'}},
+                {'number': 30, 'title': 'マネージャー修正',
+                 'headRefName': 'claude/app-manager-y',
+                 'createdAt': '2026-08-02T09:00:00Z',
+                 'mergedAt': '2026-08-03T10:00:00Z',
+                 'author': {'login': 't'}},
+            ]},
             'releases': {'nodes': [
                 {'tagName': 'v1.1-beta.1', 'name': 'v1.1-beta.1',
                  'isPrerelease': True, 'isDraft': False,
                  'description': '提出 #33 の検証通過版です。',
                  'publishedAt': '2026-08-05T00:00:00Z',
+                 'tagCommit': {'oid': 'tagsha-beta1'},
                  'releaseAssets': {'nodes': [
                      {'name': 'mgtkit.zip', 'downloadUrl': 'http://x/z'}]}},
                 {'tagName': 'v1.0', 'name': 'v1.0', 'isPrerelease': False,
@@ -316,18 +330,21 @@ class TestFetchSnapshot:
                 return _json.dumps(_GRAPHQL_SNAPSHOT)
             if args[0] == 'api' and 'collaborators' in args[1]:
                 return '["yamada", "fujitaka"]'
+            if args[0] == 'api' and 'compare' in args[1]:
+                return 'forksha-33\n'
             raise AssertionError('unexpected gh call: %r' % args)
 
         monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
         snap = reviews.fetch_snapshot({'repo': 'o/r'})
-        # gh は GraphQL 1 回 + collaborators 1 回のみ
+        # gh は GraphQL 1 回 + collaborators 1 回 + 分岐点 (提出ごと) のみ
         assert [c[:2] for c in calls] == [
             ['api', 'graphql'],
-            ['api', 'repos/o/r/collaborators?per_page=100']]
+            ['api', 'repos/o/r/collaborators?per_page=100'],
+            ['api', 'repos/o/r/compare/main...headsha33?per_page=1']]
         assert snap['me'] == 'yamada'
         # ログイン名はこの 1 回でキャッシュされ、追加の gh 呼び出しなし
         assert reviews.current_user() == 'yamada'
-        assert len(calls) == 2
+        assert len(calls) == 3
         # 承認待ち一覧は list_pending と同じ形 (feature/ のみ)
         pr = snap['pending'][0]
         assert [p['number'] for p in snap['pending']] == [33]
@@ -343,7 +360,20 @@ class TestFetchSnapshot:
             {'tag': 'v1.1-beta.1', 'name': 'v1.1-beta.1',
              'prerelease': True, 'notes': '提出 #33 の検証通過版です。',
              'published_at': '2026-08-05',
+             'published_at_full': '2026-08-05T00:00:00Z',
+             'tag_sha': 'tagsha-beta1',
              'assets': [{'name': 'mgtkit.zip', 'url': 'http://x/z'}]}]
+        # 済み提出は feature/ ブランチのみ・図に必要な要約だけ
+        assert snap['merged'] == [
+            {'number': 29, 'title': '合成梁の検討を追加',
+             'author': 'yamada', 'created_at': '2026-08-01',
+             'created_at_full': '2026-08-01T09:00:00Z',
+             'merged_at': '2026-08-04',
+             'merged_at_full': '2026-08-04T10:00:00Z'}]
+        # 承認待ちにも提出日が入る (図の帯の左端に使う)
+        assert 'created_at' in pr
+        # 分岐点コミットが付く (履歴図の基点の事実)
+        assert pr['fork_sha'] == 'forksha-33'
 
     def test_falls_back_to_rest_on_graphql_error(self, monkeypatch):
         import json as _json
@@ -396,7 +426,8 @@ class TestFetchSnapshot:
 
         monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
         snap = reviews.fetch_snapshot({'repo': 'o/r'})
-        assert snap == {'pending': [], 'releases': [], 'me': 'yamada'}
+        assert snap == {'pending': [], 'releases': [], 'me': 'yamada',
+                        'merged': []}
 
 
 class TestRejectedFinal:
@@ -711,6 +742,58 @@ class TestNextStableVersion:
     def test_no_releases(self, monkeypatch):
         self._patch(monkeypatch, [])
         assert reviews.next_stable_version({'repo': 'o/r'}) == 'v1.0'
+
+
+class TestReleaseNotesFromPr:
+    """リリースノートは提出時の PR 本文から機械抽出する (API 不使用)."""
+
+    BODY = ('## 更新内容\n\n'
+            '### 1. 組立断面への対応\n'
+            '- 2C・2L 断面を読み込みから計算書まで扱えます。\n\n'
+            '## ご利用にあたっての制限事項\n\n'
+            '- 2L は等辺山形鋼のみ対応です。\n\n'
+            '## 影響範囲\n\n- section.py ほか\n\n'
+            '## 変更ファイルの説明\n\n- section.py — 読み込みの追加\n\n'
+            '# 提出時の警告 (承認時に確認)\n- eval の使用')
+
+    def test_reuses_user_facing_sections_only(self):
+        notes = reviews.release_notes_from_pr(self.BODY, 'v1.2')
+        assert notes.startswith('# mgtkit v1.2 リリースノート')
+        assert '### 1. 組立断面への対応' in notes
+        assert '## ご利用にあたっての制限事項' in notes
+        assert '- 2L は等辺山形鋼のみ対応です。' in notes
+        # レビュー担当者向けの節と提出時の警告は転載しない
+        assert '影響範囲' not in notes
+        assert '変更ファイルの説明' not in notes
+        assert '提出時の警告' not in notes
+
+    def test_limitations_none_is_omitted(self):
+        body = ('## 更新内容\n\n- 出力の改善。\n\n'
+                '## ご利用にあたっての制限事項\n\n- なし\n\n'
+                '## 影響範囲\n\n- output.py')
+        notes = reviews.release_notes_from_pr(body, 'v1.2')
+        assert '- 出力の改善。' in notes
+        assert '制限事項' not in notes
+
+    def test_limitations_heading_variants(self):
+        body = ('## 更新内容\n\n- 改善。\n\n'
+                '## 制限事項\n\n- 大きなファイルは未対応です。')
+        notes = reviews.release_notes_from_pr(body, 'v1.2')
+        assert '## ご利用にあたっての制限事項' in notes
+        assert '- 大きなファイルは未対応です。' in notes
+
+    def test_crlf_body(self):
+        body = ('## 更新内容\r\n\r\n- 改善。\r\n\r\n'
+                '## 影響範囲\r\n\r\n- a.py')
+        notes = reviews.release_notes_from_pr(body, 'v1.2')
+        assert '- 改善。' in notes
+        assert '影響範囲' not in notes
+
+    def test_no_update_section_returns_none(self):
+        # 様式に沿わない本文 (手書き等) は呼び出し側の定型文に任せる
+        assert reviews.release_notes_from_pr('自由記述の本文', 'v1.2') is None
+        assert reviews.release_notes_from_pr('', 'v1.2') is None
+        assert reviews.release_notes_from_pr(None, 'v1.2') is None
 
 
 def _git(args, cwd):

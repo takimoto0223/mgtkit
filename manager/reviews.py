@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from . import claude_helper, feedback, ghcli, paths
+from . import feedback, ghcli, paths
 from .autofix import AUTOFIX_PREFIX, _summarize_checks
 from .gitcli import ensure_work_repo, run_git
 from .submit import workrepo_dir
@@ -173,8 +173,9 @@ def list_pending(config=None):
     """
     out = ghcli.run_gh([
         'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
-        '--json', 'number,title,url,author,headRefName,'
-                  'reviews,statusCheckRollup,mergeable,comments'])
+        '--json', 'number,title,url,author,headRefName,headRefOid,'
+                  'createdAt,reviews,statusCheckRollup,mergeable,'
+                  'comments'])
     try:
         prs = json.loads(out)
     except ValueError:
@@ -198,6 +199,9 @@ def _build_pending(prs, config):
             'url': pr['url'],
             'branch': pr['headRefName'],
             'author': (pr.get('author') or {}).get('login', '?'),
+            'created_at': (pr.get('createdAt') or '')[:10],
+            'created_at_full': pr.get('createdAt') or '',
+            'head_sha': pr.get('headRefOid') or '',
             'approved': summary['approved'],
             'rejected': summary['rejected'],
             'rejected_final': len(summary['rejected']) >= n_req,
@@ -221,7 +225,7 @@ query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 50) {
       nodes {
-        number title url headRefName mergeable
+        number title url headRefName headRefOid mergeable createdAt
         author { login }
         reviews(first: 100) {
           nodes { state body submittedAt author { login } }
@@ -240,9 +244,17 @@ query($owner: String!, $name: String!) {
         }
       }
     }
+    merged: pullRequests(states: MERGED, first: 40,
+                         orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number title headRefName createdAt mergedAt
+        author { login }
+      }
+    }
     releases(first: 30, orderBy: {field: CREATED_AT, direction: DESC}) {
       nodes {
         tagName name isPrerelease isDraft description publishedAt
+        tagCommit { oid }
         releaseAssets(first: 10) { nodes { name downloadUrl } }
       }
     }
@@ -266,13 +278,45 @@ def fetch_snapshot(config=None, on_progress=None):
 
     progress('最新の提出状況とβ版・リリースの一覧を確認しています...')
     try:
-        return _snapshot_via_graphql(config)
+        snap = _snapshot_via_graphql(config)
     except Exception:
         log.info('一括取得に失敗したため従来の方法で取得します',
                  exc_info=True)
-    progress('うまく取得できなかったため、方法を変えて確認し直して'
-             'います...')
-    return _snapshot_via_rest(config)
+        progress('うまく取得できなかったため、方法を変えて確認し直して'
+                 'います...')
+        snap = _snapshot_via_rest(config)
+    _attach_fork_points(snap['pending'], config)
+    return snap
+
+
+def _attach_fork_points(pending, config):
+    """承認待ちの各提出に分岐点コミット (fork_sha) を付ける.
+
+    履歴図の「どの版から作られたか」は日付では取り違えるため
+    (公開後に古い版の内容が提出されることが普通にある)、git の
+    merge-base を事実として使う。承認待ちは件数が少ないので
+    1 件ずつ並列に問い合わせる。失敗した提出は付けない
+    (図は日時からの推定にフォールバックする)。
+    """
+    slug = paths.repo_slug(config)
+    base = ((config or {}).get('base_branch')
+            if isinstance(config, dict) else None) or 'main'
+
+    def fetch(p):
+        def run():
+            try:
+                p['fork_sha'] = ghcli.merge_base_sha(slug, base,
+                                                     p['head_sha'])
+            except ghcli.GhError:
+                log.info('分岐点の取得に失敗 (#%s)。日時から推定します',
+                         p.get('number'), exc_info=True)
+        return threading.Thread(target=run, daemon=True)
+
+    threads = [fetch(p) for p in pending if p.get('head_sha')]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
 
 def _snapshot_via_graphql(config):
@@ -289,8 +333,9 @@ def _snapshot_via_graphql(config):
     prs = [_pr_from_graphql(n) for n in repo['pullRequests']['nodes']]
     releases = [_release_from_graphql(n) for n in repo['releases']['nodes']
                 if not n.get('isDraft')]
+    merged = _merged_from_prs((repo.get('merged') or {}).get('nodes') or [])
     return {'pending': _build_pending(prs, config),
-            'releases': releases, 'me': me}
+            'releases': releases, 'me': me, 'merged': merged}
 
 
 def _pr_from_graphql(node):
@@ -305,6 +350,8 @@ def _pr_from_graphql(node):
         'url': node.get('url') or '',
         'headRefName': node.get('headRefName') or '',
         'mergeable': node.get('mergeable') or '',
+        'createdAt': node.get('createdAt') or '',
+        'headRefOid': node.get('headRefOid') or '',
         'author': node.get('author') or {},
         'reviews': (node.get('reviews') or {}).get('nodes') or [],
         'comments': (node.get('comments') or {}).get('nodes') or [],
@@ -321,9 +368,46 @@ def _release_from_graphql(node):
         'prerelease': bool(node.get('isPrerelease')),
         'notes': node.get('description') or '',
         'published_at': (node.get('publishedAt') or '')[:10],
+        'published_at_full': node.get('publishedAt') or '',
+        'tag_sha': (node.get('tagCommit') or {}).get('oid') or '',
         'assets': [{'name': a.get('name'), 'url': a.get('downloadUrl')}
                    for a in assets],
     }
+
+
+def _merged_from_prs(prs):
+    """PR dict (gh --json / GraphQL 変換済み) から済み提出の要約を作る.
+
+    過去の更新ログの図 (誰がいつ提出し、いつ正式版になったか) 用。
+    マネージャー経由の提出 (feature/ ブランチ) のみを対象とする。
+    """
+    out = []
+    for pr in prs:
+        if not _is_submission(pr):
+            continue
+        out.append({
+            'number': pr['number'],
+            'title': pr.get('title') or '',
+            'author': (pr.get('author') or {}).get('login', '?'),
+            'created_at': (pr.get('createdAt') or '')[:10],
+            'created_at_full': pr.get('createdAt') or '',
+            'merged_at': (pr.get('mergedAt') or '')[:10],
+            'merged_at_full': pr.get('mergedAt') or '',
+        })
+    return out
+
+
+def list_merged(config=None):
+    """取り込み済みの提出一覧 (過去の更新ログの図用・直近 40 件)."""
+    out = ghcli.run_gh([
+        'pr', 'list', '--repo', paths.repo_slug(config),
+        '--state', 'merged', '--limit', '40',
+        '--json', 'number,title,author,headRefName,createdAt,mergedAt'])
+    try:
+        prs = json.loads(out)
+    except ValueError:
+        raise ReviewError('取り込み済みの提出一覧を取得できませんでした。')
+    return _merged_from_prs(prs)
 
 
 def _snapshot_via_rest(config):
@@ -338,10 +422,19 @@ def _snapshot_via_rest(config):
                 errors.append(e)
         return threading.Thread(target=run, daemon=True)
 
+    def merged_safe():
+        # 図のための補助情報。取れなくても一覧表示は成立するので
+        # 失敗はエラーにしない (図は「準備中」表示になる)
+        try:
+            return list_merged(config)
+        except (ReviewError, ghcli.GhError):
+            return []
+
     threads = [
         fetch('pending', lambda: (list_pending(config), current_user())),
         fetch('releases',
               lambda: ghcli.fetch_releases(paths.repo_slug(config))),
+        fetch('merged', merged_safe),
     ]
     for t in threads:
         t.start()
@@ -350,7 +443,8 @@ def _snapshot_via_rest(config):
     if errors:
         raise errors[0]
     pending, me = results['pending']
-    return {'pending': pending, 'releases': results['releases'], 'me': me}
+    return {'pending': pending, 'releases': results['releases'], 'me': me,
+            'merged': results.get('merged') or []}
 
 
 def _pr_detail(pr_number, config=None):
@@ -599,6 +693,56 @@ def next_stable_version(config=None):
     return 'v%d.%d' % (major, minor + 1)
 
 
+# PR 本文のうちリリースノートへ転載する節 (claude_helper.generate_pr_body の
+# 様式と対)。「制限事項」は見出しの表記ゆれを許容するため部分一致で拾う
+_NOTES_LIMITS_KEY = '制限事項'
+_NOTES_NO_LIMITS = re.compile(r'^[-*・]?\s*(特に)?(なし|ありません)[。.]?$')
+
+
+def _pr_body_sections(body):
+    """PR 本文を「## 見出し」ごとに分割する。### 以下は本文側に含める.
+
+    「# 提出時の警告」のような # 見出しも区切りとして扱う (転載対象の節に
+    紛れ込ませないため)。戻り値: {見出し: 本文} (出現順)。
+    """
+    sections = {}
+    current = None
+    lines = []
+    for line in (body or '').replace('\r\n', '\n').split('\n'):
+        m = re.match(r'^#{1,2}\s+(.+?)\s*$', line)
+        if m:
+            if current and current not in sections:
+                sections[current] = '\n'.join(lines).strip()
+            current = m.group(1)
+            lines = []
+        elif current is not None:
+            lines.append(line)
+    if current and current not in sections:
+        sections[current] = '\n'.join(lines).strip()
+    return sections
+
+
+def release_notes_from_pr(pr_body, version):
+    """PR 本文の様式から利用者向けリリースノートを組み立てる (API 不使用).
+
+    提出時に自動生成される「## 更新内容」「## ご利用にあたっての制限事項」を
+    そのまま転載する。レビュー担当者向けの節 (影響範囲・変更ファイルの説明・
+    注意・提出時の警告) は載せない。制限事項が「- なし」だけなら節ごと省く。
+    「## 更新内容」が見つからなければ None (呼び出し側が定型文へ戻す)。
+    """
+    sections = _pr_body_sections(pr_body)
+    content = sections.get('更新内容')
+    if not content:
+        return None
+    parts = ['# mgtkit %s リリースノート' % version, '', '## 更新内容', '',
+             content]
+    limits = next((v for k, v in sections.items()
+                   if _NOTES_LIMITS_KEY in k), '').strip()
+    if limits and not _NOTES_NO_LIMITS.match(limits):
+        parts += ['', '## ご利用にあたっての制限事項', '', limits]
+    return '\n'.join(parts)
+
+
 def release(pr_number, config=None, on_progress=None):
     """squash merge → 正式版タグ + Releases 登録 (release ワークフローを起動).
 
@@ -631,10 +775,10 @@ def release(pr_number, config=None, on_progress=None):
 
     version = next_stable_version(config)
     progress('リリースノートを作成しています...')
-    notes = claude_helper.generate_release_notes(
-        detail.get('title', ''), detail.get('body', ''), version)
-    if not notes:
-        notes = '%s リリース。\n\n%s' % (version, detail.get('title', ''))
+    # 提出時に用意済みの PR 本文から転載する (ここでは API を使わない)。
+    # 更新内容が書かれていない提出 (空欄のまま提出) は空欄でリリースする
+    # (管理者の指示 2026-08。Releases 側は「vX.Y リリース」だけになる)
+    notes = release_notes_from_pr(detail.get('body', ''), version) or ''
 
     progress('%s のリリースを開始しています...' % version)
     ghcli.run_gh(['workflow', 'run', 'release.yml', '--repo',
@@ -645,4 +789,4 @@ def release(pr_number, config=None, on_progress=None):
     delete_betas_for(pr_number, config)
     return {'version': version,
             'message': ('%s として取り込みました。数分でリリースが公開され、'
-                        '各メンバーの更新タブに表示されます。' % version)}
+                        '各メンバーへ自動で配布されます。' % version)}
