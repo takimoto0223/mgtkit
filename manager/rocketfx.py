@@ -484,6 +484,8 @@ _ZONE_TIPS = {
     'idle': '承認がそろうと正式版として発射します',
     'ignited': 'あと 1 人の承認で正式版になります',
     'smoking': '却下が 1 件あります',
+    'ignited_smoking': '承認と却下が 1 件ずつあります (却下が解消すると'
+                       '発射できます)',
     'wreck': '却下が確定しました',
 }
 
@@ -500,15 +502,19 @@ def zone(state):
     """ボタン行末尾の常駐ロケットを返す。(control, 開いたとき一度の演出fn).
 
     state: 'idle' (承認まだ) / 'ignited' (承認1つ=点火) /
-           'smoking' (却下1つ=煙) / 'wreck' (却下確定=残骸)
+           'smoking' (却下1つ=煙) / 'ignited_smoking' (承認1+却下1=
+           火も煙も) / 'wreck' (却下確定=残骸)
     """
     if state == 'wreck':
         inner = ft.Container(content=ft.Image(src=WRECK, width=30,
                                               height=13),
                              margin=ft.Margin.only(top=10))
         return _zone_box(inner, state), None
-    if state == 'smoking':
-        rocket = ft.Image(src=ROCKET, width=_ZW, height=22)
+    if state in ('smoking', 'ignited_smoking'):
+        # 却下 1 つ = 煙。承認もあるとき (ignited_smoking) は炎も一緒に
+        fired = state == 'ignited_smoking'
+        rocket = ft.Image(src=ROCKET_FL_S if fired else ROCKET,
+                          width=_ZW, height=_ZH if fired else 22)
         puffs = [ft.Container(content=ft.Image(src=SMOKE, width=8,
                                                height=8),
                               width=8, height=8, opacity=0.0,
@@ -518,18 +524,26 @@ def zone(state):
                                   1100, ft.AnimationCurve.EASE_OUT))
                  for _ in range(2)]
 
-        def drift(page_update, puffs=puffs):
+        def drift(page_update, puffs=puffs, rocket=rocket, fired=fired):
             for i, p in enumerate(puffs):
                 p.opacity = 0.95 - i * 0.2
                 p.offset = ft.Offset(0.35 + i * 0.55, -1.9 - i * 1.0)
                 page_update()
                 time.sleep(0.35)
-            time.sleep(0.9)
+                if fired:   # 炎の揺らめきも同時に
+                    rocket.src = (ROCKET_FL_M if i % 2 else ROCKET_FL_S)
+            if fired:
+                for j in (1, 0, 1, 0):
+                    rocket.src = ROCKET_FL_M if j else ROCKET_FL_S
+                    page_update()
+                    time.sleep(0.2)
+            else:
+                time.sleep(0.9)
             for p in puffs:
                 p.opacity = 0.35
             page_update()
         col = ft.Column([ft.Stack([rocket] + puffs, width=_ZW + 8,
-                                  height=24)],
+                                  height=_ZH if fired else 24)],
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         return _zone_box(col, state), drift
     if state == 'ignited':

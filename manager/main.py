@@ -1400,13 +1400,15 @@ def main(page: ft.Page):
         return True
 
     def _rocket_base(pr_number):
-        """発射・爆発の基点 = そのカードのボタン行右端のロケット位置.
+        """発射・爆発の基点 = 一覧右上の固定発射台.
 
-        一覧描画時にカードごとの推定 y を _rocket_pos に入れてある。
-        x はロケットが右寄せなのでウィンドウ幅から確定する。
+        カードごとの位置推定はレイアウト変更のたびにずれて保守が続く
+        ため廃止し、固定点に統一 (2026-08)。x は常駐ロケットと同じ
+        右端追従、y は一覧のすぐ上で固定。呼び出し時の幅から計算する
+        ので、ウィンドウ幅を変えてもボタンと同じように追従する。
         """
-        w = int(page.width or 760)
-        return _rocket_pos.get(pr_number, (w - 49, 410))
+        del pr_number   # どのカードでも同じ発射台を使う
+        return int(page.width or 760) - 49, 205
 
     def _hide_zone(pr_number):
         """演出中: 常駐ロケットを隠し、カードのボタンも無効化する
@@ -1654,8 +1656,6 @@ def main(page: ft.Page):
     _card_buttons = {}
     # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
     _auto_release_tried = set()
-    # 発射・爆発の基点 (一覧描画時にカードごとの推定位置を入れる)
-    _rocket_pos = {}
     # リリース公開待ちの期限 (この間は定期チェックが更新バッジを消さない)
     _pending_release = {'until': 0.0}
 
@@ -1665,12 +1665,15 @@ def main(page: ft.Page):
         却下確定 (一覧に戻した表示) は残骸の静止画のみ (演出はない)。
         却下が期日内に取り消されれば状態が変わり、煙付きで再表示される。
         """
+        fired = len(pr['approved']) >= max(1, n_req - 1)
         if pr.get('rejected_final'):
-            state = 'wreck'          # 却下確定: 散らばった残骸
+            state = 'wreck'              # 却下確定: 散らばった残骸
+        elif pr['rejected'] and fired:
+            state = 'ignited_smoking'    # 承認も却下もある: 火も煙も
         elif pr['rejected']:
-            state = 'smoking'        # 却下 1 つ: 煙
-        elif len(pr['approved']) >= max(1, n_req - 1):
-            state = 'ignited'        # 承認 1 つ: 点火
+            state = 'smoking'            # 却下 1 つ: 煙
+        elif fired:
+            state = 'ignited'            # 承認 1 つ: 点火
         else:
             state = 'idle'
         control, anim = rocketfx.zone(state)
@@ -1911,25 +1914,7 @@ def main(page: ft.Page):
         if not visible:
             t5_list.controls.append(
                 ft.Text('確認・承認待ちの提出はありません', size=14))
-        # カードごとの発射・爆発基点を推定 (行数からの概算で十分)
-        _rocket_pos.clear()
-        w = int(page.width or 760)
-        # 一覧先頭の y。タブ上部の説明文の行数に依存するため、
-        # 説明文の文言を変えたらこの値も見直すこと
-        # (「最新の状態に更新」ボタン廃止でボタン行 1 段分上がった)
-        y = 227 + (22 if w < 900 else 0)
         for pr in visible:
-            extra = 0
-            if pr['approved'] and not pr.get('rejected_final'):
-                extra += 1                  # 承認済み: ... の行
-            extra += len(pr['rejected'])    # 差し戻しコメントの行
-            if pr['conflicting'] and not pr.get('rejected_final'):
-                extra += 2                  # 統合待ちの案内文
-            h = 104 + 24 * extra            # カード実測からの係数
-            # スクロールで画面外になっても、せめて画面内から発射する
-            by = min(y + h - 33, int(page.height or 640) - 90)
-            _rocket_pos[pr['number']] = (w - 49, by)
-            y += h + 10
             t5_list.controls.append(
                 _review_row(pr, me, _beta_for(pr['number'], betas)))
         if folded:
