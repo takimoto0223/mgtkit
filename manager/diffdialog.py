@@ -478,6 +478,9 @@ def show(page, model, workrepo, size, close_label='閉じる',
 
         def work():
             try:
+                # 土台 (最新の正式版) を取り直してから ZIP を組む。
+                # 取り直せなくても手元の状態で作れるが、その旨を伝える
+                fresh = diffview.refresh_base(model, workrepo)
                 data = diffview.build_review_zip(model, workrepo)
                 dest_dir = os.path.join(os.path.expanduser('~'),
                                         'Downloads')
@@ -492,6 +495,9 @@ def show(page, model, workrepo, size, close_label='閉じる',
                 with open(dest, 'wb') as f:
                     f.write(data)
                 status.value = '確認用データを保存しました: %s' % dest
+                if not fresh:
+                    status.value += ('（最新の正式版を確認できなかった'
+                                     'ため、手元の状態で作成しています）')
             except Exception as e2:
                 log.exception('確認用データの保存に失敗')
                 status.value = ('保存できませんでした: %s' % e2)
@@ -546,7 +552,7 @@ def show(page, model, workrepo, size, close_label='閉じる',
     if on_open_browser is not None:
         actions.append(ft.TextButton(
             'ブラウザで開く', on_click=lambda _: on_open_browser(status)))
-    if model['dl_files']:
+    if model['dl_paths']:
         save_btn = ft.TextButton('確認用データを保存...',
                                  icon=ft.Icons.DOWNLOAD,
                                  on_click=confirm_save)

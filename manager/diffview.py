@@ -20,10 +20,11 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import zipfile
 
 from . import ghcli, paths
-from .gitcli import ensure_work_repo, run_git
+from .gitcli import GitError, ensure_work_repo, run_git
 from .submit import _is_dist_scope, workrepo_dir
 
 log = logging.getLogger(__name__)
@@ -382,7 +383,25 @@ def _dl_readme(meta, changed, dl_deleted):
     return '\n'.join(lines)
 
 
-def build_review_zip(model, workrepo, max_mb=None):
+def refresh_base(model, workrepo):
+    """一式 ZIP の土台 (最新の正式版) を最新化する。成功なら True.
+
+    表示 (build_model) は fetch を省くことがあるため、確認用データを
+    作る直前にここで正式版を取り直す。他スレッドの先読みと git 操作が
+    重ならないよう同じ鍵で直列化する。失敗は False (手元の状態で続行
+    できるが、呼び出し側はその旨をユーザーに伝えること)。
+    """
+    with _model_lock:
+        try:
+            base = model['base_ref'].split('/', 1)[-1]
+            run_git(['fetch', 'origin', base], cwd=workrepo, timeout=300)
+            return True
+        except GitError:
+            log.warning('正式版の最新化に失敗 (手元の状態で作成します)')
+            return False
+
+
+def build_review_zip(model, workrepo, max_mb=None, fetch_base=False):
     """確認用データ ZIP のバイト列を組み立てる (HTML・ダイアログ共通).
 
     一式 = 「最新の正式版 + この提出の変更」(= β版の中身)。
@@ -392,8 +411,18 @@ def build_review_zip(model, workrepo, max_mb=None):
     version.json はあえて入れない (この一式をそのまま提出の土台に
     できないようにするため)。
     max_mb 指定時、超えたら None (HTML への base64 埋め込み用の上限)。
+    fetch_base=True で土台 (正式版) を先に最新化する。
     """
-    dl_files, dl_deleted = model['dl_files'], model['dl_deleted']
+    if fetch_base:
+        refresh_base(model, workrepo)
+    # 変更ファイルの中身は表示時ではなくここで取り出す (表示の高速化)
+    dl_files = []
+    for p in model['dl_paths']:
+        data = _git_bytes(workrepo,
+                          ['show', '%s:%s' % (model['head_ref'], p)])
+        if data is not None:
+            dl_files.append((p, data))
+    dl_deleted = model['dl_deleted']
     full = {}
     for p in run_git(['ls-tree', '-r', '--name-only', model['base_ref']],
                      cwd=workrepo).splitlines():
@@ -432,9 +461,10 @@ def _download_link(model, workrepo):
     β版まるごと) と「変更のみ」(中身チェック用) の両方を入れる。
     戻り値: (ボタン HTML, モーダル HTML)。出さないときは ('', '')。
     """
-    if not model['dl_files']:
+    if not model['dl_paths']:
         return '', ''
-    data = build_review_zip(model, workrepo, max_mb=MAX_DL_MB)
+    data = build_review_zip(model, workrepo, max_mb=MAX_DL_MB,
+                            fetch_base=True)
     if data is None:
         return '', ''
     b64 = base64.b64encode(data).decode('ascii')
@@ -477,7 +507,7 @@ def _download_link(model, workrepo):
     return btn, modal
 
 
-def collect_model(meta, base_ref, head_ref, workrepo):
+def collect_model(meta, base_ref, head_ref, workrepo, merge_base=None):
     """差分モデル (表示技術に依存しないデータ) を組み立てる.
 
     HTML (render_html) とアプリ内ダイアログ (diffdialog) の共通データ。
@@ -488,28 +518,29 @@ def collect_model(meta, base_ref, head_ref, workrepo):
                adds, dels, changed, rows}]
         kind: 'diff' | 'binary' | 'big'。rows は kind=='diff' のみ
         (collapse_context 済みの行ペア)
-      dl_files: [(path, bytes)] / dl_deleted: [path] / base_ref:
-        確認用データ ZIP の構築用
+      dl_paths: [path] / dl_deleted: [path] / base_ref / head_ref:
+        確認用データ ZIP の構築用 (中身の取り出しは保存時まで遅延)
+
+    merge_base を与えると比較の基点をそれにする (スナップショットが
+    持つ分岐点 SHA。ローカルでの merge-base 計算を省く)。
     """
-    mb = run_git(['merge-base', base_ref, head_ref], cwd=workrepo).strip()
+    mb = merge_base or run_git(['merge-base', base_ref, head_ref],
+                               cwd=workrepo).strip()
     out = run_git(['diff', '--name-status', '%s..%s' % (mb, head_ref)],
                   cwd=workrepo)
     raw = [line.split('\t', 1) for line in out.splitlines()
            if line.strip()]
     notes = meta.get('notes') or {}
 
-    files, dl_files, dl_deleted = [], [], []
+    files, dl_paths, dl_deleted = [], [], []
     n_add = n_del = 0
     for status, path in ((s[0], p) for s, p in raw):
         jp, cls = _STATUS_JP.get(status, ('変更', 'tagM'))
-        # 確認用データ ZIP 用に提出後の内容を控える (削除ファイルは一覧のみ)
+        # 確認用データ ZIP の対象を控える (中身の取り出しは保存時)
         if status == 'D':
             dl_deleted.append(path)
         else:
-            data = _git_bytes(workrepo, ['show',
-                                         '%s:%s' % (head_ref, path)])
-            if data is not None:
-                dl_files.append((path, data))
+            dl_paths.append(path)
         note = notes.get(path)
         ext = ('.' + path.rsplit('.', 1)[-1].lower()) if '.' in path else ''
         old = [] if status == 'A' else _file_lines(workrepo, mb, path)
@@ -540,8 +571,9 @@ def collect_model(meta, base_ref, head_ref, workrepo):
     return {'number': meta['number'], 'title': meta['title'],
             'author': meta.get('author', '?'), 'beta': meta.get('beta'),
             'has_notes': bool(notes), 'n_add': n_add, 'n_del': n_del,
-            'files': files, 'dl_files': dl_files,
-            'dl_deleted': dl_deleted, 'base_ref': base_ref}
+            'files': files, 'dl_paths': dl_paths,
+            'dl_deleted': dl_deleted, 'base_ref': base_ref,
+            'head_ref': head_ref}
 
 
 def build_html(meta, base_ref, head_ref, workrepo):
@@ -638,34 +670,97 @@ def render_html(model, workrepo):
            ''.join(sections), dl_modal))
 
 
+def _has_commit(workrepo, sha):
+    """コミット sha が手元にあるか (あれば fetch を省ける)."""
+    if not sha:
+        return False
+    try:
+        run_git(['cat-file', '-e', '%s^{commit}' % sha], cwd=workrepo)
+        return True
+    except GitError:
+        return False
+
+
 def build_model(pr, config=None, workrepo=None, beta_tag=None):
     """提出 pr の差分モデルを取得する (アプリ内ダイアログ用).
 
-    pr: reviews.list_pending の要素 (number/title/author/branch を使用)。
+    pr: reviews.list_pending の要素 (number/title/author/branch のほか、
+    あれば head_sha/fork_sha/body を高速化に使う)。
     戻り値: (model, workrepo)。workrepo は確認用データ ZIP の構築と
     「ブラウザで開く」(render_html) に使い回す。
+
+    速度の要はネットワーク往復を消すこと (管理者指示 2026-08):
+    - 提出の先端 (head_sha) と分岐点 (fork_sha) が手元にあれば
+      fetch しない。無いときだけ 1 回で fetch する
+    - 説明文 (PR 本文) はスナップショットに同乗した body を使い、
+      無いとき (旧キャッシュ) だけ gh で取りに行く
     """
     if workrepo is None:
         workrepo = ensure_work_repo(paths.repo_slug(config),
-                                    workrepo_dir(config))
+                                    workrepo_dir(config), fetch=False)
     base = (config or {}).get('base_branch', 'main')
-    run_git(['fetch', 'origin', base, pr['branch']], cwd=workrepo,
-            timeout=300)
+    head_sha, fork_sha = pr.get('head_sha'), pr.get('fork_sha')
+    if not (_has_commit(workrepo, head_sha)
+            and _has_commit(workrepo, fork_sha)):
+        run_git(['fetch', 'origin', base, pr['branch']], cwd=workrepo,
+                timeout=300)
+    head_ref = (head_sha if _has_commit(workrepo, head_sha)
+                else 'origin/%s' % pr['branch'])
+    # 分岐点はスナップショットの fork_sha (GitHub 側の真値) を優先。
+    # ただし先端も head_sha に固定できたときだけ (提出が置き換えられて
+    # いて先端がブランチ参照に落ちた場合、古い分岐点と組み合わせると
+    # 他人の変更が混ざった差分になるため、merge-base 計算に戻す)
+    merge_base = (fork_sha if head_ref == head_sha
+                  and _has_commit(workrepo, fork_sha) else None)
     # 提出時に生成されたファイル別説明 (PR 本文)。取れなくても表示は続行
-    try:
-        body = ghcli.run_gh(['pr', 'view', str(pr['number']),
-                             '--repo', paths.repo_slug(config),
-                             '--json', 'body', '--jq', '.body'])
-    except ghcli.GhError:
-        log.warning('PR #%s の本文取得に失敗 (説明なしで表示します)',
-                    pr['number'])
-        body = ''
+    body = pr.get('body')
+    if body is None:
+        try:
+            body = ghcli.run_gh(['pr', 'view', str(pr['number']),
+                                 '--repo', paths.repo_slug(config),
+                                 '--json', 'body', '--jq', '.body'])
+        except ghcli.GhError:
+            log.warning('PR #%s の本文取得に失敗 (説明なしで表示します)',
+                        pr['number'])
+            body = ''
     meta = {'number': pr['number'], 'title': pr['title'],
             'author': pr.get('author', '?'), 'beta': beta_tag,
             'notes': parse_file_notes(body)}
-    return (collect_model(meta, 'origin/%s' % base,
-                          'origin/%s' % pr['branch'], workrepo),
+    return (collect_model(meta, 'origin/%s' % base, head_ref, workrepo,
+                          merge_base=merge_base),
             workrepo)
+
+
+# 先読みキャッシュ: β タブの一覧が届いたら裏でモデルを組んでおき、
+# 「差分」クリック時は組み立て済みをそのまま出す (体感ほぼ 0 秒)。
+# キーは number:head_sha なので、提出が更新されれば自然に作り直す
+_MODEL_CACHE_MAX = 8
+_model_cache = {}
+_model_lock = threading.Lock()
+
+
+def build_model_cached(pr, config=None, beta_tag=None):
+    """build_model のキャッシュ付き版 (先読みとクリックの共通入口).
+
+    同じ workrepo への git 操作が重ならないよう全体を 1 本の鍵で
+    直列化する (先読み中のクリックは先読み完了を待ってから返る)。
+    """
+    key = '%s:%s' % (pr.get('number'), pr.get('head_sha') or '')
+    if not pr.get('head_sha'):
+        # 旧形式のキャッシュ由来 (head_sha なし) はキャッシュ対象外だが、
+        # git 操作が先読みと重ならないよう同じ鍵で直列化だけはする
+        with _model_lock:
+            return build_model(pr, config, beta_tag=beta_tag)
+    with _model_lock:
+        hit = _model_cache.get(key)
+        if hit is None:
+            hit = build_model(pr, config, beta_tag=beta_tag)
+            _model_cache[key] = hit
+            while len(_model_cache) > _MODEL_CACHE_MAX:
+                _model_cache.pop(next(iter(_model_cache)))
+    model, workrepo = hit
+    # β版タグだけは呼び出しごとに違い得るので差し替えて返す
+    return dict(model, beta=beta_tag), workrepo
 
 
 def write_html_from_model(model, workrepo):

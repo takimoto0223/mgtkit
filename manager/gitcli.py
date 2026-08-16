@@ -58,15 +58,19 @@ def _friendly_message(stderr):
     return '処理中にエラーが発生しました。時間をおいて再試行してください。'
 
 
-def ensure_work_repo(repo_slug, workrepo_dir):
+def ensure_work_repo(repo_slug, workrepo_dir, fetch=True):
     """提出処理用の作業クローンを用意し、最新化して返す.
 
     ユーザーの見えない場所 (<install_root>/workrepo) に clone を保持する。
     認証は gh auth setup-git 済みの資格情報、または既存の git 資格情報に従う。
+    fetch=False は「クローンの用意だけして最新化しない」(呼び出し側が
+    必要なものだけを fetch する高速経路。差分表示が使う)。
     """
     if not os.path.isdir(os.path.join(workrepo_dir, '.git')):
         os.makedirs(os.path.dirname(workrepo_dir) or '.', exist_ok=True)
         run_git(['clone', 'https://github.com/%s.git' % repo_slug,
-                 workrepo_dir], timeout=600)
-    run_git(['fetch', 'origin', '--prune'], cwd=workrepo_dir, timeout=300)
+                 workrepo_dir], timeout=600)   # クローン直後は最新
+    elif fetch:
+        run_git(['fetch', 'origin', '--prune'], cwd=workrepo_dir,
+                timeout=300)
     return workrepo_dir

@@ -175,7 +175,7 @@ def list_pending(config=None):
         'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
         '--json', 'number,title,url,author,headRefName,headRefOid,'
                   'createdAt,reviews,statusCheckRollup,mergeable,'
-                  'comments'])
+                  'comments,body'])
     try:
         prs = json.loads(out)
     except ValueError:
@@ -202,6 +202,8 @@ def _build_pending(prs, config):
             'created_at': (pr.get('createdAt') or '')[:10],
             'created_at_full': pr.get('createdAt') or '',
             'head_sha': pr.get('headRefOid') or '',
+            # 提出時の説明文 (差分表示が使う。クリック時の往復をなくす)
+            'body': pr.get('body') or '',
             'approved': summary['approved'],
             'rejected': summary['rejected'],
             'rejected_final': len(summary['rejected']) >= n_req,
@@ -225,7 +227,7 @@ query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 50) {
       nodes {
-        number title url headRefName headRefOid mergeable createdAt
+        number title url headRefName headRefOid mergeable createdAt body
         author { login }
         reviews(first: 100) {
           nodes { state body submittedAt author { login } }
@@ -379,6 +381,7 @@ def _pr_from_graphql(node):
         'mergeable': node.get('mergeable') or '',
         'createdAt': node.get('createdAt') or '',
         'headRefOid': node.get('headRefOid') or '',
+        'body': node.get('body') or '',
         'author': node.get('author') or {},
         'reviews': (node.get('reviews') or {}).get('nodes') or [],
         'comments': (node.get('comments') or {}).get('nodes') or [],

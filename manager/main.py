@@ -1776,8 +1776,8 @@ def main(page: ft.Page):
         表示後の「ブラウザで開く」は同じモデルから HTML を書き出すだけ
         (取得のやり直しなし)。
         """
-        model, workrepo = diffview.build_model(pr, config,
-                                               beta_tag=beta_tag)
+        model, workrepo = diffview.build_model_cached(pr, config,
+                                                      beta_tag=beta_tag)
 
         def open_browser(status):
             status.value = 'ブラウザで開いています...'
@@ -2233,6 +2233,30 @@ def main(page: ft.Page):
                     except Exception:
                         log.debug('ロケット演出をスキップ', exc_info=True)
                 run_bg(play)
+        # 差分モデルを裏で先読みしておく (「差分」クリックを即表示に)
+        _prefetch_diffs(visible)
+
+    def _prefetch_diffs(pending):
+        """一覧の提出の差分モデルを裏で組んでキャッシュしておく.
+
+        キャッシュ済み (head_sha が同じ) なら何もしないので、
+        一覧が描き直されるたびに呼んでも無駄な取得は起きない。
+        """
+        # キャッシュ上限を超える先読みは追い出し合いになるだけなので
+        # 一覧の上から上限件数まで (それ以降はクリック時に組む)
+        targets = [p for p in pending
+                   if p.get('head_sha')][:diffview._MODEL_CACHE_MAX]
+        if not targets:
+            return
+
+        def work():
+            for pr in targets:
+                try:
+                    diffview.build_model_cached(pr, config)
+                except Exception:
+                    log.debug('差分の先読みに失敗 #%s', pr.get('number'),
+                              exc_info=True)
+        run_bg(work)
 
     def _fetch_review_snapshot(on_progress=None):
         """一覧とリリース一覧を一括取得してスナップショットへ保存する.
