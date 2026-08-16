@@ -1408,7 +1408,9 @@ def main(page: ft.Page):
         ので、ウィンドウ幅を変えてもボタンと同じように追従する。
         """
         del pr_number   # どのカードでも同じ発射台を使う
-        return int(page.width or 760) - 49, 205
+        w = int(page.width or 760)
+        # y は発射台の絵の位置に合わせる (説明文の折り返しで 1 行ぶん変わる)
+        return w - 49, 222 + (22 if w < 900 else 0)
 
     def _hide_zone(pr_number):
         """演出中: 常駐ロケットを隠し、カードのボタンも無効化する
@@ -1418,6 +1420,9 @@ def main(page: ft.Page):
             zone.visible = False
         for b in _card_buttons.get(pr_number, []):
             b.disabled = True
+            if getattr(b, 'bgcolor', None):
+                b.bgcolor = '#e5e7eb'
+                b.color = '#9ca3af'
 
     def _play_launch(pr_number, done=None):
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
@@ -1713,7 +1718,12 @@ def main(page: ft.Page):
             badges.append(_badge('承認 %d/%d' % (len(pr['approved']), n_req),
                                  '#fef08a', '#713f12'))
             if pr['rejected']:
-                badges.append(_badge('却下あり', '#fecaca', '#7f1d1d'))
+                badges.append(ft.Container(
+                    content=_badge('却下あり', '#fecaca',
+                                   '#7f1d1d'),
+                    tooltip='却下が 1 件あります (却下した本人の'
+                            '取り消し、または修正版の再提出で'
+                            '解消します)'))
             if pr['conflicting']:
                 badges.append(_badge('最新版と衝突', '#fde68a', '#78350f'))
         checks_label, checks_color = {
@@ -2004,6 +2014,13 @@ def main(page: ft.Page):
         ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
                 'ため、通常の作業には影響しません。', size=12,
                 color='#555555'),
+        # 発射台 (承認がそろった提出はここから飛び立ち、
+        # 却下確定はここで爆発する。発射・爆発の基点の目印)
+        ft.Row([ft.Container(expand=True),
+                ft.Container(content=ft.Image(src=rocketfx.PAD,
+                                              width=24, height=10),
+                             margin=ft.Margin.only(right=14),
+                             tooltip='ロケットの発射台')]),
         t5_list,
         t5_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))

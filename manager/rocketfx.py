@@ -136,6 +136,27 @@ SPARKLE = (
 )
 
 
+SMOKE_DARK = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><defs>'
+    '<radialGradient id="sd" cx=".5" cy=".5" r=".5">'
+    '<stop offset="0" stop-color="#8f97a5"/>'
+    '<stop offset=".55" stop-color="#9aa3b2" stop-opacity=".85"/>'
+    '<stop offset="1" stop-color="#9aa3b2" stop-opacity="0"/>'
+    '</radialGradient></defs>'
+    '<circle cx="10" cy="10" r="10" fill="url(#sd)"/></svg>'
+)
+
+# 発射台 (一覧右上に常設し、発射・爆発の基点に文脈を与える)
+PAD = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 10">'
+    + _DEFS +
+    '<path d="M3,1 L21,1 L23,7 L1,7 Z" fill="url(#ng)"/>'
+    '<rect x="4" y="7" width="3" height="2.6" fill="#4a4a4a"/>'
+    '<rect x="17" y="7" width="3" height="2.6" fill="#4a4a4a"/>'
+    '<rect x="11" y="7" width="2.4" height="2.6" fill="#5a5a5a"/></svg>'
+)
+
+
 def _part_svg(vb, body):
     return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="%s">%s%s</svg>'
             % (vb, _DEFS, body))
@@ -393,14 +414,16 @@ def play_crash(page, start_x, start_y, done=None):
     ground = start_y + 17
 
     # 破片: (svg, 幅, 初速x, 初速y, 回転速度)
+    # 発射台は画面右端に近いため、破片は左寄りに飛ばして
+    # 画面外へのクリップを防ぐ
     spec = [
-        (P_NOSE, 8, -55, -170, -6.5),
-        (P_WINDOW, 7, 62, -195, 4.5),
-        (P_BODY_U, 8, -30, -120, -5.0),
-        (P_BODY_L, 8, 42, -100, 5.5),
-        (P_FIN_L, 7, -95, -70, -8.0),
-        (P_FIN_R, 7, 98, -75, 7.5),
-        (P_NOZZLE, 7, -18, -45, -4.0),
+        (P_NOSE, 8, -70, -170, -6.5),
+        (P_WINDOW, 7, 40, -195, 4.5),
+        (P_BODY_U, 8, -40, -120, -5.0),
+        (P_BODY_L, 8, 30, -100, 5.5),
+        (P_FIN_L, 7, -110, -70, -8.0),
+        (P_FIN_R, 7, 45, -75, 7.5),
+        (P_NOZZLE, 7, -25, -45, -4.0),
     ]
     parts = []
     for svg, w, vx, vy, rv in spec:
@@ -511,41 +534,45 @@ def zone(state):
                              margin=ft.Margin.only(top=10))
         return _zone_box(inner, state), None
     if state in ('smoking', 'ignited_smoking'):
-        # 却下 1 つ = 煙。承認もあるとき (ignited_smoking) は炎も一緒に
+        # 却下 1 つ = 煙。承認もあるとき (ignited_smoking) は炎も一緒に。
+        # 煙は 13px の機体の中に描くと等倍で見えないため、機体の左に
+        # 独立した濃いめの煙を並置する
         fired = state == 'ignited_smoking'
-        rocket = ft.Image(src=ROCKET_FL_S if fired else ROCKET,
-                          width=_ZW, height=_ZH if fired else 22)
-        puffs = [ft.Container(content=ft.Image(src=SMOKE, width=8,
-                                               height=8),
-                              width=8, height=8, opacity=0.0,
-                              offset=ft.Offset(0, 0),
-                              animate_opacity=ft.Animation(400),
-                              animate_offset=ft.Animation(
-                                  1100, ft.AnimationCurve.EASE_OUT))
-                 for _ in range(2)]
+        rimg = ft.Image(src=ROCKET_FL_S if fired else ROCKET,
+                        width=_ZW, height=_ZH if fired else 22)
+        rocket = ft.Container(content=rimg, left=14, top=0,
+                              width=_ZW, height=_ZH if fired else 22)
+        puffs = []
+        for left, top, size in ((2, 5, 12), (0, 0, 10)):
+            puffs.append(ft.Container(
+                content=ft.Image(src=SMOKE_DARK, width=size, height=size),
+                width=size, height=size, left=left, top=top,
+                opacity=0.0, offset=ft.Offset(0, 0),
+                animate_opacity=ft.Animation(400),
+                animate_offset=ft.Animation(
+                    1100, ft.AnimationCurve.EASE_OUT)))
 
-        def drift(page_update, puffs=puffs, rocket=rocket, fired=fired):
+        def drift(page_update, puffs=puffs, rimg=rimg, fired=fired):
             for i, p in enumerate(puffs):
-                p.opacity = 0.95 - i * 0.2
-                p.offset = ft.Offset(0.35 + i * 0.55, -1.9 - i * 1.0)
+                p.opacity = 0.9 - i * 0.15
+                p.offset = ft.Offset(-0.2 - i * 0.2, -0.5 - i * 0.4)
                 page_update()
                 time.sleep(0.35)
                 if fired:   # 炎の揺らめきも同時に
-                    rocket.src = (ROCKET_FL_M if i % 2 else ROCKET_FL_S)
+                    rimg.src = (ROCKET_FL_M if i % 2 else ROCKET_FL_S)
             if fired:
                 for j in (1, 0, 1, 0):
-                    rocket.src = ROCKET_FL_M if j else ROCKET_FL_S
+                    rimg.src = ROCKET_FL_M if j else ROCKET_FL_S
                     page_update()
                     time.sleep(0.2)
             else:
                 time.sleep(0.9)
-            for p in puffs:
-                p.opacity = 0.35
+            for i, p in enumerate(puffs):
+                p.opacity = 0.75 - i * 0.15
             page_update()
-        col = ft.Column([ft.Stack([rocket] + puffs, width=_ZW + 8,
-                                  height=_ZH if fired else 24)],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        return _zone_box(col, state), drift
+        stack = ft.Stack([rocket] + puffs, width=14 + _ZW,
+                         height=_ZH if fired else 24)
+        return _zone_box(stack, state), drift
     if state == 'ignited':
         img = ft.Image(src=ROCKET_FL_S, width=_ZW, height=_ZH)
 
