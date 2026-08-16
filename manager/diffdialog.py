@@ -513,7 +513,7 @@ def _risk_card(idx, cls, title, text):
 
 
 def build_dialog(page, model, workrepo, size, close_label='閉じる',
-                 on_open_browser=None, run_ui=None):
+                 on_open_browser=None, run_ui=None, ask_save_path=None):
     """差分ダイアログを組み立てて返す (表示は呼び出し側)。
 
     重いのは組み立て (数千行ぶんの部品) なので、そこは裏スレッドで
@@ -525,6 +525,8 @@ def build_dialog(page, model, workrepo, size, close_label='閉じる',
     (印刷や大画面で見たい人向け。None なら出さない)。
     run_ui(fn): 裏スレッドからの画面書き換えをループ上で実行する関数
     (main.py の共通部品)。渡さないとその場で実行する。
+    ask_save_path(file_name, title): 保存先をたずねて返す関数
+    (main.py の共通部品)。渡さないとダウンロードフォルダへ保存する。
     """
     if run_ui is None:
         def run_ui(fn):
@@ -581,8 +583,31 @@ def build_dialog(page, model, workrepo, size, close_label='閉じる',
 
     save_btn = None
 
-    def do_save(_):
+    def _fallback_dest():
+        """保存先をたずねられないときの置き場所 (ダウンロードフォルダ)."""
+        dest_dir = os.path.join(os.path.expanduser('~'), 'Downloads')
+        os.makedirs(dest_dir, exist_ok=True)
+        base = '#%d_確認用' % model['number']
+        dest = os.path.join(dest_dir, base + '.zip')
+        k = 2
+        while os.path.exists(dest):        # 既存を黙って上書きしない
+            dest = os.path.join(dest_dir, '%s (%d).zip' % (base, k))
+            k += 1
+        return dest
+
+    async def do_save(_):
         page.pop_dialog()       # リスク確認を閉じて差分に戻る
+        page.update()
+        # まず保存先をたずねる (勝手にダウンロードフォルダへ置かない)
+        if ask_save_path is not None:
+            dest = await ask_save_path('#%d_確認用.zip' % model['number'],
+                                       '確認用データの保存先')
+            if not dest:
+                status.value = '保存を取り消しました。'
+                page.update()
+                return
+        else:
+            dest = _fallback_dest()
         # 押した瞬間に反応: 本体側の保存ボタンを無効化 (二度押し防止)
         if save_btn is not None:
             save_btn.disabled = True
@@ -595,16 +620,6 @@ def build_dialog(page, model, workrepo, size, close_label='閉じる',
                 # 取り直せなくても手元の状態で作れるが、その旨を伝える
                 fresh = diffview.refresh_base(model, workrepo)
                 data = diffview.build_review_zip(model, workrepo)
-                dest_dir = os.path.join(os.path.expanduser('~'),
-                                        'Downloads')
-                os.makedirs(dest_dir, exist_ok=True)
-                base = '#%d_確認用' % model['number']
-                dest = os.path.join(dest_dir, base + '.zip')
-                k = 2
-                while os.path.exists(dest):    # 既存を黙って上書きしない
-                    dest = os.path.join(dest_dir,
-                                        '%s (%d).zip' % (base, k))
-                    k += 1
                 with open(dest, 'wb') as f:
                     f.write(data)
                 status.value = '確認用データを保存しました: %s' % dest
