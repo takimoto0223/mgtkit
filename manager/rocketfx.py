@@ -248,11 +248,29 @@ class _Stage:
         return sprite
 
     def close(self):
-        try:
-            self.page.overlay.remove(self.stack)
-        except ValueError:
-            pass
-        self.page.update()
+        def apply():
+            try:
+                self.page.overlay.remove(self.stack)
+            except ValueError:
+                pass
+            self.page.update()
+        ui_sync(self.page, apply)
+
+
+def ui_sync(page, fn, timeout=5.0):
+    """書き換えと画面更新をひとまとめに、画面のループ上で行って待つ.
+
+    演出は裏スレッドで 30fps 回すが、書き換えと送信が別々のスレッドで
+    走ると、送信側が変更点を数えている最中に演出側が書き換えてしまう。
+    ひとまとめにループ上で行い、終わるまで待って次のコマへ進む。
+    """
+    async def apply():
+        fn()
+    try:
+        page.run_task(apply).result(timeout=timeout)
+    except Exception:
+        log.debug('演出をループ上で実行できません', exc_info=True)
+        fn()
 
 
 def _animate(page, stage, step, done=None):
@@ -261,9 +279,14 @@ def _animate(page, stage, step, done=None):
         t0 = time.time()
         try:
             while True:
-                if not step(time.time() - t0):
+                box = {}
+
+                def frame():
+                    box['go'] = step(time.time() - t0)
+                    page.update()
+                ui_sync(page, frame)
+                if not box.get('go'):
                     break
-                page.update()
                 time.sleep(_FRAME)
         except Exception:
             log.debug('ロケット演出を中断', exc_info=True)

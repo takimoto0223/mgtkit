@@ -512,15 +512,23 @@ def _risk_card(idx, cls, title, text):
         ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.START))
 
 
-def show(page, model, workrepo, size, close_label='閉じる',
-         on_open_browser=None):
-    """差分ダイアログを開く (page.show_dialog)。
+def build_dialog(page, model, workrepo, size, close_label='閉じる',
+                 on_open_browser=None, run_ui=None):
+    """差分ダイアログを組み立てて返す (表示は呼び出し側)。
+
+    重いのは組み立て (数千行ぶんの部品) なので、そこは裏スレッドで
+    行い、表示だけを画面のループ上で行えるように分けてある。
 
     size: (幅, 高さ) — 呼び出し側のウィンドウ 8 割ルールに従う。
     close_label: 履歴の詳細から開くときは「戻る」(閉じると背後に戻る)。
     on_open_browser(status_text): 同じ内容をブラウザで開く補助導線
     (印刷や大画面で見たい人向け。None なら出さない)。
+    run_ui(fn): 裏スレッドからの画面書き換えをループ上で実行する関数
+    (main.py の共通部品)。渡さないとその場で実行する。
     """
+    if run_ui is None:
+        def run_ui(fn):
+            fn()
     global _font_family
     _font_family = getattr(page.theme, 'font_family', None) \
         if page.theme else None
@@ -553,15 +561,18 @@ def show(page, model, workrepo, size, close_label='閉じる',
 
         def work():
             built = _build_rows(entry['rows'][start:], code_w)
-            try:
-                at = lv.controls.index(holder)
-            except ValueError:
-                return
-            lv.controls[at:at + 1] = [c for c, _ in built]
-            # 差し込んだぶん、後ろのファイルのジャンプ先がずれる
-            shift_offsets(offsets, holder.data or 0,
-                          sum(h for _, h in built) - _H_EXPAND)
-            page.update()
+
+            def apply():
+                try:
+                    at = lv.controls.index(holder)
+                except ValueError:
+                    return
+                lv.controls[at:at + 1] = [c for c, _ in built]
+                # 差し込んだぶん、後ろのファイルのジャンプ先がずれる
+                shift_offsets(offsets, holder.data or 0,
+                              sum(h for _, h in built) - _H_EXPAND)
+                page.update()
+            run_ui(apply)
         threading.Thread(target=work, daemon=True).start()
 
     items, offsets = build_items(model, on_jump, code_w=code_w,
@@ -604,9 +615,11 @@ def show(page, model, workrepo, size, close_label='閉じる',
                 log.exception('確認用データの保存に失敗')
                 status.value = ('保存できませんでした: %s' % e2)
             finally:
-                if save_btn is not None:
-                    save_btn.disabled = False
-                page.update()
+                def apply():
+                    if save_btn is not None:
+                        save_btn.disabled = False
+                    page.update()
+                run_ui(apply)
         threading.Thread(target=work, daemon=True).start()
 
     def confirm_save(_):
@@ -672,10 +685,19 @@ def show(page, model, workrepo, size, close_label='閉じる',
     body = ft.Stack([ft.Container(content=lv, expand=True), top_btn],
                     expand=True)
 
-    page.show_dialog(ft.AlertDialog(
+    return ft.AlertDialog(
         modal=True,
         title=title,
         content=ft.Column([body, status], width=col_w, height=col_h,
                           spacing=6, tight=True),
-        actions=actions))
+        actions=actions)
+
+
+def show(page, model, workrepo, size, close_label='閉じる',
+         on_open_browser=None, run_ui=None):
+    """組み立てて表示まで行う (組み立てだけしたいときは build_dialog)."""
+    page.show_dialog(build_dialog(page, model, workrepo, size,
+                                  close_label=close_label,
+                                  on_open_browser=on_open_browser,
+                                  run_ui=run_ui))
     page.update()

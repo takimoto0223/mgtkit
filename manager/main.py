@@ -54,6 +54,80 @@ def main(page: ft.Page):
     def run_bg(fn):
         threading.Thread(target=fn, daemon=True).start()
 
+    def run_ui(fn, on_error=None):
+        """裏スレッドから画面を書き換えるときの共通入口 (必ずこれを通す).
+
+        Flet は画面の更新を送信キューに積むだけで、積んだ側からは
+        画面の処理ループを起こせない。裏スレッドから直接書き換えると、
+        利用者が次に何か操作するまで実機 (デスクトップ) に届かない
+        (2026-08 の実機報告「別の作業をすると表示される」の原因)。
+        run_task はループを起こす経路なので、そこに載せて実行する。
+        on_error(e) を渡すと、fn の失敗をそこに知らせる (別タスクで
+        走るため、呼び出し側の try では捕まえられないため)。
+        """
+        async def apply():
+            try:
+                fn()
+            except Exception as e:
+                log.exception('画面の更新に失敗')
+                if on_error is not None:
+                    on_error(e)
+        try:
+            page.run_task(apply)
+        except (RuntimeError, AttributeError) as e:
+            # ループがまだ無い / セッションが閉じた等。直接実行に戻すが、
+            # この経路では画面が届かないことがあるので記録は残す
+            log.warning('画面更新をループに載せられません: %s', e)
+            fn()
+
+    def _page_loop():
+        """この画面のイベントループ (取れないときは None)."""
+        try:
+            return page.session.connection.loop
+        except AttributeError:
+            return None
+
+    # 画面に触る入口はどこから呼ばれてもループ上で行うようにしておく
+    # (個々の run_bg の中の書き換えを 1 箇所でまとめて安全にする。
+    # 新しく書くコードで run_ui を忘れても取りこぼさない)
+    # (名前は他のラッパーと衝突させないこと。同じ名前を後から def
+    #  すると、この中の参照までそちらに向いて無限再帰になる)
+    _raw_update = page.update
+    _raw_show_dialog = page.show_dialog
+    _raw_pop_dialog = page.pop_dialog
+
+    def _on_loop():
+        """いま画面のループの上にいるか (= そのまま書き換えてよいか)."""
+        try:
+            here = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        # 別のループ (裏で asyncio.run するワーカー等) の上かもしれない
+        theirs = _page_loop()
+        return theirs is None or here is theirs
+
+    def _update_on_loop(*controls, **kwargs):
+        if _on_loop():
+            _raw_update(*controls, **kwargs)
+        else:
+            run_ui(lambda: _raw_update(*controls, **kwargs))
+
+    def _show_dialog_on_loop(dialog):
+        if _on_loop():
+            _raw_show_dialog(dialog)
+        else:
+            run_ui(lambda: _raw_show_dialog(dialog))
+
+    def _pop_dialog_on_loop():
+        if _on_loop():
+            return _raw_pop_dialog()
+        run_ui(_raw_pop_dialog)
+        return None
+
+    page.update = _update_on_loop
+    page.show_dialog = _show_dialog_on_loop
+    page.pop_dialog = _pop_dialog_on_loop
+
     # 押した瞬間に必ず画面を反応させるための共通部品。
     # 人は反応がないと何度もクリックするため、ボタンを押したら
     # 「無効化 + 進行中の文言」を先に表示し、時間のかかる処理は
@@ -652,6 +726,11 @@ def main(page: ft.Page):
             st.value = '差分を準備しています...'
             page.update()
 
+            def failed(e):
+                st.value = '差分を開けませんでした: %s' % e
+                btn.disabled = False
+                page.update()
+
             def work():
                 try:
                     data = (reviewcache.get()
@@ -669,11 +748,12 @@ def main(page: ft.Page):
                     # 「戻る」で閉じると背後のこの詳細画面に戻る
                     _open_diff_dialog(pr,
                                       beta['tag'] if beta else None,
-                                      close_label='戻る')
+                                      close_label='戻る',
+                                      on_error=failed)
                     st.value = ''
                 except Exception as e2:
                     log.exception('diff viewer failed')
-                    st.value = '差分を開けませんでした: %s' % e2
+                    failed(e2)
                 finally:
                     btn.disabled = False
                     page.update()
@@ -1778,7 +1858,8 @@ def main(page: ft.Page):
         return (max(600, int(win_w * 0.8) - 48),
                 min(win_h - 170, int(win_h * 0.8) - 120))
 
-    def _open_diff_dialog(pr, beta_tag, close_label='閉じる'):
+    def _open_diff_dialog(pr, beta_tag, close_label='閉じる',
+                          on_error=None):
         """差分をアプリ内ダイアログで開く (バックグラウンド用).
 
         モデルの取得 (git fetch 等) は呼び出し側の bg スレッドで走る。
@@ -1804,9 +1885,18 @@ def main(page: ft.Page):
                 page.update()
             run_bg(work)
 
-        diffdialog.show(page, model, workrepo, _dialog_size(),
-                        close_label=close_label,
-                        on_open_browser=open_browser)
+        # 重い組み立ては裏のまま (画面を止めない)、表示だけをループ上で
+        # 行う。表示で失敗したときも呼び出し側と同じ場所に知らせる
+        dlg = diffdialog.build_dialog(page, model, workrepo,
+                                      _dialog_size(),
+                                      close_label=close_label,
+                                      on_open_browser=open_browser,
+                                      run_ui=run_ui)
+
+        def display():
+            page.show_dialog(dlg)
+            page.update()
+        run_ui(display, on_error=on_error)
 
     def on_show_diff(pr, beta=None):
         """「差分」クリックで差分をアプリ内ダイアログで開く."""
@@ -1815,14 +1905,18 @@ def main(page: ft.Page):
             restore = _freeze_card(pr['number'])
             _t5_progress('差分を準備しています...')
 
+            def failed(e):
+                t5_status.value = '差分を開けませんでした: %s' % e
+                page.update()
+
             def work():
                 try:
-                    _open_diff_dialog(pr,
-                                      beta['tag'] if beta else None)
+                    _open_diff_dialog(pr, beta['tag'] if beta else None,
+                                      on_error=failed)
                     t5_status.value = ''
                 except Exception as e:
                     log.exception('diff viewer failed')
-                    t5_status.value = '差分を開けませんでした: %s' % e
+                    failed(e)
                 finally:
                     restore()
                     page.update()
@@ -1959,7 +2053,11 @@ def main(page: ft.Page):
         control, anim = rocketfx.zone(state)
         if anim is not None:
             # 開いたときに一度だけ再生 (page.update を渡す)
-            _rocket_anims.append(lambda fn=anim: fn(page.update))
+            # 書き換えと送信をひとまとめにループ上で行う (演出は裏
+            # スレッドで回るため、別々にすると送信中の書き換えになる)
+            _rocket_anims.append(
+                lambda fn=anim: fn(lambda: rocketfx.ui_sync(page,
+                                                            page.update)))
         # 演出中に隠せるよう登録しておく (操作ボタンとは spacer で分離)
         wrapper = ft.Container(content=control)
         _rocket_zones[pr['number']] = wrapper
