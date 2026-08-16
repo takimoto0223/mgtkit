@@ -1400,17 +1400,19 @@ def main(page: ft.Page):
         return True
 
     def _rocket_base(pr_number):
-        """発射・爆発の基点 = 一覧右上の固定発射台.
+        """発射・爆発の基点 = カード左のロケット列の固定位置.
 
-        カードごとの位置推定はレイアウト変更のたびにずれて保守が続く
-        ため廃止し、固定点に統一 (2026-08)。x は常駐ロケットと同じ
-        右端追従、y は一覧のすぐ上で固定。呼び出し時の幅から計算する
-        ので、ウィンドウ幅を変えてもボタンと同じように追従する。
+        ロケットは全カードで #番号の左に並び、「起動」タブと同じ
+        左端の列にある。そこからまっすぐ上に飛ばせばよいので、
+        基点は画面幅にもカード枚数にも依存しない固定点でよい
+        (カードごとの位置推定はレイアウト変更のたびにずれて保守が
+        続いたため廃止。2026-08)。
         """
-        del pr_number   # どのカードでも同じ発射台を使う
+        del pr_number   # どのカードから飛んでも同じ位置・同じ動き
         w = int(page.width or 760)
-        # y は発射台の絵の位置に合わせる (説明文の折り返しで 1 行ぶん変わる)
-        return w - 49, 222 + (22 if w < 900 else 0)
+        # x = カード左のロケット列 (「起動」タブと同じ左端の列なので
+        # まっすぐ上に飛べる)。y は先頭カードのタイトル行の高さ
+        return 55, 252 + (22 if w < 900 else 0)
 
     def _hide_zone(pr_number):
         """演出中: 常駐ロケットを隠し、カードのボタンも無効化する
@@ -1733,8 +1735,12 @@ def main(page: ft.Page):
         }[pr['checks']]
 
         lines = [
-            ft.Text('#%d %s' % (pr['number'], pr['title']),
-                    weight=ft.FontWeight.BOLD, size=13),
+            ft.Row([_rocket_zone(pr, n_req),
+                    ft.Text('#%d %s' % (pr['number'], pr['title']),
+                            weight=ft.FontWeight.BOLD, size=13,
+                            expand=True)],
+                   spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Row(badges + [ft.Text(checks_label, size=12,
                                      color=checks_color),
                              ft.Text('提出者: %s' % pr['author'], size=12,
@@ -1810,13 +1816,8 @@ def main(page: ft.Page):
             else:
                 buttons.append(ft.OutlinedButton('却下',
                                                  on_click=on_reject(pr)))
-        # 演出中の無効化用に操作ボタンを控えておく (spacer・ロケットは除く)
+        # 演出中の無効化用に操作ボタンを控えておく
         _card_buttons[pr['number']] = list(buttons)
-        # ロケットはボタン行の右端に常駐 (かつてのリリースボタン位置。
-        # リリースは承認がそろった時点で自動実行されるためボタンは廃止。
-        # 右寄せにすることで発射・爆発の基点座標が幅から確定する)
-        buttons.append(ft.Container(expand=True))
-        buttons.append(_rocket_zone(pr, n_req))
         if locked:
             # カード情報は薄く、案内文だけ明るく表示する
             content = ft.Column([
@@ -2014,13 +2015,6 @@ def main(page: ft.Page):
         ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
                 'ため、通常の作業には影響しません。', size=12,
                 color='#555555'),
-        # 発射台 (承認がそろった提出はここから飛び立ち、
-        # 却下確定はここで爆発する。発射・爆発の基点の目印)
-        ft.Row([ft.Container(expand=True),
-                ft.Container(content=ft.Image(src=rocketfx.PAD,
-                                              width=24, height=10),
-                             margin=ft.Margin.only(right=14),
-                             tooltip='ロケットの発射台')]),
         t5_list,
         t5_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
