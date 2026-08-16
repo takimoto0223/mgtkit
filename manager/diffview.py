@@ -766,13 +766,44 @@ def render_html(model, workrepo):
 
 def _has_commit(workrepo, sha):
     """コミット sha が手元にあるか (あれば fetch を省ける)."""
-    if not sha:
-        return False
+    return _have_commits(workrepo, [sha])[sha]
+
+
+def _have_commits(workrepo, shas):
+    """複数のコミットが手元にあるかを git 1 回で調べる.
+
+    戻り値: {sha: True/False}。空の sha は False。
+    """
+    out = {s: False for s in shas}
+    want = [s for s in shas if s]
+    if not want:
+        return out
+    kw = {}
+    if sys.platform == 'win32':
+        kw['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
     try:
-        run_git(['cat-file', '-e', '%s^{commit}' % sha], cwd=workrepo)
-        return True
-    except GitError:
-        return False
+        proc = subprocess.run(
+            ['git', 'cat-file', '--batch-check'], cwd=workrepo,
+            input=''.join('%s^{commit}\n' % s for s in want).encode(),
+            capture_output=True, timeout=120, **kw)
+    except (OSError, subprocess.TimeoutExpired):
+        log.warning('コミットの有無を調べられませんでした', exc_info=True)
+        return out
+    if proc.returncode != 0:
+        log.warning('コミットの有無を調べられませんでした (%s)',
+                    proc.stderr.decode('utf-8', 'replace')[:200].strip())
+        return out
+    # 応答は 1 行 1 件。有るものは "<oid> commit <サイズ>"、
+    # 無いものは "<入力> missing" (行の並びは入力と同じ)
+    lines = proc.stdout.decode('utf-8', 'replace').splitlines()
+    if len(lines) != len(want):
+        # 対応がずれたら「無い」に倒す (余分な取得で済み、誤った
+        # 差分にはならない)
+        log.warning('コミットの有無の応答が入力と対応しません')
+        return out
+    for sha, line in zip(want, lines):
+        out[sha] = line.split()[-2:-1] == ['commit']
+    return out
 
 
 def build_model(pr, config=None, workrepo=None, beta_tag=None):
@@ -795,19 +826,21 @@ def build_model(pr, config=None, workrepo=None, beta_tag=None):
                                         workrepo_dir(config), fetch=False)
     base = (config or {}).get('base_branch', 'main')
     head_sha, fork_sha = pr.get('head_sha'), pr.get('fork_sha')
-    if not (_has_commit(workrepo, head_sha)
-            and _has_commit(workrepo, fork_sha)):
+    # 手元にあるかの確認も git の起動なので、2 つまとめて 1 回で調べる
+    have = _have_commits(workrepo, [head_sha, fork_sha])
+    has_head, has_fork = have[head_sha], have[fork_sha]
+    if not (has_head and has_fork):
         with _fetch_lock:       # 取得も書き込み (読み出しは並行して安全)
             run_git(['fetch', 'origin', base, pr['branch']], cwd=workrepo,
                     timeout=300)
-    head_ref = (head_sha if _has_commit(workrepo, head_sha)
-                else 'origin/%s' % pr['branch'])
+        have = _have_commits(workrepo, [head_sha, fork_sha])
+        has_head, has_fork = have[head_sha], have[fork_sha]
+    head_ref = head_sha if has_head else 'origin/%s' % pr['branch']
     # 分岐点はスナップショットの fork_sha (GitHub 側の真値) を優先。
     # ただし先端も head_sha に固定できたときだけ (提出が置き換えられて
     # いて先端がブランチ参照に落ちた場合、古い分岐点と組み合わせると
     # 他人の変更が混ざった差分になるため、merge-base 計算に戻す)
-    merge_base = (fork_sha if head_ref == head_sha
-                  and _has_commit(workrepo, fork_sha) else None)
+    merge_base = fork_sha if (has_head and has_fork) else None
     # 提出時に生成されたファイル別説明 (PR 本文)。取れなくても表示は続行
     body = pr.get('body')
     if body is None:
@@ -899,8 +932,8 @@ def _from_disk(key, pr, config):
     with _fetch_lock:
         repo = ensure_work_repo(paths.repo_slug(config),
                                 workrepo_dir(config), fetch=False)
-    if not (_has_commit(repo, pr.get('head_sha'))
-            and _has_commit(repo, pr.get('fork_sha'))):
+    have = _have_commits(repo, [pr.get('head_sha'), pr.get('fork_sha')])
+    if not all(have.values()):
         return None
     return saved, repo
 

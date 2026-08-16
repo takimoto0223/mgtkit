@@ -487,6 +487,99 @@ class TestCollectModelUnchanged:
         assert len(launches) <= 3, launches
 
 
+class TestDialogRowBudget:
+    """開くのに数秒かかるのを避ける仕組み (見ない行は作らない)."""
+
+    def _model(self, sizes):
+        files = []
+        for i, n in enumerate(sizes):
+            rows = [('change', j + 1, 'old%d' % j, j + 1, 'new%d' % j)
+                    for j in range(n)]
+            files.append({'path': 'f%d.py' % i, 'status': 'M',
+                          'status_jp': '変更', 'tag_cls': 'tagM',
+                          'note': None, 'kind': 'diff', 'adds': n,
+                          'dels': n, 'changed': n, 'rows': rows})
+        return {'number': 1, 'title': 't', 'author': 'a', 'beta': None,
+                'has_notes': False, 'n_add': 0, 'n_del': 0,
+                'files': files, 'dl_paths': [], 'dl_deleted': [],
+                'base_ref': 'origin/main', 'head_ref': 'h'}
+
+    def test_large_files_after_budget_become_buttons(self):
+        diffdialog = pytest.importorskip('manager.diffdialog')
+        model = self._model([1000, 1000, 1000])
+        items, _ = diffdialog.build_items(
+            model, lambda p: None, on_expand=lambda *a: None)
+        no_limit, _ = diffdialog.build_items(model, lambda p: None)
+        # 3 つ目は後回しになるぶん、項目数がはっきり減る
+        assert len(items) < len(no_limit) - 900
+
+    def _expand_labels(self, diffdialog, items):
+        """「この差分を表示」ボタンの文言を集める."""
+        out = []
+        for c in items:
+            row = getattr(c, 'content', None)
+            ctrls = getattr(row, 'controls', None) or []
+            for x in ctrls:
+                if isinstance(x, diffdialog.ft.TextButton):
+                    out.append('%s / %s' % (ctrls[0].value, x.content))
+        return out
+
+    def test_small_files_are_always_shown(self):
+        """大きいファイルの後に続く小さいファイルはそのまま出す
+        (ボタンだらけにしない)."""
+        diffdialog = pytest.importorskip('manager.diffdialog')
+        model = self._model([1500, 5, 5, 5])
+        items, _ = diffdialog.build_items(
+            model, lambda p: None, on_expand=lambda *a: None)
+        # 畳むのは大きいファイルの残りだけ (小さい 3 つはそのまま)
+        assert len(self._expand_labels(diffdialog, items)) == 1
+
+    def test_huge_single_file_is_partly_shown(self):
+        """1 ファイルだけ巨大な提出でも、開いた画面が空にならない."""
+        diffdialog = pytest.importorskip('manager.diffdialog')
+        model = self._model([4000])
+        items, _ = diffdialog.build_items(
+            model, lambda p: None, on_expand=lambda *a: None)
+        # 目安ぶんは出したうえで、残りはボタンにする
+        assert diffdialog.MAX_INITIAL_ROWS * 0.8 < len(items) \
+            < diffdialog.MAX_INITIAL_ROWS * 1.2
+
+    def test_empty_file_never_becomes_a_button(self):
+        """押しても何も出ないボタンを作らない."""
+        diffdialog = pytest.importorskip('manager.diffdialog')
+        model = self._model([1500, 1500, 0])
+        items, _ = diffdialog.build_items(
+            model, lambda p: None, on_expand=lambda *a: None)
+        labels = self._expand_labels(diffdialog, items)
+        assert all('変更が 0 行' not in x and '残り 0 行' not in x
+                   for x in labels), labels
+
+    def test_jump_targets_are_fixed_after_expanding(self):
+        """展開したら、後ろのファイルのジャンプ先もその分ずらす.
+
+        直さないと一覧からのジャンプが展開した差分の途中に着地する。
+        """
+        diffdialog = pytest.importorskip('manager.diffdialog')
+        model = self._model([1500, 1500, 5])
+        items, offsets = diffdialog.build_items(
+            model, lambda p: None, on_expand=lambda *a: None)
+        holder = [c for c in items if getattr(c, 'data', None)][-1]
+        before = dict(offsets)
+        # 畳んでいた 1300 行 (約 21450px) を展開した場合
+        diffdialog.shift_offsets(offsets, holder.data, 21450 - 54)
+        # 展開した位置より後ろだけがずれる
+        assert offsets['f2.py'] == before['f2.py'] + 21450 - 54
+        assert offsets['f0.py'] == before['f0.py']
+
+    def test_every_file_can_be_reached(self):
+        diffdialog = pytest.importorskip('manager.diffdialog')
+        model = self._model([1000, 1000, 1000])
+        _, offsets = diffdialog.build_items(
+            model, lambda p: None, on_expand=lambda *a: None)
+        # 後回しにしたファイルも見出しは出るのでジャンプできる
+        assert set(offsets) == {e['path'] for e in model['files']}
+
+
 class TestDiffCache:
     """再起動をまたぐ保存 (起動直後のクリックも待たせない)."""
 
@@ -595,8 +688,9 @@ class TestBuildModelCached:
                             lambda key, model, config=None: None)
         monkeypatch.setattr(diffview, 'ensure_work_repo',
                             lambda slug, d, fetch=True: 'wr')
-        monkeypatch.setattr(diffview, '_has_commit',
-                            lambda repo, sha: sha == 'a')  # 分岐点だけ無い
+        monkeypatch.setattr(                       # 先端はあるが分岐点が無い
+            diffview, '_have_commits',
+            lambda repo, shas: {s: (s == 'a') for s in shas})
         built = []
         monkeypatch.setattr(
             diffview, 'build_model',
