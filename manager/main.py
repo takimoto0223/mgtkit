@@ -57,6 +57,51 @@ _H_BTNS = 40           # ボタンの行
 _LIST_TOP = _TAB_TOP + _TAB_PAD + _INTRO_H + _INTRO_GAP
 
 
+def downloads_dir():
+    """ダウンロードフォルダ (保存先の初期表示)."""
+    return os.path.join(os.path.expanduser('~'), 'Downloads')
+
+
+def unique_path(path):
+    """すでにあるファイルを黙って上書きしないよう、空き名にずらす."""
+    base, ext = os.path.splitext(path)
+    k, out = 2, path
+    while os.path.exists(out):
+        out = '%s (%d)%s' % (base, k, ext)
+        k += 1
+    return out
+
+
+async def save_path_dialog(picker, file_name,
+                           dialog_title='保存先を選んでください'):
+    """保存先を OS の画面でたずねて、そのパスを返す (取り消しなら None).
+
+    ダウンロードの印を押したら、まず**どこに保存するか**を聞く
+    (勝手にダウンロードフォルダへ置くと、あとで探せなくなるため。
+    管理者指示 2026-08)。提出の「提出する ZIP を選択」と同じ、
+    OS のファイル選択画面が出る。初期表示はダウンロードフォルダ。
+
+    ブラウザ表示など OS の画面を出せない環境でだけ、ダウンロード
+    フォルダの空き名を返して従来どおり保存する (ValueError はその
+    合図。それ以外の失敗は握りつぶさず呼び出し側へ伝える)。
+    """
+    init_dir = downloads_dir()
+    ext = file_name.rsplit('.', 1)[-1] if '.' in file_name else None
+    try:
+        return await picker.save_file(
+            dialog_title=dialog_title, file_name=file_name,
+            initial_directory=(init_dir if os.path.isdir(init_dir)
+                               else None),
+            file_type=(ft.FilePickerFileType.CUSTOM if ext
+                       else ft.FilePickerFileType.ANY),
+            allowed_extensions=([ext] if ext else None))
+    except ValueError:
+        # web / モバイルでは OS の画面を出せない (flet の仕様)
+        log.info('保存先の画面を出せないため既定の置き場所を使います')
+        os.makedirs(init_dir, exist_ok=True)
+        return unique_path(os.path.join(init_dir, file_name))
+
+
 def main(page: ft.Page):
     page.title = 'mgtkit アプリマネージャー'
     # OS のダークモード設定に追従させず、ガイドと同じ見た目に固定する
@@ -181,36 +226,9 @@ def main(page: ft.Page):
     file_picker = ft.FilePicker()
     page.services.append(file_picker)
 
-    async def ask_save_path(file_name, dialog_title='保存先を選んでください'):
-        """保存先をたずねて、そのパスを返す (取り消しなら None).
-
-        ダウンロードの印を押したら、まず**どこに保存するか**を聞く
-        (勝手にダウンロードフォルダへ置くと、あとで探せなくなるため。
-        管理者指示 2026-08)。既定の置き場所はダウンロードフォルダ。
-
-        保存ダイアログを出せない環境 (ブラウザ表示など) では、
-        ダウンロードフォルダの空き名を返して従来どおり保存する。
-        """
-        dest_dir = os.path.join(os.path.expanduser('~'), 'Downloads')
-        try:
-            return await file_picker.save_file(
-                dialog_title=dialog_title, file_name=file_name,
-                initial_directory=dest_dir,
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=[file_name.rsplit('.', 1)[-1]])
-        except Exception:
-            log.debug('保存ダイアログを出せません', exc_info=True)
-            os.makedirs(dest_dir, exist_ok=True)
-            return unique_path(os.path.join(dest_dir, file_name))
-
-    def unique_path(path):
-        """すでにあるファイルを黙って上書きしないよう、空き名にずらす."""
-        base, ext = os.path.splitext(path)
-        k, out = 2, path
-        while os.path.exists(out):
-            out = '%s (%d)%s' % (base, k, ext)
-            k += 1
-        return out
+    def ask_save_path(file_name, dialog_title='保存先を選んでください'):
+        """保存先をたずねる (提出の「ZIP を選択」と同じ OS の画面)."""
+        return save_path_dialog(file_picker, file_name, dialog_title)
 
     def tab_label(text):
         """タブ名 + 件数バッジ (黄色い丸に数字)。バッジ Container を返す."""

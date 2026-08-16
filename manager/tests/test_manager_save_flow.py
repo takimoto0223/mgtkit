@@ -16,6 +16,7 @@ import pytest
 pytest.importorskip('flet')
 
 from manager import diffdialog, diffview                    # noqa: E402
+from manager import main as manager_main                    # noqa: E402
 
 META = {'number': 33, 'title': '組立断面の対応', 'author': 'fujitaka',
         'beta': 'v1.1-beta.2'}
@@ -123,3 +124,62 @@ def test_cancel_writes_nothing(model, repo, tmp_path, monkeypatch):
     assert asked, '保存先をたずねていない'
     time.sleep(0.3)                       # 裏で走り出していないことも見る
     assert not list(tmp_path.rglob('*.zip'))
+
+
+class _FakePicker:
+    """OS の保存画面の代わり (何を渡して呼ばれたかを控える)."""
+
+    def __init__(self, result='/tmp/えらんだ.zip', raises=None):
+        self.result, self.raises, self.calls = result, raises, []
+
+    async def save_file(self, **kw):
+        self.calls.append(kw)
+        if self.raises is not None:
+            raise self.raises
+        return self.result
+
+
+class TestSavePathDialog:
+    """提出の「提出する ZIP を選択」と同じ、OS の画面を出すこと."""
+
+    def test_opens_the_os_dialog(self):
+        picker = _FakePicker()
+        got = asyncio.run(manager_main.save_path_dialog(
+            picker, 'mgtkit-v1.2.zip', '保存先'))
+        assert got == '/tmp/えらんだ.zip'
+        assert len(picker.calls) == 1, 'OS の画面を出していない'
+        kw = picker.calls[0]
+        assert kw['file_name'] == 'mgtkit-v1.2.zip'   # 名前の初期値
+        assert kw['dialog_title'] == '保存先'
+        assert kw['allowed_extensions'] == ['zip']
+
+    def test_cancel_returns_none(self):
+        """取り消し (None) はそのまま返し、置き場所を勝手に決めないこと."""
+        assert asyncio.run(manager_main.save_path_dialog(
+            _FakePicker(result=None), 'a.zip')) is None
+
+    def test_falls_back_only_when_dialog_is_impossible(self, monkeypatch,
+                                                       tmp_path):
+        """OS の画面を出せない環境 (web) でだけ既定の置き場所へ."""
+        monkeypatch.setattr(manager_main, 'downloads_dir',
+                            lambda: str(tmp_path))
+        got = asyncio.run(manager_main.save_path_dialog(
+            _FakePicker(raises=ValueError('web')), 'a.zip'))
+        assert got == str(tmp_path / 'a.zip')
+
+    def test_other_failures_are_not_swallowed(self):
+        """それ以外の失敗は握りつぶさない (黙って別の場所に保存しない)."""
+        with pytest.raises(RuntimeError):
+            asyncio.run(manager_main.save_path_dialog(
+                _FakePicker(raises=RuntimeError('boom')), 'a.zip'))
+
+
+class TestUniquePath:
+    def test_shifts_when_the_name_is_taken(self, tmp_path):
+        p = tmp_path / 'a.zip'
+        p.write_text('x')
+        assert manager_main.unique_path(str(p)) == str(tmp_path / 'a (2).zip')
+
+    def test_keeps_the_name_when_free(self, tmp_path):
+        p = str(tmp_path / 'b.zip')
+        assert manager_main.unique_path(p) == p
