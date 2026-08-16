@@ -1,7 +1,7 @@
 """manager/diffview.py (差分ビューワ HTML 生成) のテスト。"""
 import pytest
 
-from manager import diffview
+from manager import diffcache, diffview
 from manager.gitcli import run_git
 
 
@@ -377,6 +377,153 @@ class TestBuildModelFastPath:
         assert seen['merge_base'] is None
 
 
+class TestBatchBlobs:
+    """ファイル内容を git 1 回でまとめて取り出す (起動回数の削減)."""
+
+    def test_matches_git_show_and_counts_one_launch(self, diff_repo,
+                                                    monkeypatch):
+        paths_ = ['calc.py', 'stable.py', '集計表.csv', 'img.png']
+        specs = ['feature:%s' % p for p in paths_]
+        launches = []
+        real = diffview.subprocess.run
+
+        def spy(args, **kw):
+            launches.append(args)
+            return real(args, **kw)
+        monkeypatch.setattr(diffview.subprocess, 'run', spy)
+        blobs = diffview.batch_blobs(diff_repo, specs)
+        monkeypatch.undo()
+        # ファイル数によらず git は 1 回だけ
+        assert len(launches) == 1
+        # 中身は 1 件ずつ git show したものと同じ (日本語名・バイナリ含む)
+        for spec, path in zip(specs, paths_):
+            assert blobs[spec] == diffview._git_bytes(
+                diff_repo, ['show', 'feature:%s' % path])
+
+    def test_missing_paths_are_skipped(self, diff_repo):
+        blobs = diffview.batch_blobs(
+            diff_repo, ['feature:calc.py', 'feature:nope.py'])
+        assert 'feature:calc.py' in blobs
+        assert 'feature:nope.py' not in blobs
+
+    def test_falls_back_to_one_by_one_when_batch_fails(self, diff_repo,
+                                                       monkeypatch):
+        """まとめ読みが失敗しても中身は必ず取れること.
+
+        ここで取りこぼすと、テキストが全部「バイナリ」扱いになったり、
+        中身の無い確認用データを配ったりする。
+        """
+        real = diffview.subprocess.run
+
+        def broken(args, **kw):
+            if args[:2] == ['git', 'cat-file']:
+                raise OSError('まとめ読みできない環境')
+            return real(args, **kw)
+        monkeypatch.setattr(diffview.subprocess, 'run', broken)
+        blobs = diffview.batch_blobs(diff_repo, ['feature:calc.py'])
+        monkeypatch.undo()
+        assert b'line15 = 9999' in blobs['feature:calc.py']
+
+    def test_zip_is_not_built_empty(self, diff_repo, monkeypatch):
+        model = diffview.collect_model(
+            {'number': 1, 'title': 't', 'author': 'a', 'beta': None},
+            'main', 'feature', diff_repo)
+        monkeypatch.setattr(diffview, 'batch_blobs',
+                            lambda workrepo, specs: {})
+        with pytest.raises(diffview.GitError):
+            diffview.build_review_zip(model, diff_repo)
+
+
+class TestCollectModelUnchanged:
+    """高速化しても表示内容が 1 行も変わらないこと (回帰の要)."""
+
+    META = {'number': 33, 'title': 't', 'author': 'a', 'beta': None}
+
+    def _slow_reference(self, diff_repo, model):
+        """従来方式 (ファイルごとに git show) で同じ行を組み直す."""
+        mb = run_git(['merge-base', 'main', 'feature'],
+                     cwd=diff_repo).strip()
+        out = {}
+        for e in model['files']:
+            path, status = e['path'], e['status']
+            ext = ('.' + path.rsplit('.', 1)[-1].lower()
+                   if '.' in path else '')
+            old = ([] if status == 'A'
+                   else diffview._file_lines(diff_repo, mb, path))
+            new = ([] if status == 'D'
+                   else diffview._file_lines(diff_repo, 'feature', path))
+            if ext in diffview.BINARY_EXTS or old is None or new is None:
+                out[path] = None
+                continue
+            out[path] = diffview.collapse_context(
+                diffview.side_by_side(old, new))
+        return out
+
+    def test_rows_identical_to_per_file_reading(self, diff_repo):
+        model = diffview.collect_model(self.META, 'main', 'feature',
+                                       diff_repo)
+        want = self._slow_reference(diff_repo, model)
+        for e in model['files']:
+            assert e['rows'] == want[e['path']], e['path']
+        # バイナリ・日本語ファイル名も従来どおりの扱い
+        kinds = {e['path']: e['kind'] for e in model['files']}
+        assert kinds['img.png'] == 'binary'
+        assert kinds['集計表.csv'] == 'diff'
+
+    def test_git_launches_do_not_grow_with_file_count(self, diff_repo,
+                                                      monkeypatch):
+        # 実際に起動した git の数を数える (subprocess は全モジュール共通)
+        launches = []
+        real_run = diffview.subprocess.run
+
+        def spy_run(args, **kw):
+            launches.append(args)
+            return real_run(args, **kw)
+        monkeypatch.setattr(diffview.subprocess, 'run', spy_run)
+        diffview.collect_model(self.META, 'main', 'feature', diff_repo)
+        monkeypatch.undo()
+        # merge-base + name-status + まとめ読み 1 回 = 3 回で頭打ち
+        # (従来はファイル数 × 2 + 2 回。25 ファイルなら 52 回)
+        assert len(launches) <= 3, launches
+
+
+class TestDiffCache:
+    """再起動をまたぐ保存 (起動直後のクリックも待たせない)."""
+
+    def test_round_trip_restores_rows_as_tuples(self, tmp_path):
+        cfg = {'manager': {'install_root': str(tmp_path)}}
+        model = {'number': 7, 'files': [
+            {'path': 'a.py', 'rows': [('same', 1, 'x', 1, 'x')]},
+            {'path': 'b.png', 'rows': None}]}
+        diffcache.save('7-aaa-bbb', model, cfg)
+        got = diffcache.load('7-aaa-bbb', cfg)
+        assert got['files'][0]['rows'] == [('same', 1, 'x', 1, 'x')]
+        assert got['files'][1]['rows'] is None
+
+    def test_missing_and_broken_return_none(self, tmp_path):
+        cfg = {'manager': {'install_root': str(tmp_path)}}
+        assert diffcache.load('nope', cfg) is None
+        d = tmp_path / 'diffcache'
+        d.mkdir()
+        (d / 'broken.json').write_text('{こわれ', encoding='utf-8')
+        assert diffcache.load('broken', cfg) is None
+
+    def test_prunes_old_entries(self, tmp_path, monkeypatch):
+        cfg = {'manager': {'install_root': str(tmp_path)}}
+        monkeypatch.setattr(diffcache, '_MAX_FILES', 3)
+        for i in range(6):
+            diffcache.save('k%d' % i, {'number': i, 'files': []}, cfg)
+        left = list((tmp_path / 'diffcache').glob('*.json'))
+        assert len(left) <= 3
+
+    def test_too_large_is_not_saved(self, tmp_path, monkeypatch):
+        cfg = {'manager': {'install_root': str(tmp_path)}}
+        monkeypatch.setattr(diffcache, '_MAX_BYTES', 10)
+        diffcache.save('big', {'number': 1, 'files': [], 'x': 'y' * 100},
+                       cfg)
+        assert diffcache.load('big', cfg) is None
+
+
 class TestBuildModelCached:
     def test_same_head_builds_once(self, monkeypatch):
         monkeypatch.setattr(diffview, '_model_cache', {})
@@ -386,11 +533,78 @@ class TestBuildModelCached:
             built.append(pr['number'])
             return {'number': pr['number'], 'beta': beta_tag}, 'wr'
         monkeypatch.setattr(diffview, 'build_model', fake_build)
-        pr = {'number': 7, 'head_sha': 'abc'}
+        monkeypatch.setattr(diffview.diffcache, 'load',
+                            lambda key, config=None: None)
+        monkeypatch.setattr(diffview.diffcache, 'save',
+                            lambda key, model, config=None: None)
+        pr = {'number': 7, 'head_sha': 'abc', 'fork_sha': 'def'}
         m1, _ = diffview.build_model_cached(pr, beta_tag=None)
         m2, _ = diffview.build_model_cached(pr, beta_tag='v1.7-beta.1')
         assert built == [7]                      # 2 回目はキャッシュ
         assert m2['beta'] == 'v1.7-beta.1'       # β版タグは呼び出し側の値
+
+    def test_no_clone_when_nothing_saved(self, monkeypatch):
+        """保存済みが無いときに作業クローンを触らないこと.
+
+        触ると、初回起動やテスト環境で本物の clone が走ってしまう。
+        """
+        monkeypatch.setattr(diffview, '_model_cache', {})
+        monkeypatch.setattr(diffview.diffcache, 'load',
+                            lambda key, config=None: None)
+        monkeypatch.setattr(diffview.diffcache, 'save',
+                            lambda key, model, config=None: None)
+
+        def boom(*a, **k):
+            raise AssertionError('ensure_work_repo が呼ばれた')
+        monkeypatch.setattr(diffview, 'ensure_work_repo', boom)
+        monkeypatch.setattr(
+            diffview, 'build_model',
+            lambda pr, config=None, workrepo=None, beta_tag=None:
+            ({'number': 7, 'pinned': True}, 'wr'))
+        model, _ = diffview.build_model_cached(
+            {'number': 7, 'head_sha': 'a', 'fork_sha': 'f'})
+        assert model['number'] == 7
+
+    def test_unpinned_model_is_not_saved(self, monkeypatch):
+        """基点を SHA で固定できなかったモデルは保存しない.
+
+        手元の main の状態しだいで内容が変わるため、再起動をまたいで
+        出し続けると誤った差分を見せることになる。
+        """
+        monkeypatch.setattr(diffview, '_model_cache', {})
+        saved = []
+        monkeypatch.setattr(diffview.diffcache, 'load',
+                            lambda key, config=None: None)
+        monkeypatch.setattr(diffview.diffcache, 'save',
+                            lambda key, model, config=None:
+                            saved.append(key))
+        monkeypatch.setattr(
+            diffview, 'build_model',
+            lambda pr, config=None, workrepo=None, beta_tag=None:
+            ({'number': 7, 'pinned': False}, 'wr'))
+        diffview.build_model_cached({'number': 7, 'head_sha': 'a',
+                                     'fork_sha': 'f'})
+        assert saved == []
+
+    def test_saved_is_skipped_when_fork_missing(self, monkeypatch):
+        """分岐点が手元に無ければ保存済みを使わず組み直す."""
+        monkeypatch.setattr(diffview, '_model_cache', {})
+        monkeypatch.setattr(diffview.diffcache, 'load',
+                            lambda key, config=None: {'number': 7})
+        monkeypatch.setattr(diffview.diffcache, 'save',
+                            lambda key, model, config=None: None)
+        monkeypatch.setattr(diffview, 'ensure_work_repo',
+                            lambda slug, d, fetch=True: 'wr')
+        monkeypatch.setattr(diffview, '_has_commit',
+                            lambda repo, sha: sha == 'a')  # 分岐点だけ無い
+        built = []
+        monkeypatch.setattr(
+            diffview, 'build_model',
+            lambda pr, config=None, workrepo=None, beta_tag=None:
+            (built.append(1), ({'number': 7, 'pinned': True}, 'wr'))[1])
+        diffview.build_model_cached({'number': 7, 'head_sha': 'a',
+                                     'fork_sha': 'f'})
+        assert built == [1]
 
     def test_new_head_rebuilds(self, monkeypatch):
         monkeypatch.setattr(diffview, '_model_cache', {})
@@ -400,8 +614,14 @@ class TestBuildModelCached:
             built.append(pr['head_sha'])
             return {'number': pr['number'], 'beta': beta_tag}, 'wr'
         monkeypatch.setattr(diffview, 'build_model', fake_build)
-        diffview.build_model_cached({'number': 7, 'head_sha': 'a'})
-        diffview.build_model_cached({'number': 7, 'head_sha': 'b'})
+        monkeypatch.setattr(diffview.diffcache, 'load',
+                            lambda key, config=None: None)
+        monkeypatch.setattr(diffview.diffcache, 'save',
+                            lambda key, model, config=None: None)
+        diffview.build_model_cached({'number': 7, 'head_sha': 'a',
+                                     'fork_sha': 'f'})
+        diffview.build_model_cached({'number': 7, 'head_sha': 'b',
+                                     'fork_sha': 'f'})
         assert built == ['a', 'b']               # 提出が更新されたら作り直す
 
 
