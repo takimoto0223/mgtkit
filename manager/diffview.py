@@ -11,6 +11,7 @@ HTML 1 枚として一時フォルダへ書き出し、パスを返す (開く�
   - 画像・バイナリは「表示対象外」と明記
 """
 import base64
+import contextlib
 import difflib
 import html
 import io
@@ -23,7 +24,7 @@ import tempfile
 import threading
 import zipfile
 
-from . import ghcli, paths
+from . import diffcache, ghcli, paths
 from .gitcli import GitError, ensure_work_repo, run_git
 from .submit import _is_dist_scope, workrepo_dir
 
@@ -65,9 +66,8 @@ def _git_bytes(workrepo, args):
     return proc.stdout if proc.returncode == 0 else None
 
 
-def _file_lines(workrepo, rev, path):
-    """rev 時点のファイル内容を行リストで。バイナリ等は None."""
-    data = _git_bytes(workrepo, ['show', '%s:%s' % (rev, path)])
+def _decode_lines(data):
+    """ファイル内容 (bytes) を行リストに。バイナリ等は None."""
     if data is None:
         return None
     for enc in ('utf-8', 'cp932'):
@@ -76,6 +76,74 @@ def _file_lines(workrepo, rev, path):
         except UnicodeDecodeError:
             continue
     return None
+
+
+def _file_lines(workrepo, rev, path):
+    """rev 時点のファイル内容を行リストで。バイナリ等は None."""
+    return _decode_lines(_git_bytes(workrepo, ['show',
+                                               '%s:%s' % (rev, path)]))
+
+
+def batch_blobs(workrepo, specs):
+    """複数の "リビジョン:パス" の中身を git 1 回でまとめて取り出す.
+
+    速度の要 (管理者指示 2026-08)。ファイルごとに git show を起動すると
+    Windows では 1 回 100〜400 ms (ウイルス対策の走査) かかり、変更
+    ファイル数に比例して待ち時間が伸びる。cat-file --batch なら
+    ファイル数によらず git は 1 回で済む。
+
+    戻り値: {spec: bytes}。取れなかったものは入らない。
+    """
+    specs = [s for s in specs if s]
+    if not specs:
+        return {}
+    # --batch の入力は 1 行 1 件。改行を含むパスだけは個別に取る
+    inline = [s for s in specs if '\n' not in s]
+    out = {}
+    for s in set(specs) - set(inline):
+        data = _git_bytes(workrepo, ['show', s])
+        if data is not None:
+            out[s] = data
+    if not inline:
+        return out
+    kw = {}
+    if sys.platform == 'win32':
+        kw['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+    proc = None
+    try:
+        proc = subprocess.run(
+            ['git', 'cat-file', '--batch'], cwd=workrepo,
+            input=('\n'.join(inline) + '\n').encode('utf-8'),
+            capture_output=True, timeout=300, **kw)
+    except (OSError, subprocess.TimeoutExpired):
+        log.warning('まとめ読みに失敗 (1 件ずつ取り直します)',
+                    exc_info=True)
+    if proc is not None:
+        # 応答は "<oid> <型> <バイト数>\n<中身>\n"、無いものは
+        # "<名前> missing"。異常終了でも読めたぶんは活かす
+        buf, pos = proc.stdout, 0
+        for spec in inline:
+            nl = buf.find(b'\n', pos)
+            if nl < 0:
+                break
+            head = buf[pos:nl].decode('utf-8', 'replace').split()
+            if len(head) != 3 or not head[2].isdigit():
+                pos = nl + 1              # missing 等はそのまま読み飛ばす
+                continue
+            size = int(head[2])
+            out[spec] = buf[nl + 1:nl + 1 + size]
+            pos = nl + 1 + size + 1       # 中身の後ろの改行ぶん
+    # 取れなかったぶんは 1 件ずつ取り直す (まとめ読みが失敗しても
+    # 「全ファイルがバイナリ扱い」「中身の無い ZIP」にはしない)
+    rest = [s for s in inline if s not in out]
+    if rest:
+        log.warning('まとめ読みで %d 件取れなかったため個別に取得します',
+                    len(rest))
+        for s in rest:
+            data = _git_bytes(workrepo, ['show', s])
+            if data is not None:
+                out[s] = data
+    return out
 
 
 def side_by_side(old, new):
@@ -391,7 +459,7 @@ def refresh_base(model, workrepo):
     重ならないよう同じ鍵で直列化する。失敗は False (手元の状態で続行
     できるが、呼び出し側はその旨をユーザーに伝えること)。
     """
-    with _model_lock:
+    with _fetch_lock:
         try:
             base = model['base_ref'].split('/', 1)[-1]
             run_git(['fetch', 'origin', base], cwd=workrepo, timeout=300)
@@ -415,22 +483,31 @@ def build_review_zip(model, workrepo, max_mb=None, fetch_base=False):
     """
     if fetch_base:
         refresh_base(model, workrepo)
-    # 変更ファイルの中身は表示時ではなくここで取り出す (表示の高速化)
+    # 変更ファイルの中身は表示時ではなくここで取り出す (表示の高速化)。
+    # 一式に入れる正式版のファイルとまとめて git 1 回で読む
+    base_paths = [p.strip() for p
+                  in run_git(['ls-tree', '-r', '--name-only',
+                              model['base_ref']],
+                             cwd=workrepo).splitlines()
+                  if p.strip() and _is_dist_scope(p.strip())]
+    blobs = batch_blobs(
+        workrepo,
+        ['%s:%s' % (model['head_ref'], p) for p in model['dl_paths']]
+        + ['%s:%s' % (model['base_ref'], p) for p in base_paths])
     dl_files = []
     for p in model['dl_paths']:
-        data = _git_bytes(workrepo,
-                          ['show', '%s:%s' % (model['head_ref'], p)])
+        data = blobs.get('%s:%s' % (model['head_ref'], p))
         if data is not None:
             dl_files.append((p, data))
+    if model['dl_paths'] and not dl_files:
+        # 中身を 1 つも取り出せないまま「確認用データ」を配ると
+        # 空の ZIP を渡すことになるため、作らずに知らせる
+        raise GitError('確認用データを作成できませんでした。'
+                       '時間をおいて再試行してください。')
     dl_deleted = model['dl_deleted']
     full = {}
-    for p in run_git(['ls-tree', '-r', '--name-only', model['base_ref']],
-                     cwd=workrepo).splitlines():
-        p = p.strip()
-        if not p or not _is_dist_scope(p):
-            continue
-        data = _git_bytes(workrepo,
-                          ['show', '%s:%s' % (model['base_ref'], p)])
+    for p in base_paths:
+        data = blobs.get('%s:%s' % (model['base_ref'], p))
         if data is not None:
             full[p] = data
     for path, data in dl_files:      # この提出で追加・変更されたファイル
@@ -532,6 +609,21 @@ def collect_model(meta, base_ref, head_ref, workrepo, merge_base=None):
            if line.strip()]
     notes = meta.get('notes') or {}
 
+    def _ext(path):
+        return ('.' + path.rsplit('.', 1)[-1].lower()) if '.' in path else ''
+
+    # 比較に要るファイルの中身を git 1 回でまとめて取る (起動回数を
+    # ファイル数に比例させない)。拡張子でバイナリと分かるものは読まない
+    specs = []
+    for status, path in ((s[0], p) for s, p in raw):
+        if _ext(path) in BINARY_EXTS:
+            continue
+        if status != 'A':
+            specs.append('%s:%s' % (mb, path))
+        if status != 'D':
+            specs.append('%s:%s' % (head_ref, path))
+    blobs = batch_blobs(workrepo, specs)
+
     files, dl_paths, dl_deleted = [], [], []
     n_add = n_del = 0
     for status, path in ((s[0], p) for s, p in raw):
@@ -542,9 +634,11 @@ def collect_model(meta, base_ref, head_ref, workrepo, merge_base=None):
         else:
             dl_paths.append(path)
         note = notes.get(path)
-        ext = ('.' + path.rsplit('.', 1)[-1].lower()) if '.' in path else ''
-        old = [] if status == 'A' else _file_lines(workrepo, mb, path)
-        new = [] if status == 'D' else _file_lines(workrepo, head_ref, path)
+        ext = _ext(path)
+        old = ([] if status == 'A'
+               else _decode_lines(blobs.get('%s:%s' % (mb, path))))
+        new = ([] if status == 'D'
+               else _decode_lines(blobs.get('%s:%s' % (head_ref, path))))
         entry = {'path': path, 'status': status, 'status_jp': jp,
                  'tag_cls': cls, 'note': note, 'kind': 'diff',
                  'adds': 0, 'dels': 0, 'changed': 0, 'rows': None}
@@ -696,14 +790,16 @@ def build_model(pr, config=None, workrepo=None, beta_tag=None):
       無いとき (旧キャッシュ) だけ gh で取りに行く
     """
     if workrepo is None:
-        workrepo = ensure_work_repo(paths.repo_slug(config),
-                                    workrepo_dir(config), fetch=False)
+        with _fetch_lock:       # クローンは書き込みなので直列化する
+            workrepo = ensure_work_repo(paths.repo_slug(config),
+                                        workrepo_dir(config), fetch=False)
     base = (config or {}).get('base_branch', 'main')
     head_sha, fork_sha = pr.get('head_sha'), pr.get('fork_sha')
     if not (_has_commit(workrepo, head_sha)
             and _has_commit(workrepo, fork_sha)):
-        run_git(['fetch', 'origin', base, pr['branch']], cwd=workrepo,
-                timeout=300)
+        with _fetch_lock:       # 取得も書き込み (読み出しは並行して安全)
+            run_git(['fetch', 'origin', base, pr['branch']], cwd=workrepo,
+                    timeout=300)
     head_ref = (head_sha if _has_commit(workrepo, head_sha)
                 else 'origin/%s' % pr['branch'])
     # 分岐点はスナップショットの fork_sha (GitHub 側の真値) を優先。
@@ -726,38 +822,107 @@ def build_model(pr, config=None, workrepo=None, beta_tag=None):
     meta = {'number': pr['number'], 'title': pr['title'],
             'author': pr.get('author', '?'), 'beta': beta_tag,
             'notes': parse_file_notes(body)}
-    return (collect_model(meta, 'origin/%s' % base, head_ref, workrepo,
-                          merge_base=merge_base),
-            workrepo)
+    model = collect_model(meta, 'origin/%s' % base, head_ref, workrepo,
+                          merge_base=merge_base)
+    # 先端と分岐点の両方を SHA で固定できたか。固定できていないものは
+    # 手元の main の状態しだいで内容が変わるので保存の対象にしない
+    model['pinned'] = bool(head_ref == head_sha and merge_base)
+    return model, workrepo
 
 
-# 先読みキャッシュ: β タブの一覧が届いたら裏でモデルを組んでおき、
-# 「差分」クリック時は組み立て済みをそのまま出す (体感ほぼ 0 秒)。
-# キーは number:head_sha なので、提出が更新されれば自然に作り直す
+# 先読みキャッシュ: 一覧が届いたら裏でモデルを組んでおき、「差分」
+# クリック時は組み立て済みをそのまま出す (体感ほぼ 0 秒)。キーは
+# 番号:先端:分岐点 なので、提出が更新されれば自然に作り直す
 _MODEL_CACHE_MAX = 8
 _model_cache = {}
-_model_lock = threading.Lock()
+# 提出ごとの組み立て鍵 (同じ提出の二重組み立てだけを防ぐ)。全体を
+# 1 本の鍵にすると、他の提出の先読み中のクリックが待たされるため
+_build_locks = {}
+_build_guard = threading.Lock()
+# 差分表示まわりの workrepo への書き込み (clone / fetch) を直列化する。
+# 読み出し (cat-file / diff / show) は鍵を取らない (他モジュールの
+# 提出・統合処理は別途 fetch するため、完全な排他ではない)
+_fetch_lock = threading.Lock()
+
+
+def model_key(pr):
+    """先読みキャッシュのキー。作れないときは None (キャッシュ対象外)."""
+    if not pr.get('head_sha') or not pr.get('fork_sha'):
+        # 分岐点が分からないと手元の main の状態しだいで内容が変わる
+        # ため、キャッシュ (特に再起動をまたぐ保存) の対象にしない
+        return None
+    return '%s-%s-%s' % (pr['number'], pr['head_sha'][:12],
+                         pr['fork_sha'][:12])
+
+
+@contextlib.contextmanager
+def _building(key):
+    """同じ提出の二重組み立てだけを防ぐ (提出ごとの鍵).
+
+    使っている人数を数えておき、誰もいなくなった時点で鍵を捨てる
+    (常駐アプリなので溜めない)。「捨ててよいか」を数で判断するため、
+    鍵を取る直前に他スレッドが捨ててしまう隙間がない。
+    """
+    with _build_guard:
+        lock, users = _build_locks.get(key) or (threading.Lock(), 0)
+        _build_locks[key] = (lock, users + 1)
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _build_guard:
+            lock, users = _build_locks[key]
+            if users <= 1:
+                _build_locks.pop(key, None)
+            else:
+                _build_locks[key] = (lock, users - 1)
+
+
+def _remember(key, hit):
+    """メモリキャッシュへの登録と古いものの追い出し (複数スレッド安全)."""
+    with _build_guard:
+        _model_cache[key] = hit
+        while len(_model_cache) > _MODEL_CACHE_MAX:
+            _model_cache.pop(next(iter(_model_cache)), None)
+
+
+def _from_disk(key, pr, config):
+    """保存済みモデルを使えるなら (model, workrepo) を返す.
+
+    先端と分岐点の両方が作業クローンに無いと確認用データを取り出せず、
+    比較の基点も再現できないため、その場合は使わず組み直す。
+    """
+    saved = diffcache.load(key, config)
+    if saved is None:
+        return None
+    with _fetch_lock:
+        repo = ensure_work_repo(paths.repo_slug(config),
+                                workrepo_dir(config), fetch=False)
+    if not (_has_commit(repo, pr.get('head_sha'))
+            and _has_commit(repo, pr.get('fork_sha'))):
+        return None
+    return saved, repo
 
 
 def build_model_cached(pr, config=None, beta_tag=None):
     """build_model のキャッシュ付き版 (先読みとクリックの共通入口).
 
-    同じ workrepo への git 操作が重ならないよう全体を 1 本の鍵で
-    直列化する (先読み中のクリックは先読み完了を待ってから返る)。
+    メモリ → ディスク → 組み立て の順に探す。鍵は提出ごとなので、
+    別の提出を先読み中でもクリックした提出はすぐ組み立てに入れる。
     """
-    key = '%s:%s' % (pr.get('number'), pr.get('head_sha') or '')
-    if not pr.get('head_sha'):
-        # 旧形式のキャッシュ由来 (head_sha なし) はキャッシュ対象外だが、
-        # git 操作が先読みと重ならないよう同じ鍵で直列化だけはする
-        with _model_lock:
-            return build_model(pr, config, beta_tag=beta_tag)
-    with _model_lock:
+    key = model_key(pr)
+    if key is None:
+        return build_model(pr, config, beta_tag=beta_tag)
+    with _building(key):
         hit = _model_cache.get(key)
         if hit is None:
-            hit = build_model(pr, config, beta_tag=beta_tag)
-            _model_cache[key] = hit
-            while len(_model_cache) > _MODEL_CACHE_MAX:
-                _model_cache.pop(next(iter(_model_cache)))
+            hit = _from_disk(key, pr, config)
+            if hit is None:
+                hit = build_model(pr, config, beta_tag=beta_tag)
+                if hit[0].get('pinned'):
+                    diffcache.save(key, hit[0], config)
+            _remember(key, hit)
     model, workrepo = hit
     # β版タグだけは呼び出しごとに違い得るので差し替えて返す
     return dict(model, beta=beta_tag), workrepo

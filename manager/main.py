@@ -2130,6 +2130,7 @@ def main(page: ft.Page):
 
     # 描画は複数スレッド (ボタン操作・定期更新) から呼ばれるため直列化する
     _render_lock = threading.Lock()
+    _prefetch_lock = threading.Lock()
     # 前回描画した内容の指紋 (同じ内容なら一覧を作り直さないための記録)
     _render_state = {'key': None}
 
@@ -2235,23 +2236,38 @@ def main(page: ft.Page):
     def _prefetch_diffs(pending):
         """一覧の提出の差分モデルを裏で組んでキャッシュしておく.
 
-        キャッシュ済み (head_sha が同じ) なら何もしないので、
-        一覧が描き直されるたびに呼んでも無駄な取得は起きない。
+        組み立て済みのものは飛ばすので、一覧が描き直されるたびに
+        呼んでも無駄な取得は起きない。クリックは提出ごとの鍵で動く
+        ため、ここで別の提出を組んでいてもクリックは待たされない。
         """
+        # 押せない提出 (畳んだもの) は呼び出し元によらず対象外にする。
         # キャッシュ上限を超える先読みは追い出し合いになるだけなので
         # 一覧の上から上限件数まで (それ以降はクリック時に組む)
+        hidden = localstate.hidden_prs(config)
         targets = [p for p in pending
-                   if p.get('head_sha')][:diffview._MODEL_CACHE_MAX]
+                   if diffview.model_key(p) and p['number'] not in hidden
+                   ][:diffview._MODEL_CACHE_MAX]
+        targets = [p for p in targets
+                   if diffview.model_key(p) not in diffview._model_cache]
         if not targets:
             return
 
         def work():
-            for pr in targets:
-                try:
-                    diffview.build_model_cached(pr, config)
-                except Exception:
-                    log.debug('差分の先読みに失敗 #%s', pr.get('number'),
-                              exc_info=True)
+            # 先読み同士は 1 本ずつ。すでに走っているときは何もしない
+            # (待たせるとスレッドが溜まる。次の描画・取得で拾い直す)
+            if not _prefetch_lock.acquire(blocking=False):
+                return
+            try:
+                for pr in targets:
+                    if diffview.model_key(pr) in diffview._model_cache:
+                        continue
+                    try:
+                        diffview.build_model_cached(pr, config)
+                    except Exception:
+                        log.debug('差分の先読みに失敗 #%s',
+                                  pr.get('number'), exc_info=True)
+            finally:
+                _prefetch_lock.release()
         run_bg(work)
 
     def _fetch_review_snapshot(on_progress=None):
@@ -2267,9 +2283,15 @@ def main(page: ft.Page):
         snap = reviews.fetch_snapshot(
             config, on_progress=on_progress,
             known_forks=reviews.fork_memo(prev))
-        return reviewcache.put(snap['pending'], snap['releases'],
+        data = reviewcache.put(snap['pending'], snap['releases'],
                                snap['me'], seq=seq, config=config,
                                merged=snap.get('merged'))
+        # 一覧の描画を待たず、届いた時点で差分の先読みを始める
+        # (タブを開いてすぐ「差分」を押しても間に合わせるため)。
+        # 追い越されて捨てられた取得結果では先読みしない
+        if data is not None:
+            _prefetch_diffs(data['pending'])
+        return data
 
     def on_refresh_reviews(_):
         """一覧の再描画。手元にある前回の取得結果を即座に表示し、
