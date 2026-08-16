@@ -49,6 +49,16 @@ _H_FILEHEAD = 46
 _H_NOTE = 34
 _H_ROW = 16.5
 _H_GAP = 24
+_H_EXPAND = 54      # 「この差分を表示」の行 (ボタンぶん背が高い)
+
+# 開いた時点で組み立てる差分行の目安。これを超えたら、以降の
+# 「大きいファイル」は「この差分を表示」で押されたときに組み立てる
+# (1 行が十数個の部品になるため、数千行を先に作ると数秒かかる)。
+# 小さいファイルは目安を超えていてもそのまま出す (ボタンだらけに
+# なるのを避ける)。それでも増え続ける場合は上限で打ち切る
+MAX_INITIAL_ROWS = 1200
+SMALL_FILE_ROWS = 200
+HARD_MAX_ROWS = 2500
 
 # canvas の Text は page.theme のフォントを継承しないため、show() で
 # 明示的に受け取ってここへ反映する (日本語の豆腐化対策。historyview と同じ)
@@ -166,6 +176,8 @@ def _diff_row(kind, lno, lt, rno, rt, code_w):
     (レイアウトが壊れて以降の行が描画されなくなる)。左右で折り返し
     行数が違うと背景の高さが揃わないため、行数を概算して短い側に
     改行を足して高さを合わせる。
+    行は 1 画面ぶんでも数百個の部品になるので、見た目に関係のない
+    入れ物は作らない (Row を直接置く。実測で組み立てが 35% 速い)。
     """
     lmark = ' -' if kind in ('change', 'del') and lno else ''
     rmark = ' +' if kind in ('change', 'add') and rno else ''
@@ -173,13 +185,35 @@ def _diff_row(kind, lno, lt, rno, rt, code_w):
     n = max(nl, nr)
     lt = (lt or ' ') + '\n' * (n - nl)
     rt = (rt or ' ') + '\n' * (n - nr)
-    row = ft.Container(content=ft.Row([
+    row = ft.Row([
         _ln_cell(lno, lmark, pad_lines=n - 1),
         _code_cell(lt, _L_BG[kind], strike=(kind == 'del')),
         _ln_cell(rno, rmark, pad_lines=n - 1),
         _code_cell(rt, _R_BG[kind]),
-    ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START))
+    ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START)
     return row, n
+
+
+def _expand_button(entry, on_expand, start, rest, y):
+    """後回しにした差分の「表示する」ボタン (押した分だけ組み立てる).
+
+    start: 続きの開始位置 (0 ならファイル丸ごと)。rest: 残りの行数。
+    y: この位置の概算スクロール位置 (展開後にジャンプ先を直すのに使う)。
+    「大きすぎるため省略しました」(表示できないもの) と読み違えられ
+    ないよう、畳んでいる理由と操作を並べて書く。
+    """
+    holder = ft.Container(
+        data=y, padding=ft.Padding.symmetric(vertical=8, horizontal=8))
+    label = ('この差分を表示' if not start
+             else '残りの %d 行を表示' % rest)
+    msg = ('残り %d 行' % rest if start
+           else '変更が %d 行' % rest)
+    btn = ft.TextButton(label)
+    note = ft.Text('%sあります。表示に時間がかかるため畳んでいます。'
+                   % msg, size=12, color='#6b7280')
+    btn.on_click = lambda _: on_expand(entry, holder, start, btn, note)
+    holder.content = ft.Row([note, btn], spacing=6)
+    return holder
 
 
 def _gap_row(n):
@@ -195,7 +229,7 @@ def _file_note_text(text):
         content=ft.Text(text, size=12, color='#6b7280'))
 
 
-def build_items(model, on_jump, code_w=420.0):
+def build_items(model, on_jump, code_w=420.0, on_expand=None):
     """ダイアログの ListView に積む項目一式を組み立てる.
 
     code_w はコード欄 1 列の文字幅 (px)。折り返し行数の概算に使う。
@@ -203,10 +237,17 @@ def build_items(model, on_jump, code_w=420.0):
     概算スクロール位置 (px)。仮想化 ListView は未描画の項目へ
     key 指定でスクロールできない (Flutter の制約) ため、概算
     オフセット方式を採る。
+
+    on_expand を渡すと、行数の予算 (MAX_INITIAL_ROWS) を超えた
+    ファイルは「この差分を表示」ボタンにして、押されたときだけ
+    組み立てる。大きな提出で開くのに数秒かかるのを避けるため
+    (行 1 つが十数個の部品になるので、見ない行は作らない)。
     """
     items = []
     offsets = {}
     y = 0.0
+    budget = MAX_INITIAL_ROWS if on_expand is not None else None
+    built = 0
 
     def add(ctrl, h):
         nonlocal y
@@ -292,13 +333,49 @@ def build_items(model, on_jump, code_w=420.0):
                                 '全体は省略しました。' % e['changed']),
                 _H_NOTE)
             continue
-        for kind, lno, lt, rno, rt in e['rows']:
-            if kind == 'gap':
-                add(_gap_row(lt), _H_GAP)
+        n_rows = len(e['rows'])
+        over = (budget is not None and n_rows > SMALL_FILE_ROWS
+                and (built >= HARD_MAX_ROWS or built + n_rows > budget))
+        if over:
+            # 目安を超えるぶんは押されたときに組み立てる。途中まででも
+            # 出せるなら出す (1 ファイルだけ巨大な提出で、開いた画面が
+            # ボタン 1 つになるのを避ける)
+            show = 0 if built >= HARD_MAX_ROWS else max(0, budget - built)
+            if show >= SMALL_FILE_ROWS:
+                for ctrl, h in _build_rows(e['rows'][:show], code_w):
+                    add(ctrl, h)
+                built += show
             else:
-                row, n = _diff_row(kind, lno, lt, rno, rt, code_w)
-                add(row, n * _H_ROW)
+                show = 0
+            add(_expand_button(e, on_expand, show, n_rows - show, y),
+                _H_EXPAND)
+            continue
+        built += n_rows
+        for ctrl, h in _build_rows(e['rows'], code_w):
+            add(ctrl, h)
     return items, offsets
+
+
+def shift_offsets(offsets, y0, delta):
+    """畳んでいた差分を展開したぶん、後ろのジャンプ先をずらす.
+
+    直さないと、一覧からのジャンプが展開したファイルの途中に着地する。
+    """
+    for path, off in list(offsets.items()):
+        if off > y0:
+            offsets[path] = off + delta
+
+
+def _build_rows(rows, code_w):
+    """差分行を組み立てて [(コントロール, 概算の高さ)] を返す."""
+    out = []
+    for kind, lno, lt, rno, rt in rows:
+        if kind == 'gap':
+            out.append((_gap_row(lt), _H_GAP))
+        else:
+            row, n = _diff_row(kind, lno, lt, rno, rt, code_w)
+            out.append((row, n * _H_ROW))
+    return out
 
 
 # ---------------- リスク確認 (HTML 版のモーダルと同じ 3 カード) ----------
@@ -463,7 +540,32 @@ def show(page, model, workrepo, size, close_label='閉じる',
             _scroll(off)
 
     code_w = (col_w - 2 * _LN_W) / 2 - 12
-    items, offsets = build_items(model, on_jump, code_w=code_w)
+
+    def on_expand(entry, holder, start, btn, note):
+        """後回しにした差分を、押された時点で組み立てて差し込む.
+
+        数千行の組み立ては 1 秒近くかかるため、押した瞬間に文言を
+        変えてから裏で組み立てる (画面を止めない)。
+        """
+        btn.disabled = True
+        note.value = '表示しています...'
+        page.update()
+
+        def work():
+            built = _build_rows(entry['rows'][start:], code_w)
+            try:
+                at = lv.controls.index(holder)
+            except ValueError:
+                return
+            lv.controls[at:at + 1] = [c for c, _ in built]
+            # 差し込んだぶん、後ろのファイルのジャンプ先がずれる
+            shift_offsets(offsets, holder.data or 0,
+                          sum(h for _, h in built) - _H_EXPAND)
+            page.update()
+        threading.Thread(target=work, daemon=True).start()
+
+    items, offsets = build_items(model, on_jump, code_w=code_w,
+                                 on_expand=on_expand)
     lv.controls = items
 
     save_btn = None
