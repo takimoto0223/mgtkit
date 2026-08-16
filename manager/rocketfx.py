@@ -337,6 +337,19 @@ class _Puffs:
             s.opacity = it['op'] * (1.0 - k)
 
 
+def launch_path(start_y, target_y):
+    """発射の経路を決める。(離陸で上がる高さ, 離陸の到達点, 弧の制御点).
+
+    離陸で上がる高さも弧の制御点も、到達点より上へは行かせない。
+    どちらも 105 / 60 の固定値だったため、基点が画面の上寄りにある
+    カード (一覧の 1 枚目) では到達点を追い越してから下がってくる
+    動きになっていた (2026-08)。
+    """
+    climb = max(0.0, min(105.0, (start_y - target_y) * 0.6))
+    top_y = start_y - climb
+    return climb, top_y, max(target_y, top_y - 60)
+
+
 def play_launch(page, start_x, start_y, target_x=None, target_y=92,
                 done=None):
     """発射: 点火 → 震え → まっすぐ上昇して「起動」タブへ → ✨.
@@ -362,7 +375,7 @@ def play_launch(page, start_x, start_y, target_x=None, target_y=92,
     stage.add(spark)
     page.update()
 
-    top_y = start_y - 105          # まっすぐ上昇の到達点
+    climb, top_y, ctrl_y = launch_path(start_y, target_y)
     state = {'last_smoke': 0.0, 'last_trail': 0.0, 'prev': None}
 
     def step(t):
@@ -384,20 +397,21 @@ def play_launch(page, start_x, start_y, target_x=None, target_y=92,
             p = (t - 0.45) / 0.7
             _swap(rocket, ROCKET_FL_L)
             rocket.left = start_x - _RW / 2
-            rocket.top = start_y - 11 - 105 * p * p
+            rocket.top = start_y - 11 - climb * p * p
             if t - state['last_smoke'] > 0.07:
                 state['last_smoke'] = t
                 side = 22 if int(t * 14) % 2 else -22
                 smoke.spawn(start_x, start_y + 20, side * 0.8, -6,
                             1.1, 6, 16, 0.85)
-                embers.spawn(start_x, start_y + 24 - 105 * p * p * 0.4,
+                embers.spawn(start_x, start_y + 24 - climb * p * p * 0.4,
                              side * 0.2, 30, 0.5, 3, 5, 0.9)
         elif t < 1.95:
             # そのまま上昇して「起動」タブへ (左右のずれはわずかに補正)
             q = (t - 1.15) / 0.8
             e = 1 - (1 - q) * (1 - q)
             p0x, p0y = start_x, top_y
-            p1x, p1y = start_x + (target_x - start_x) * 0.5, top_y - 60
+            p1x = start_x + (target_x - start_x) * 0.5
+            p1y = ctrl_y
             p2x, p2y = target_x, target_y
             u = 1 - e
             x = u * u * p0x + 2 * u * e * p1x + e * e * p2x
@@ -525,9 +539,27 @@ def play_crash(page, start_x, start_y, done=None):
     _animate(page, stage, step, done)
 
 
-# ---- カード右の常駐ロケット (一覧内の小さな表示) ----
+# ---- カードのタイトル行の常駐ロケット (一覧内の小さな表示) ----
+#
+# 定位置は全状態で共通にする。スロット (幅 ZONE_W・高さ ZONE_H) の中で
+# 機体は必ず「左 ZONE_LEFT・上 0・_ZW x _ZH」に置き、スロットの左側は
+# 煙の置き場としてどの状態でも空けておく。こうすると炎が出ても煙が
+# 出ても、機体は 1px も動かないし縮まない。
+#
+# 2026-08 まではスロットの高さが 24 しかなく、炎ぶんを含む高さ 35 の
+# 画像が収まらずに縮められていた (点火状態だけ約 72%)。煙つきの状態は
+# 煙の場所を作るために機体そのものを右へ 14px ずらしていた。どちらも
+# 発射・爆発の基点 (機体の中心) とずれる原因になるため置き直した。
 
-_ZW, _ZH = 13, 35      # 常駐サイズ (機体 + 炎ぶんの余白)
+_ZW, _ZH = 13, 35        # 機体の画像サイズ (炎ぶんの余白を含む)
+ZONE_BODY_H = 22         # そのうち胴体 (ノズル下端まで) の高さ
+ZONE_LEFT = 14           # 煙の置き場ぶん右に寄せた機体の左端
+ZONE_W = ZONE_LEFT + _ZW + 2
+ZONE_H = _ZH
+ZONE_CX = ZONE_LEFT + _ZW / 2      # スロット左端から機体の中心まで
+
+# 炎なしの機体。炎ありと同じ viewBox にすることで胴体の大きさがそろう
+ROCKET_TALL = _rocket_svg('')
 
 
 # 状態ごとの説明 (装飾を「読める部品」にするツールチップ)
@@ -541,52 +573,68 @@ _ZONE_TIPS = {
 }
 
 
-def _zone_box(inner, state):
-    """全状態を同じ寸法の舞台に載せる (タイトル行の左に並ぶので、
-    行の高さを押し広げない範囲で機体の位置をそろえる)."""
-    return ft.Container(content=inner, width=_ZW + 16, height=24,
-                        alignment=ft.Alignment(0, -1),
-                        clip_behavior=ft.ClipBehavior.NONE,
-                        tooltip=_ZONE_TIPS[state])
+def _zone_slot(children, state):
+    """全状態で同じ寸法のスロット (タイトル行の高さもこれで決まる)."""
+    return ft.Container(
+        width=ZONE_W, height=ZONE_H, tooltip=_ZONE_TIPS[state],
+        clip_behavior=ft.ClipBehavior.NONE,
+        content=ft.Stack(children, width=ZONE_W, height=ZONE_H,
+                         clip_behavior=ft.ClipBehavior.NONE))
+
+
+def _zone_puffs():
+    """機体の左に立ちのぼる煙 (機体には触らない).
+
+    煙は「却下が 1 件ある」という状態そのものの表示なので、演出 (drift)
+    が走らない経路 (起動時の読み込み・定期更新) でも最初から見えている
+    必要がある。初期値を最終形にしておき、drift はそこからの一度きりの
+    揺らぎだけを担当する。
+    """
+    puffs = []
+    for i, (left, top, size) in enumerate(((2, 5, 12), (0, 0, 10))):
+        puffs.append(ft.Container(
+            content=ft.Image(src=SMOKE_DARK, width=size, height=size),
+            width=size, height=size, left=left, top=top,
+            opacity=0.75 - i * 0.15,
+            offset=ft.Offset(-0.2 - i * 0.2, -0.5 - i * 0.4),
+            animate_opacity=ft.Animation(400),
+            animate_offset=ft.Animation(1100, ft.AnimationCurve.EASE_OUT)))
+    return puffs
 
 
 def zone(state):
-    """ボタン行末尾の常駐ロケットを返す。(control, 開いたとき一度の演出fn).
+    """タイトル行の常駐ロケットを返す。(control, 開いたとき一度の演出fn).
 
     state: 'idle' (承認まだ) / 'ignited' (承認1つ=点火) /
            'smoking' (却下1つ=煙) / 'ignited_smoking' (承認1+却下1=
            火も煙も) / 'wreck' (却下確定=残骸)
+
+    残骸以外はどの状態でも機体の大きさと位置が同じ (承認なしの状態が
+    基準)。増えるのは炎と煙だけ。
     """
     if state == 'wreck':
-        inner = ft.Container(content=ft.Image(src=WRECK, width=30,
-                                              height=13),
-                             margin=ft.Margin.only(top=10))
-        return _zone_box(inner, state), None
-    if state in ('smoking', 'ignited_smoking'):
-        # 却下 1 つ = 煙。承認もあるとき (ignited_smoking) は炎も一緒に。
-        # 煙は 13px の機体の中に描くと等倍で見えないため、機体の左に
-        # 独立した濃いめの煙を並置する
-        fired = state == 'ignited_smoking'
-        rimg = ft.Image(src=ROCKET_FL_S if fired else ROCKET,
-                        width=_ZW, height=_ZH if fired else 22)
-        rocket = ft.Container(content=rimg, left=14, top=0,
-                              width=_ZW, height=_ZH if fired else 22)
-        # 煙は「却下が 1 件ある」という状態そのものの表示なので、
-        # 演出 (drift) が走らない経路 (起動時の読み込み・定期更新) でも
-        # 最初から見えている必要がある。初期値を最終形にしておき、
-        # drift はそこからの一度きりの揺らぎだけを担当する
-        puffs = []
-        for i, (left, top, size) in enumerate(((2, 5, 12), (0, 0, 10))):
-            puffs.append(ft.Container(
-                content=ft.Image(src=SMOKE_DARK, width=size, height=size),
-                width=size, height=size, left=left, top=top,
-                opacity=0.75 - i * 0.15,
-                offset=ft.Offset(-0.2 - i * 0.2, -0.5 - i * 0.4),
-                animate_opacity=ft.Animation(400),
-                animate_offset=ft.Animation(
-                    1100, ft.AnimationCurve.EASE_OUT)))
+        # 残骸は機体ではないので形が違う。置き場所は同じスロットで、
+        # 胴体の下端に合わせて寝かせる
+        img = ft.Image(src=WRECK, width=30, height=13)
+        inner = ft.Container(content=img, width=30, height=13,
+                             left=ZONE_LEFT - 8, top=ZONE_BODY_H - 13)
+        return _zone_slot([inner], state), None
 
-        def drift(page_update, puffs=puffs, rimg=rimg, fired=fired):
+    fired = state in ('ignited', 'ignited_smoking')
+    smoky = state in ('smoking', 'ignited_smoking')
+    rimg = ft.Image(src=ROCKET_FL_S if fired else ROCKET_TALL,
+                    width=_ZW, height=_ZH)
+    rocket = ft.Container(content=rimg, width=_ZW, height=_ZH,
+                          left=ZONE_LEFT, top=0,
+                          opacity=1.0 if (fired or smoky) else 0.5)
+    puffs = _zone_puffs() if smoky else []
+    slot = _zone_slot(puffs + [rocket], state)
+    if not fired and not smoky:
+        return slot, None
+
+    def drift(page_update, rimg=rimg, puffs=puffs, fired=fired):
+        """開いたとき一度だけの揺らぎ (煙の立ちのぼり + 炎の揺らめき)."""
+        if puffs:
             # 立ちのぼり: いったん濃く・低い位置から上へ流す
             for i, p in enumerate(puffs):
                 p.opacity = 0.9 - i * 0.15
@@ -599,29 +647,14 @@ def zone(state):
                 time.sleep(0.35)
                 if fired:   # 炎の揺らめきも同時に
                     rimg.src = (ROCKET_FL_M if i % 2 else ROCKET_FL_S)
-            if fired:
-                for j in (1, 0, 1, 0):
-                    rimg.src = ROCKET_FL_M if j else ROCKET_FL_S
-                    page_update()
-                    time.sleep(0.2)
-            else:
-                time.sleep(0.9)
-            for i, p in enumerate(puffs):
-                p.opacity = 0.75 - i * 0.15
-            page_update()
-        stack = ft.Stack([rocket] + puffs, width=14 + _ZW,
-                         height=_ZH if fired else 24)
-        return _zone_box(stack, state), drift
-    if state == 'ignited':
-        img = ft.Image(src=ROCKET_FL_S, width=_ZW, height=_ZH)
-
-        def flicker(page_update, img=img):
-            for i in range(8):
-                img.src = ROCKET_FL_M if i % 2 else ROCKET_FL_S
+        if fired:
+            for j in range(8):
+                rimg.src = ROCKET_FL_M if j % 2 else ROCKET_FL_S
                 page_update()
                 time.sleep(0.16)
-            img.src = ROCKET_FL_S
-            page_update()
-        return _zone_box(img, state), flicker
-    img = ft.Image(src=ROCKET, width=_ZW, height=22, opacity=0.5)
-    return _zone_box(img, state), None
+            rimg.src = ROCKET_FL_S
+        if puffs:
+            for i, p in enumerate(puffs):
+                p.opacity = 0.75 - i * 0.15
+        page_update()
+    return slot, drift
