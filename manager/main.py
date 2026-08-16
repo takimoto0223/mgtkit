@@ -1793,9 +1793,33 @@ def main(page: ft.Page):
     def on_cancel_review(pr):
         """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
         def handler(_):
-            # 押した瞬間に反応 (送信が終わるまでカードの二度押しを防ぐ)
-            restore = _freeze_card(pr['number'])
-            _t5_progress('#%d の取り消しを送信しています...' % pr['number'])
+            # 楽観的更新: 押した瞬間に取り消し後の表示 (バッジ・ボタン・
+            # 常駐ロケット) へ切り替え、送信は裏で行う。失敗したら取得し
+            # 直して表示が戻る (承認 on_approve と対称の作り)
+            data = reviewcache.get()
+            me = (data or {}).get('me')
+            optimistic = bool(data is not None and me)
+            restore = None
+            if optimistic:
+                pr['approved'] = [n for n in pr['approved'] if n != me]
+                pr['rejected'] = [r for r in pr['rejected']
+                                  if r['name'] != me]
+                n_req = reviews.required_approvals(config)
+                if (pr.get('rejected_final')
+                        and len(pr['rejected']) < n_req):
+                    # 却下確定が解けた: 畳みから戻してすぐ再表示する
+                    pr['rejected_final'] = False
+                    localstate.unhide_pr(pr['number'], config)
+                    localstate.unmark_auto_folded(pr['number'], config)
+                _render_reviews(data, stale=True, animate=True,
+                                status='#%d への承認・却下を取り消しました '
+                                       '(送信中...)。' % pr['number'])
+            else:
+                # 手元に前回の取得結果がないときだけ従来どおり
+                # (ボタンを止めて送信を待つ)
+                restore = _freeze_card(pr['number'])
+                _t5_progress('#%d の取り消しを送信しています...'
+                             % pr['number'])
 
             def work():
                 try:
@@ -1808,9 +1832,12 @@ def main(page: ft.Page):
                                        % pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
                     t5_status.value = str(e)
-                    # 失敗時は表示内容が変わらず一覧が作り直されないため、
-                    # ここで戻さないとボタンが無効のまま残る
-                    restore()
+                    if restore is not None:
+                        # 凍結経路の失敗時は表示内容が変わらず一覧が
+                        # 作り直されないため、ここで戻さないとボタンが
+                        # 無効のまま残る (楽観的更新の失敗はこの後の
+                        # 再取得で表示ごと戻る)
+                        restore()
                 page.update()
                 on_refresh_reviews(None)
             run_bg(work)
