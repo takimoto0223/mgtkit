@@ -1584,13 +1584,19 @@ def main(page: ft.Page):
         return True
 
     def _rocket_base(pr_number):
-        """発射・爆発の基点 = そのカードのボタン行右端のロケット位置.
+        """発射・爆発の基点 = カード左のロケット列の固定位置.
 
-        一覧描画時にカードごとの推定 y を _rocket_pos に入れてある。
-        x はロケットが右寄せなのでウィンドウ幅から確定する。
+        ロケットは全カードで #番号の左に並び、「起動」タブと同じ
+        左端の列にある。そこからまっすぐ上に飛ばせばよいので、
+        基点は画面幅にもカード枚数にも依存しない固定点でよい
+        (カードごとの位置推定はレイアウト変更のたびにずれて保守が
+        続いたため廃止。2026-08)。
         """
+        del pr_number   # どのカードから飛んでも同じ位置・同じ動き
         w = int(page.width or 760)
-        return _rocket_pos.get(pr_number, (w - 49, 410))
+        # x = カード左のロケット列 (「起動」タブと同じ左端の列なので
+        # まっすぐ上に飛べる)。y は先頭カードのタイトル行の高さ
+        return 55, 252 + (22 if w < 900 else 0)
 
     def _hide_zone(pr_number):
         """演出中: 常駐ロケットを隠し、カードのボタンも無効化する
@@ -1600,6 +1606,9 @@ def main(page: ft.Page):
             zone.visible = False
         for b in _card_buttons.get(pr_number, []):
             b.disabled = True
+            if getattr(b, 'bgcolor', None):
+                b.bgcolor = '#e5e7eb'
+                b.color = '#9ca3af'
 
     def _freeze_card(pr_number):
         """カードの操作ボタンを一時的に無効化する (二度押し防止).
@@ -1927,8 +1936,6 @@ def main(page: ft.Page):
     _card_buttons = {}
     # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
     _auto_release_tried = set()
-    # 発射・爆発の基点 (一覧描画時にカードごとの推定位置を入れる)
-    _rocket_pos = {}
     # リリース公開待ちの期限 (この間は定期チェックが更新バッジを消さない)
     _pending_release = {'until': 0.0}
 
@@ -1938,12 +1945,15 @@ def main(page: ft.Page):
         却下確定 (一覧に戻した表示) は残骸の静止画のみ (演出はない)。
         却下が期日内に取り消されれば状態が変わり、煙付きで再表示される。
         """
+        fired = len(pr['approved']) >= max(1, n_req - 1)
         if pr.get('rejected_final'):
-            state = 'wreck'          # 却下確定: 散らばった残骸
+            state = 'wreck'              # 却下確定: 散らばった残骸
+        elif pr['rejected'] and fired:
+            state = 'ignited_smoking'    # 承認も却下もある: 火も煙も
         elif pr['rejected']:
-            state = 'smoking'        # 却下 1 つ: 煙
-        elif len(pr['approved']) >= max(1, n_req - 1):
-            state = 'ignited'        # 承認 1 つ: 点火
+            state = 'smoking'            # 却下 1 つ: 煙
+        elif fired:
+            state = 'ignited'            # 承認 1 つ: 点火
         else:
             state = 'idle'
         control, anim = rocketfx.zone(state)
@@ -1983,7 +1993,12 @@ def main(page: ft.Page):
             badges.append(_badge('承認 %d/%d' % (len(pr['approved']), n_req),
                                  '#fef08a', '#713f12'))
             if pr['rejected']:
-                badges.append(_badge('却下あり', '#fecaca', '#7f1d1d'))
+                badges.append(ft.Container(
+                    content=_badge('却下あり', '#fecaca',
+                                   '#7f1d1d'),
+                    tooltip='却下が 1 件あります (却下した本人の'
+                            '取り消し、または修正版の再提出で'
+                            '解消します)'))
             if pr['conflicting']:
                 badges.append(_badge('最新版と衝突', '#fde68a', '#78350f'))
         checks_label, checks_color = {
@@ -1993,8 +2008,12 @@ def main(page: ft.Page):
         }[pr['checks']]
 
         lines = [
-            ft.Text('#%d %s' % (pr['number'], pr['title']),
-                    weight=ft.FontWeight.BOLD, size=13),
+            ft.Row([_rocket_zone(pr, n_req),
+                    ft.Text('#%d %s' % (pr['number'], pr['title']),
+                            weight=ft.FontWeight.BOLD, size=13,
+                            expand=True)],
+                   spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Row(badges + [ft.Text(checks_label, size=12,
                                      color=checks_color),
                              ft.Text('提出者: %s' % pr['author'], size=12,
@@ -2070,13 +2089,8 @@ def main(page: ft.Page):
             else:
                 buttons.append(ft.OutlinedButton('却下',
                                                  on_click=on_reject(pr)))
-        # 演出中の無効化用に操作ボタンを控えておく (spacer・ロケットは除く)
+        # 演出中の無効化用に操作ボタンを控えておく
         _card_buttons[pr['number']] = list(buttons)
-        # ロケットはボタン行の右端に常駐 (かつてのリリースボタン位置。
-        # リリースは承認がそろった時点で自動実行されるためボタンは廃止。
-        # 右寄せにすることで発射・爆発の基点座標が幅から確定する)
-        buttons.append(ft.Container(expand=True))
-        buttons.append(_rocket_zone(pr, n_req))
         if locked:
             # カード情報は薄く、案内文だけ明るく表示する
             content = ft.Column([
@@ -2184,25 +2198,7 @@ def main(page: ft.Page):
         if not visible:
             t5_list.controls.append(
                 ft.Text('確認・承認待ちの提出はありません', size=14))
-        # カードごとの発射・爆発基点を推定 (行数からの概算で十分)
-        _rocket_pos.clear()
-        w = int(page.width or 760)
-        # 一覧先頭の y。タブ上部の説明文の行数に依存するため、
-        # 説明文の文言を変えたらこの値も見直すこと
-        # (「最新の状態に更新」ボタン廃止でボタン行 1 段分上がった)
-        y = 227 + (22 if w < 900 else 0)
         for pr in visible:
-            extra = 0
-            if pr['approved'] and not pr.get('rejected_final'):
-                extra += 1                  # 承認済み: ... の行
-            extra += len(pr['rejected'])    # 差し戻しコメントの行
-            if pr['conflicting'] and not pr.get('rejected_final'):
-                extra += 2                  # 統合待ちの案内文
-            h = 104 + 24 * extra            # カード実測からの係数
-            # スクロールで画面外になっても、せめて画面内から発射する
-            by = min(y + h - 33, int(page.height or 640) - 90)
-            _rocket_pos[pr['number']] = (w - 49, by)
-            y += h + 10
             t5_list.controls.append(
                 _review_row(pr, me, _beta_for(pr['number'], betas)))
         if folded:

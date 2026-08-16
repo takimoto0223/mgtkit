@@ -5,8 +5,8 @@ Flet の Image は SVG 文字列をそのまま src に描画できる。機体�
 SVG で持ち、背景スレッドが約 30fps で位置・回転・透明度を書き換えて
 動かす。演出は数秒で終わり、終了時に overlay から自分を片づける。
 
-基点はカードのボタン行右端のロケット定位置。発射も転倒・爆発も
-そこから始まる。
+基点はカードのタイトル行左端 (#番号の左) のロケット定位置。
+発射も転倒・爆発もそこから始まる。
 """
 import logging
 import math
@@ -133,6 +133,27 @@ SPARKLE = (
     ' fill="#ffd93b"/>'
     '<path d="M0,-9 L1.6,-2 L9,0 L1.6,2 L0,9 L-1.6,2 L-9,0 L-1.6,-2 Z"'
     ' fill="#fff7c0"/></svg>'
+)
+
+
+SMOKE_DARK = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><defs>'
+    '<radialGradient id="sd" cx=".5" cy=".5" r=".5">'
+    '<stop offset="0" stop-color="#8f97a5"/>'
+    '<stop offset=".55" stop-color="#9aa3b2" stop-opacity=".85"/>'
+    '<stop offset="1" stop-color="#9aa3b2" stop-opacity="0"/>'
+    '</radialGradient></defs>'
+    '<circle cx="10" cy="10" r="10" fill="url(#sd)"/></svg>'
+)
+
+# 発射台 (一覧右上に常設し、発射・爆発の基点に文脈を与える)
+PAD = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 10">'
+    + _DEFS +
+    '<path d="M3,1 L21,1 L23,7 L1,7 Z" fill="url(#ng)"/>'
+    '<rect x="4" y="7" width="3" height="2.6" fill="#4a4a4a"/>'
+    '<rect x="17" y="7" width="3" height="2.6" fill="#4a4a4a"/>'
+    '<rect x="11" y="7" width="2.4" height="2.6" fill="#5a5a5a"/></svg>'
 )
 
 
@@ -293,15 +314,20 @@ class _Puffs:
             s.opacity = it['op'] * (1.0 - k)
 
 
-def play_launch(page, start_x, start_y, target_x=30, target_y=92,
+def play_launch(page, start_x, start_y, target_x=None, target_y=92,
                 done=None):
-    """発射: 点火 → 震え → 加速上昇 → 弧を描いて「起動」タブへ → ✨.
+    """発射: 点火 → 震え → まっすぐ上昇して「起動」タブへ → ✨.
+
+    常駐ロケットも「起動」タブも画面の左端の列にあるので、弧を描かず
+    まっすぐ上に飛ばす (どのカードから飛んでも同じ動き)。
 
     到達点の既定は「起動」タブ付近 (リリースは自動更新となって
     起動タブの黄色いタグに現れるため、その予告として飛ばす)。
 
-    (start_x, start_y) はカード右のロケット定位置 (機体中心)。
+    (start_x, start_y) はカード左のロケット定位置 (機体中心)。
     """
+    if target_x is None:
+        target_x = start_x     # 既定は真上 (同じ列にある「起動」タブ)
     stage = _Stage(page)
     smoke = _Puffs(stage, SMOKE, 14, 10)
     embers = _Puffs(stage, EMBER, 6, 4)
@@ -344,11 +370,11 @@ def play_launch(page, start_x, start_y, target_x=30, target_y=92,
                 embers.spawn(start_x, start_y + 24 - 105 * p * p * 0.4,
                              side * 0.2, 30, 0.5, 3, 5, 0.9)
         elif t < 1.95:
-            # 弧を描いて「起動」タブへ (機首は進行方向)
+            # そのまま上昇して「起動」タブへ (左右のずれはわずかに補正)
             q = (t - 1.15) / 0.8
             e = 1 - (1 - q) * (1 - q)
             p0x, p0y = start_x, top_y
-            p1x, p1y = start_x - 30, top_y - 90
+            p1x, p1y = start_x + (target_x - start_x) * 0.5, top_y - 60
             p2x, p2y = target_x, target_y
             u = 1 - e
             x = u * u * p0x + 2 * u * e * p1x + e * e * p2x
@@ -393,14 +419,16 @@ def play_crash(page, start_x, start_y, done=None):
     ground = start_y + 17
 
     # 破片: (svg, 幅, 初速x, 初速y, 回転速度)
+    # ロケットは画面左端の列にあるため、破片は右寄りに飛ばして
+    # 画面外へのクリップを防ぐ
     spec = [
-        (P_NOSE, 8, -55, -170, -6.5),
-        (P_WINDOW, 7, 62, -195, 4.5),
-        (P_BODY_U, 8, -30, -120, -5.0),
-        (P_BODY_L, 8, 42, -100, 5.5),
-        (P_FIN_L, 7, -95, -70, -8.0),
-        (P_FIN_R, 7, 98, -75, 7.5),
-        (P_NOZZLE, 7, -18, -45, -4.0),
+        (P_NOSE, 8, 70, -170, 6.5),
+        (P_WINDOW, 7, -35, -195, -4.5),
+        (P_BODY_U, 8, 45, -120, 5.0),
+        (P_BODY_L, 8, -28, -100, -5.5),
+        (P_FIN_L, 7, 110, -70, 8.0),
+        (P_FIN_R, 7, -40, -75, -7.5),
+        (P_NOZZLE, 7, 28, -45, 4.0),
     ]
     parts = []
     for svg, w, vx, vy, rv in spec:
@@ -484,15 +512,18 @@ _ZONE_TIPS = {
     'idle': '承認がそろうと正式版として発射します',
     'ignited': 'あと 1 人の承認で正式版になります',
     'smoking': '却下が 1 件あります',
+    'ignited_smoking': '承認と却下が 1 件ずつあります (却下が解消すると'
+                       '発射できます)',
     'wreck': '却下が確定しました',
 }
 
 
 def _zone_box(inner, state):
-    """全状態を同じ寸法の舞台に載せる (機体・地面の位置がぶれないよう
-    上端をそろえ、炎は下の余白へ伸ばす)."""
-    return ft.Container(content=inner, width=_ZW + 18, height=36,
+    """全状態を同じ寸法の舞台に載せる (タイトル行の左に並ぶので、
+    行の高さを押し広げない範囲で機体の位置をそろえる)."""
+    return ft.Container(content=inner, width=_ZW + 16, height=24,
                         alignment=ft.Alignment(0, -1),
+                        clip_behavior=ft.ClipBehavior.NONE,
                         tooltip=_ZONE_TIPS[state])
 
 
@@ -500,38 +531,64 @@ def zone(state):
     """ボタン行末尾の常駐ロケットを返す。(control, 開いたとき一度の演出fn).
 
     state: 'idle' (承認まだ) / 'ignited' (承認1つ=点火) /
-           'smoking' (却下1つ=煙) / 'wreck' (却下確定=残骸)
+           'smoking' (却下1つ=煙) / 'ignited_smoking' (承認1+却下1=
+           火も煙も) / 'wreck' (却下確定=残骸)
     """
     if state == 'wreck':
         inner = ft.Container(content=ft.Image(src=WRECK, width=30,
                                               height=13),
                              margin=ft.Margin.only(top=10))
         return _zone_box(inner, state), None
-    if state == 'smoking':
-        rocket = ft.Image(src=ROCKET, width=_ZW, height=22)
-        puffs = [ft.Container(content=ft.Image(src=SMOKE, width=8,
-                                               height=8),
-                              width=8, height=8, opacity=0.0,
-                              offset=ft.Offset(0, 0),
-                              animate_opacity=ft.Animation(400),
-                              animate_offset=ft.Animation(
-                                  1100, ft.AnimationCurve.EASE_OUT))
-                 for _ in range(2)]
+    if state in ('smoking', 'ignited_smoking'):
+        # 却下 1 つ = 煙。承認もあるとき (ignited_smoking) は炎も一緒に。
+        # 煙は 13px の機体の中に描くと等倍で見えないため、機体の左に
+        # 独立した濃いめの煙を並置する
+        fired = state == 'ignited_smoking'
+        rimg = ft.Image(src=ROCKET_FL_S if fired else ROCKET,
+                        width=_ZW, height=_ZH if fired else 22)
+        rocket = ft.Container(content=rimg, left=14, top=0,
+                              width=_ZW, height=_ZH if fired else 22)
+        # 煙は「却下が 1 件ある」という状態そのものの表示なので、
+        # 演出 (drift) が走らない経路 (起動時の読み込み・定期更新) でも
+        # 最初から見えている必要がある。初期値を最終形にしておき、
+        # drift はそこからの一度きりの揺らぎだけを担当する
+        puffs = []
+        for i, (left, top, size) in enumerate(((2, 5, 12), (0, 0, 10))):
+            puffs.append(ft.Container(
+                content=ft.Image(src=SMOKE_DARK, width=size, height=size),
+                width=size, height=size, left=left, top=top,
+                opacity=0.75 - i * 0.15,
+                offset=ft.Offset(-0.2 - i * 0.2, -0.5 - i * 0.4),
+                animate_opacity=ft.Animation(400),
+                animate_offset=ft.Animation(
+                    1100, ft.AnimationCurve.EASE_OUT)))
 
-        def drift(page_update, puffs=puffs):
+        def drift(page_update, puffs=puffs, rimg=rimg, fired=fired):
+            # 立ちのぼり: いったん濃く・低い位置から上へ流す
             for i, p in enumerate(puffs):
-                p.opacity = 0.95 - i * 0.2
-                p.offset = ft.Offset(0.35 + i * 0.55, -1.9 - i * 1.0)
+                p.opacity = 0.9 - i * 0.15
+                p.offset = ft.Offset(0, 0)
+            page_update()
+            time.sleep(0.1)
+            for i, p in enumerate(puffs):
+                p.offset = ft.Offset(-0.2 - i * 0.2, -0.5 - i * 0.4)
                 page_update()
                 time.sleep(0.35)
-            time.sleep(0.9)
-            for p in puffs:
-                p.opacity = 0.35
+                if fired:   # 炎の揺らめきも同時に
+                    rimg.src = (ROCKET_FL_M if i % 2 else ROCKET_FL_S)
+            if fired:
+                for j in (1, 0, 1, 0):
+                    rimg.src = ROCKET_FL_M if j else ROCKET_FL_S
+                    page_update()
+                    time.sleep(0.2)
+            else:
+                time.sleep(0.9)
+            for i, p in enumerate(puffs):
+                p.opacity = 0.75 - i * 0.15
             page_update()
-        col = ft.Column([ft.Stack([rocket] + puffs, width=_ZW + 8,
-                                  height=24)],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        return _zone_box(col, state), drift
+        stack = ft.Stack([rocket] + puffs, width=14 + _ZW,
+                         height=_ZH if fired else 24)
+        return _zone_box(stack, state), drift
     if state == 'ignited':
         img = ft.Image(src=ROCKET_FL_S, width=_ZW, height=_ZH)
 
