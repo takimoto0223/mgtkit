@@ -47,3 +47,6 @@ CLAUDE.local.md
 
 # テスト用フィクスチャは業務ファイル除外の例外として追跡する
 !tests/fixtures/**
+
+# 使い方ガイドの PDF 化に使うフォント (11MB。原稿の指定どおりリポジトリには含めない)
+manager/readme/src/fonts/
