@@ -5,6 +5,7 @@
 - 提出確認ダイアログ用に prepare_submission だけ canned データを返す
 - UI コード (manager/main.py) には手を加えない
 """
+import json
 import os
 import sys
 
@@ -49,6 +50,35 @@ async def _fake_pick_files(self, *a, **k):
     return [_FakeFile()]
 
 ft.FilePicker.pick_files = _fake_pick_files
+
+from manager import paths, versions  # noqa: E402
+
+
+def seed_state():
+    """撮影に必要な「登録済み・取り込み済み」の状態を用意する.
+
+    未登録だと初回登録ダイアログが全画面を覆い、取り込み前だと
+    「アプリはまだ取り込まれていません」になって撮影できないため。
+    値はすべて架空 (API キーはダミー文字列で、通信はしない)。
+    """
+    root = paths.install_root()
+    os.makedirs(root, exist_ok=True)
+    sp = os.path.join(root, 'settings.json')
+    if not os.path.exists(sp):
+        with open(sp, 'w', encoding='utf-8') as f:
+            # キー名は settings.load_settings が見る 'name'。API キーは
+            # 使わないのでダミー (本物らしい文字列は置かない)
+            json.dump({'name': '山田太郎',
+                       'anthropic_api_key': 'dummy-not-a-real-key'},
+                      f, ensure_ascii=False, indent=2)
+    appd = paths.app_dir(paths.stable_dir())
+    if not os.path.exists(os.path.join(appd, 'version.json')):
+        os.makedirs(appd, exist_ok=True)
+        versions.write_version_json(appd, 'v1.1', 'b2c3d4' + '0' * 34,
+                                    '2026-08-07')
+
+
+seed_state()
 
 from manager import main as manager_main  # noqa: E402
 

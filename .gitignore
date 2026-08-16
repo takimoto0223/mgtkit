@@ -50,3 +50,8 @@ CLAUDE.local.md
 
 # 使い方ガイドの PDF 化に使うフォント (11MB。原稿の指定どおりリポジトリには含めない)
 manager/readme/src/fonts/
+
+# ガイド撮影ハーネスの作業データ (架空データの生成物)
+manager/scripts/guide_shots/home/
+manager/scripts/guide_shots/real_*.png
+manager/scripts/fonts/
