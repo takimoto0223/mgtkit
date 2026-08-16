@@ -220,8 +220,12 @@ WRECK = (
     '</svg>'
 )
 
-# 機体スプライトの標準サイズ (常駐ロケットと同じ幅 13 に統一)
+# 機体スプライトの標準サイズ (常駐ロケットと同じ画像・同じ大きさ)。
+# _RH は炎ぶんの余白込み。_BODY_H はそのうち胴体 (ノズル下端まで)。
+# 演出の基点 (start_x, start_y) は胴体の中心なので、画像の上端は
+# start_y - _BODY_H / 2 になる
 _RW, _RH = 13, 35
+_BODY_H = 22
 
 
 def _sprite(svg, w, h, left=0.0, top=0.0, angle=0.0, opacity=1.0):
@@ -368,7 +372,7 @@ def play_launch(page, start_x, start_y, target_x=None, target_y=92,
     smoke = _Puffs(stage, SMOKE, 14, 10)
     embers = _Puffs(stage, EMBER, 6, 4)
     rocket = _sprite(ROCKET_FL_S, _RW, _RH,
-                     left=start_x - _RW / 2, top=start_y - 11)
+                     left=start_x - _RW / 2, top=start_y - _BODY_H / 2)
     stage.add(rocket)
     spark = _sprite(SPARKLE, 10, 10, left=target_x - 5, top=target_y - 5,
                     opacity=0.0)
@@ -397,7 +401,8 @@ def play_launch(page, start_x, start_y, target_x=None, target_y=92,
             p = (t - 0.45) / 0.7
             _swap(rocket, ROCKET_FL_L)
             rocket.left = start_x - _RW / 2
-            rocket.top = start_y - 11 - climb * p * p
+            rocket.top = (start_y - _BODY_H / 2
+                          - climb * p * p)
             if t - state['last_smoke'] > 0.07:
                 state['last_smoke'] = t
                 side = 22 if int(t * 14) % 2 else -22
@@ -421,7 +426,7 @@ def play_launch(page, start_x, start_y, target_x=None, target_y=92,
             rocket.rotate = ft.Rotate(math.atan2(dx, -dy))
             _swap(rocket, ROCKET_FL_M)
             rocket.left = x - _RW / 2
-            rocket.top = y - 11
+            rocket.top = y - _BODY_H / 2
             if t - state['last_trail'] > 0.09:
                 state['last_trail'] = t
                 smoke.spawn(x, y + 14, 0, 8, 0.7, 4, 9, 0.6)
@@ -448,12 +453,12 @@ def play_crash(page, start_x, start_y, done=None):
     stage = _Stage(page)
     smoke = _Puffs(stage, SMOKE, 12, 10)
     embers = _Puffs(stage, EMBER, 5, 4)
-    rocket = _sprite(ROCKET, _RW, 22, left=start_x - _RW / 2,
-                     top=start_y - 11)
+    rocket = _sprite(ROCKET, _RW, _BODY_H, left=start_x - _RW / 2,
+                     top=start_y - _BODY_H / 2)
     stage.add(rocket)
     burst = _sprite(BURST, 13, 13, opacity=0.0)
     stage.add(burst)
-    ground = start_y + 17
+    ground = start_y + _BODY_H / 2 + 6   # 胴体下端の少し下
 
     # 破片: (svg, 幅, 初速x, 初速y, 回転速度)
     # ロケットは画面左端の列にあるため、破片は右寄りに飛ばして
@@ -491,7 +496,7 @@ def play_crash(page, start_x, start_y, done=None):
             if p > 0.7:
                 over = 1.62 - 0.15 * math.sin((p - 0.7) / 0.3 * math.pi)
             rocket.rotate = ft.Rotate(min(1.47, over))
-            rocket.top = start_y - 11 + 8 * p
+            rocket.top = start_y - _BODY_H / 2 + 8 * p
             if 0.68 < t < 0.78:
                 smoke.spawn(start_x - 14, start_y + 18, -20, -8,
                             0.7, 4, 9, 0.6)
@@ -551,8 +556,8 @@ def play_crash(page, start_x, start_y, done=None):
 # 煙の場所を作るために機体そのものを右へ 14px ずらしていた。どちらも
 # 発射・爆発の基点 (機体の中心) とずれる原因になるため置き直した。
 
-_ZW, _ZH = 13, 35        # 機体の画像サイズ (炎ぶんの余白を含む)
-ZONE_BODY_H = 22         # そのうち胴体 (ノズル下端まで) の高さ
+_ZW, _ZH = _RW, _RH      # 機体の画像サイズ (飛行スプライトと同じもの)
+ZONE_BODY_H = _BODY_H    # そのうち胴体 (ノズル下端まで) の高さ
 ZONE_LEFT = 14           # 煙の置き場ぶん右に寄せた機体の左端
 ZONE_W = ZONE_LEFT + _ZW + 2
 ZONE_H = _ZH

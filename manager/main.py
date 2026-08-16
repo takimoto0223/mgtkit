@@ -1363,7 +1363,8 @@ def main(page: ft.Page):
 
     # ------------- タブ4: β版の確認と承認 (β版の試用 + 承認を 1 画面に) -------------
 
-    t5_list = ft.Column([], spacing=8)
+    # spacing は演出の基点の積み上げ (_rocket_base) に使うため定数で結合
+    t5_list = ft.Column([], spacing=_CARD_GAP)
     t5_status = status_text()
 
     def _t5_progress(msg):
@@ -1778,7 +1779,9 @@ def main(page: ft.Page):
         弧を描いて「起動」タブへ → ✨ と弾けて消える."""
         sx, sy = _rocket_base(pr_number)
         _fx_busy['n'] += 1
-        rocketfx.play_launch(page, sx, sy, done=_fx_done(done))
+        # 到達点はこの画面のタブバー付近 (rocketfx の既定に頼らず渡す)
+        rocketfx.play_launch(page, sx, sy, target_y=_TAB_TOP,
+                             done=_fx_done(done))
 
     def _play_crash(pr_number, done=None):
         """却下確定演出 (rocketfx): ぐらつき → 転倒 → 爆発と同時に
@@ -1873,23 +1876,32 @@ def main(page: ft.Page):
                     _render_reviews(data, stale=True, animate=True,
                                     status='#%d を差し戻しました '
                                            '(送信中...)。' % pr['number'])
-                elif crashing:
+                # 却下確定の畳み込みは「爆発の終わり」と「送信の成功」の
+                # 両方がそろってから (_try_auto_release の発射と同じ形)。
+                # 演出中にカードが消えない・送信失敗なら爆発だけで戻る
+                crash_state = {'anim': False, 'net': False}
+
+                def _crash_finish(key):
+                    crash_state[key] = True
+                    if not (crash_state['anim'] and crash_state['net']):
+                        return
+                    pr['rejected'] = rejected
+                    pr['rejected_final'] = True
+                    # その場で畳んで残骸の 1 行へ (次の取得を待たない)
+                    localstate.hide_pr(pr['number'], config)
+                    localstate.mark_auto_folded(pr['number'], config)
+                    on_refresh_reviews(None)
+
+                if crashing:
                     # 却下確定。カードはそのまま置いておき、破片が散り
-                    # きってから一覧を描き直して畳む (押した瞬間の反応は
-                    # ボタンの無効化と、常駐ロケットが倒れて爆発すること)
-                    _freeze_card(pr['number'])
+                    # きってから畳む (押した瞬間の反応はボタンの無効化と、
+                    # 常駐ロケットが倒れて爆発すること)
                     _hide_zone(pr['number'])
                     t5_status.value = ('#%d を差し戻しました (送信中...)。'
                                        % pr['number'])
                     page.update()
-
-                    def _after_crash():
-                        pr['rejected'] = rejected
-                        pr['rejected_final'] = True
-                        run_ui(lambda: _render_reviews(
-                            data, stale=True, animate=True,
-                            status='#%d を差し戻しました。' % pr['number']))
-                    _play_crash(pr['number'], done=_after_crash)
+                    _play_crash(pr['number'],
+                                done=lambda: _crash_finish('anim'))
 
                 def work():
                     try:
@@ -1907,8 +1919,7 @@ def main(page: ft.Page):
                         on_refresh_reviews(None)  # 楽観的表示を元に戻す
                         return
                     if crashing:
-                        # 一覧の更新は爆発の終わりが受け持つ
-                        # (飛行中・爆発中にカードが消えないように)
+                        _crash_finish('net')
                         return
                     # 自分の却下で必要数に達したら「転倒→爆発」演出。
                     # 非表示エリアへ畳むのは爆発が終わってから
