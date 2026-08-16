@@ -266,6 +266,7 @@ _GRAPHQL_SNAPSHOT = {
                  'headRefName': 'feature/fujitaka-20260808-1',
                  'headRefOid': 'headsha33',
                  'mergeable': 'MERGEABLE',
+                 'body': '## 変更ファイルの説明\n- s.py — 断面算定\n',
                  'author': {'login': 'fujitaka'},
                  'reviews': {'nodes': [
                      {'state': 'APPROVED', 'body': '',
@@ -354,6 +355,8 @@ class TestFetchSnapshot:
         assert [p['number'] for p in snap['pending']] == [33]
         assert pr['author'] == 'fujitaka'
         assert pr['approved'] == ['yamada']
+        # 説明文 (PR 本文) が同乗している (差分表示のクリック時往復ゼロ用)
+        assert pr['body'] == '## 変更ファイルの説明\n- s.py — 断面算定\n'
         assert pr['checks'] == 'success'
         assert pr['conflicting'] is False
         assert pr['feedback'][0] == {

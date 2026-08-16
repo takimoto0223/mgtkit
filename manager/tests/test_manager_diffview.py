@@ -251,7 +251,7 @@ class TestWriteDiffHtml:
                             lambda args, cwd=None, timeout=120:
                             calls['git'].append(args) or '')
 
-        def fake_collect(meta, b, h, w):
+        def fake_collect(meta, b, h, w, merge_base=None):
             calls['meta'] = meta
             return {'number': meta['number']}
 
@@ -291,6 +291,118 @@ class TestWriteDiffHtml:
         monkeypatch.setattr(diffview.ghcli, 'run_gh', boom)
         diffview.write_diff_html(self.PR, {'repo': 'o/r'}, workrepo='wr')
         assert env['meta']['notes'] == {}
+
+    def test_snapshot_body_avoids_gh_call(self, env, monkeypatch):
+        # スナップショットに body が同乗していれば gh を呼ばない
+        def boom(args, timeout=60):
+            raise AssertionError('gh が呼ばれた')
+        monkeypatch.setattr(diffview.ghcli, 'run_gh', boom)
+        pr = dict(self.PR,
+                  body='## 変更ファイルの説明\n- s.py — 断面算定の追加\n')
+        diffview.write_diff_html(pr, {'repo': 'o/r'}, workrepo='wr')
+        assert env['meta']['notes'] == {'s.py': '断面算定の追加'}
+
+
+class TestBuildModelFastPath:
+    """head_sha / fork_sha が手元にあるときはネットワークに出ない."""
+
+    def test_skips_fetch_when_commits_local(self, diff_repo, monkeypatch):
+        head = run_git(['rev-parse', 'feature'], cwd=diff_repo).strip()
+        fork = run_git(['rev-parse', 'main'], cwd=diff_repo).strip()
+        real = diffview.run_git
+        calls = []
+
+        def spy(args, cwd=None, timeout=120):
+            calls.append(args)
+            return real(args, cwd=cwd, timeout=timeout)
+        monkeypatch.setattr(diffview, 'run_git', spy)
+        pr = {'number': 7, 'title': 't', 'author': 'a',
+              'branch': 'feature', 'head_sha': head, 'fork_sha': fork,
+              'body': ''}
+        model, _ = diffview.build_model(pr, {'repo': 'o/r'},
+                                        workrepo=diff_repo)
+        # fetch も merge-base 計算も行われない (分岐点は fork_sha)
+        assert not [a for a in calls if a[0] == 'fetch']
+        assert not [a for a in calls if a[0] == 'merge-base']
+        assert model['head_ref'] == head
+        assert any(e['path'] == 'calc.py' for e in model['files'])
+
+    def test_fetches_when_commits_missing(self, diff_repo, monkeypatch):
+        calls = []
+        real = diffview.run_git
+
+        def spy(args, cwd=None, timeout=120):
+            calls.append(args)
+            if args[0] == 'fetch':
+                return ''       # origin が無いので fetch だけ握りつぶす
+            return real(args, cwd=cwd, timeout=timeout)
+        monkeypatch.setattr(diffview, 'run_git', spy)
+        pr = {'number': 7, 'title': 't', 'author': 'a',
+              'branch': 'feature', 'head_sha': 'ffff' * 10,
+              'fork_sha': None, 'body': ''}
+        monkeypatch.setattr(
+            diffview, 'collect_model',
+            lambda meta, b, h, w, merge_base=None: {'number': 7,
+                                                    'head_ref': h})
+        model, _ = diffview.build_model(pr, {'repo': 'o/r'},
+                                        workrepo=diff_repo)
+        assert [a for a in calls if a[0] == 'fetch']
+        # 見つからない head_sha は使わずブランチ参照で比較する
+        assert model['head_ref'] == 'origin/feature'
+
+    def test_stale_fork_sha_not_used_with_branch_ref(self, diff_repo,
+                                                     monkeypatch):
+        """提出が置き換えられて先端がブランチ参照に落ちたら、
+        古い分岐点 (fork_sha) は使わず merge-base 計算に戻す.
+        (古い分岐点 × 新しい先端だと他人の変更が混ざった差分になる)
+        """
+        fork = run_git(['rev-parse', 'main'], cwd=diff_repo).strip()
+        real = diffview.run_git
+
+        def spy(args, cwd=None, timeout=120):
+            if args[0] == 'fetch':
+                return ''
+            return real(args, cwd=cwd, timeout=timeout)
+        monkeypatch.setattr(diffview, 'run_git', spy)
+        seen = {}
+
+        def fake_collect(meta, b, h, w, merge_base=None):
+            seen['merge_base'] = merge_base
+            return {'number': 7}
+        monkeypatch.setattr(diffview, 'collect_model', fake_collect)
+        pr = {'number': 7, 'title': 't', 'author': 'a',
+              'branch': 'feature', 'head_sha': 'ffff' * 10,
+              'fork_sha': fork, 'body': ''}
+        diffview.build_model(pr, {'repo': 'o/r'}, workrepo=diff_repo)
+        assert seen['merge_base'] is None
+
+
+class TestBuildModelCached:
+    def test_same_head_builds_once(self, monkeypatch):
+        monkeypatch.setattr(diffview, '_model_cache', {})
+        built = []
+
+        def fake_build(pr, config=None, workrepo=None, beta_tag=None):
+            built.append(pr['number'])
+            return {'number': pr['number'], 'beta': beta_tag}, 'wr'
+        monkeypatch.setattr(diffview, 'build_model', fake_build)
+        pr = {'number': 7, 'head_sha': 'abc'}
+        m1, _ = diffview.build_model_cached(pr, beta_tag=None)
+        m2, _ = diffview.build_model_cached(pr, beta_tag='v1.7-beta.1')
+        assert built == [7]                      # 2 回目はキャッシュ
+        assert m2['beta'] == 'v1.7-beta.1'       # β版タグは呼び出し側の値
+
+    def test_new_head_rebuilds(self, monkeypatch):
+        monkeypatch.setattr(diffview, '_model_cache', {})
+        built = []
+
+        def fake_build(pr, config=None, workrepo=None, beta_tag=None):
+            built.append(pr['head_sha'])
+            return {'number': pr['number'], 'beta': beta_tag}, 'wr'
+        monkeypatch.setattr(diffview, 'build_model', fake_build)
+        diffview.build_model_cached({'number': 7, 'head_sha': 'a'})
+        diffview.build_model_cached({'number': 7, 'head_sha': 'b'})
+        assert built == ['a', 'b']               # 提出が更新されたら作り直す
 
 
 class TestDiffDialogItems:
