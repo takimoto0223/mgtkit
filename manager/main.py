@@ -30,6 +30,32 @@ log = logging.getLogger(__name__)
 NAVY = '#2b4a6f'
 AMBER = '#b45309'
 
+# ---- 「β版の確認と承認」一覧の寸法 -----------------------------------------
+#
+# 発射・爆発の演出は page.overlay の上を画面の絶対座標で動くのに対し、
+# Flet には描画後の位置を問い合わせる手段がない。カードごとの基点は
+# 行の高さの積み上げでしか求められないため、一覧カードの行の高さは
+# すべてここで固定してある。**ここを変えると演出の基点がずれる**。
+#
+# 唯一の実測値が _LIST_TOP (1 枚目のカードの上端)。ヘッダーとタブバーの
+# 高さは Flet と OS のフォントで決まるため計算では出せない。
+# 2 枚目以降はここからの積み上げで正確に出せる。
+_TAB_TOP = 92          # ヘッダー + タブバーの高さ (✨ の到達点と同じ)
+_TAB_PAD = 24          # タブの中身の余白
+_INTRO_H = 119         # 一覧の上の説明文 2 段ぶん (最小幅 760 での高さ)
+_INTRO_GAP = 16        # 説明文と一覧のあいだ
+_CARD_GAP = 8          # カードとカードのすき間 (t5_list の spacing)
+_CARD_PAD = 12         # カードの内側の余白
+_LINE_GAP = 6          # カードの中の行間
+_H_TITLE = rocketfx.ZONE_H   # タイトル行 (常駐ロケットの高さで決まる)
+_H_BADGE = 24          # バッジの行
+_H_TEXT = 18           # 「承認済み」の 1 行
+_H_REJECT = 36         # 差し戻しの理由 (2 行まで。続きはマウスオーバー)
+_H_NOTE = 42           # 統合待ちの案内 (2 行ぶん)
+_H_BTNS = 40           # ボタンの行
+# 一覧の 1 枚目のカードの上端 (画面上の絶対位置)
+_LIST_TOP = _TAB_TOP + _TAB_PAD + _INTRO_H + _INTRO_GAP
+
 
 def main(page: ft.Page):
     page.title = 'mgtkit アプリマネージャー'
@@ -1337,7 +1363,8 @@ def main(page: ft.Page):
 
     # ------------- タブ4: β版の確認と承認 (β版の試用 + 承認を 1 画面に) -------------
 
-    t5_list = ft.Column([], spacing=8)
+    # spacing は演出の基点の積み上げ (_rocket_base) に使うため定数で結合
+    t5_list = ft.Column([], spacing=_CARD_GAP)
     t5_status = status_text()
 
     def _t5_progress(msg):
@@ -1664,31 +1691,62 @@ def main(page: ft.Page):
         return True
 
     def _rocket_base(pr_number):
-        """発射・爆発の基点 = カード左のロケット列の固定位置.
+        """発射・爆発の基点 = そのカードの常駐ロケットの定位置 (機体中心).
 
-        ロケットは全カードで #番号の左に並び、「起動」タブと同じ
-        左端の列にある。そこからまっすぐ上に飛ばせばよいので、
-        基点は画面幅にもカード枚数にも依存しない固定点でよい
-        (カードごとの位置推定はレイアウト変更のたびにずれて保守が
-        続いたため廃止。2026-08)。
+        押したカードのロケットからそのまま飛ぶ・倒れるように、カードごと
+        に基点を持つ。Flet には描画後の位置を問い合わせる手段がないため、
+        一覧の行の高さをすべて固定 (_H_* / _CARD_* / _INTRO_H) にして
+        積み上げで求めている。スクロール量は _list_scroll に控えてある。
+
+        (2026-08 に一度は全カード共通の固定点にしたが、それだと 2 枚目
+         以降のカードから押しても 1 枚目の位置から飛んでしまう。行の
+         高さを固定して積み上げれば正確に出せるため戻した)
         """
-        del pr_number   # どのカードから飛んでも同じ位置・同じ動き
-        w = int(page.width or 760)
-        # x = カード左のロケット列 (「起動」タブと同じ左端の列なので
-        # まっすぐ上に飛べる)。y は先頭カードのタイトル行の高さ
-        return 55, 252 + (22 if w < 900 else 0)
+        x = _TAB_PAD + _CARD_PAD + rocketfx.ZONE_CX
+        y = (_card_tops.get(pr_number, _LIST_TOP) + _CARD_PAD
+             + rocketfx.ZONE_BODY_H / 2)
+        return x, y - _list_scroll['pixels']
 
     def _hide_zone(pr_number):
-        """演出中: 常駐ロケットを隠し、カードのボタンも無効化する
-        (発射中の二度押し・飛行中の却下を防ぐ。次の一覧更新で戻る)."""
+        """演出中: 常駐ロケットを消し、カードのボタンも無効化する
+        (発射中の二度押し・飛行中の却下を防ぐ).
+
+        場所は残したまま透明にする。visible=False にすると行が詰まって
+        タイトルが左へ飛び、演出中のカードがガタつくため。
+        戻すのは次の一覧描画 (_unfreeze_cards)。一覧の内容が前回と同じで
+        作り直さない場合でも戻るようにしてある。
+        """
         zone = _rocket_zones.get(pr_number)
+        btns = list(_card_buttons.get(pr_number, []))
+        before = [(b.disabled, getattr(b, 'bgcolor', None),
+                   getattr(b, 'color', None)) for b in btns]
+
+        def restore():
+            if zone is not None:
+                zone.opacity = 1.0
+            for b, (disabled, bg, fg) in zip(btns, before):
+                b.disabled = disabled
+                if bg is not None:
+                    b.bgcolor, b.color = bg, fg
+        _frozen_cards.append(restore)
         if zone is not None:
-            zone.visible = False
-        for b in _card_buttons.get(pr_number, []):
+            zone.opacity = 0.0
+        for b in btns:
             b.disabled = True
             if getattr(b, 'bgcolor', None):
                 b.bgcolor = '#e5e7eb'
                 b.color = '#9ca3af'
+
+    def _unfreeze_cards():
+        """演出のために止めていたカードを元に戻す (演出が全部終わってから)."""
+        if _fx_busy['n'] > 0:
+            return                      # まだ飛んでいる・落ちている
+        for restore in _frozen_cards:
+            try:
+                restore()
+            except Exception:
+                log.debug('カードの復帰に失敗', exc_info=True)
+        _frozen_cards.clear()
 
     def _freeze_card(pr_number):
         """カードの操作ボタンを一時的に無効化する (二度押し防止).
@@ -1708,17 +1766,29 @@ def main(page: ft.Page):
                 b.disabled = d
         return restore
 
+    def _fx_done(done):
+        """演出の後始末 (演出中フラグを下ろしてから本来の続きへ)."""
+        def finish():
+            _fx_busy['n'] = max(0, _fx_busy['n'] - 1)
+            if done is not None:
+                done()
+        return finish
+
     def _play_launch(pr_number, done=None):
         """自動リリース演出 (rocketfx): 点火 → 震え → 加速上昇 →
         弧を描いて「起動」タブへ → ✨ と弾けて消える."""
         sx, sy = _rocket_base(pr_number)
-        rocketfx.play_launch(page, sx, sy, done=done)
+        _fx_busy['n'] += 1
+        # 到達点はこの画面のタブバー付近 (rocketfx の既定に頼らず渡す)
+        rocketfx.play_launch(page, sx, sy, target_y=_TAB_TOP,
+                             done=_fx_done(done))
 
     def _play_crash(pr_number, done=None):
         """却下確定演出 (rocketfx): ぐらつき → 転倒 → 爆発と同時に
         パーツ分解 → 破片が放物線で散乱."""
         sx, sy = _rocket_base(pr_number)
-        rocketfx.play_crash(page, sx, sy, done=done)
+        _fx_busy['n'] += 1
+        rocketfx.play_crash(page, sx, sy, done=_fx_done(done))
 
     def on_cancel_review(pr):
         """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
@@ -1792,20 +1862,46 @@ def main(page: ft.Page):
                 me = (data or {}).get('me')
                 optimistic = bool(data is not None and me)
                 n_req = reviews.required_approvals(config)
+                rejected, crashing = None, False
                 if optimistic:
                     at = (datetime.datetime.now(datetime.timezone.utc)
                           .isoformat(timespec='seconds'))
-                    pr['rejected'] = (
+                    rejected = (
                         [r for r in pr['rejected'] if r['name'] != me]
                         + [{'name': me, 'comment': comment, 'at': at}])
-                    pr['rejected_final'] = len(pr['rejected']) >= n_req
+                    # 却下確定なら、演出が終わるまでカードは触らない
+                    crashing = len(rejected) >= n_req
+                if optimistic and not crashing:
+                    pr['rejected'] = rejected
                     _render_reviews(data, stale=True, animate=True,
                                     status='#%d を差し戻しました '
                                            '(送信中...)。' % pr['number'])
-                    if pr['rejected_final']:
-                        # 押した瞬間に爆発を再生 (畳むのは送信後の更新で)
-                        _hide_zone(pr['number'])
-                        _play_crash(pr['number'])
+                # 却下確定の畳み込みは「爆発の終わり」と「送信の成功」の
+                # 両方がそろってから (_try_auto_release の発射と同じ形)。
+                # 演出中にカードが消えない・送信失敗なら爆発だけで戻る
+                crash_state = {'anim': False, 'net': False}
+
+                def _crash_finish(key):
+                    crash_state[key] = True
+                    if not (crash_state['anim'] and crash_state['net']):
+                        return
+                    pr['rejected'] = rejected
+                    pr['rejected_final'] = True
+                    # その場で畳んで残骸の 1 行へ (次の取得を待たない)
+                    localstate.hide_pr(pr['number'], config)
+                    localstate.mark_auto_folded(pr['number'], config)
+                    on_refresh_reviews(None)
+
+                if crashing:
+                    # 却下確定。カードはそのまま置いておき、破片が散り
+                    # きってから畳む (押した瞬間の反応はボタンの無効化と、
+                    # 常駐ロケットが倒れて爆発すること)
+                    _hide_zone(pr['number'])
+                    t5_status.value = ('#%d を差し戻しました (送信中...)。'
+                                       % pr['number'])
+                    page.update()
+                    _play_crash(pr['number'],
+                                done=lambda: _crash_finish('anim'))
 
                 def work():
                     try:
@@ -1822,9 +1918,11 @@ def main(page: ft.Page):
                         page.update()
                         on_refresh_reviews(None)  # 楽観的表示を元に戻す
                         return
+                    if crashing:
+                        _crash_finish('net')
+                        return
                     # 自分の却下で必要数に達したら「転倒→爆発」演出。
                     # 非表示エリアへ畳むのは爆発が終わってから
-                    # (楽観的更新のときは押した瞬間に再生済み)
                     if (not optimistic
                             and len(pr['rejected']) + 1 >= n_req):
                         _hide_zone(pr['number'])
@@ -2026,6 +2124,13 @@ def main(page: ft.Page):
     _rocket_anims = []
     # 表示中の常駐ロケット (発射・爆発の演出中は隠して二重表示を防ぐ)
     _rocket_zones = {}
+    # カードの上端 (提出番号 -> 画面上の y)。描画のたびに積み上げ直す
+    _card_tops = {}
+    # 一覧のスクロール量 (基点は画面の絶対座標なので差し引く)
+    _list_scroll = {'pixels': 0.0}
+    # 演出のために止めているカードを戻す関数と、再生中の本数
+    _frozen_cards = []
+    _fx_busy = {'n': 0}
     # カードごとの操作ボタン (演出中に無効化するための控え)
     _card_buttons = {}
     # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
@@ -2062,6 +2167,15 @@ def main(page: ft.Page):
         wrapper = ft.Container(content=control)
         _rocket_zones[pr['number']] = wrapper
         return wrapper
+
+    def _line(height, control):
+        """高さを固定した 1 行 (演出の基点を積み上げで出すため)."""
+        return ft.Container(height=height, content=control,
+                            alignment=ft.Alignment(-1, 0))
+
+    def _stack_height(rows):
+        """並べた行の合計の高さ (行間ぶんを足す)."""
+        return sum(r.height for r in rows) + _LINE_GAP * (len(rows) - 1)
 
     def _review_row(pr, me, beta=None):
         n_req = reviews.required_approvals(config)
@@ -2105,26 +2219,37 @@ def main(page: ft.Page):
             'pending': ('検証中', '#b45309'),
         }[pr['checks']]
 
+        # 行はすべて _line() で高さを固定する。カードの高さはここで
+        # 並べた行の合計から出し、演出の基点はその積み上げで決まる
+        # (行を足しても引いても自動で追従する)
         lines = [
-            ft.Row([_rocket_zone(pr, n_req),
-                    ft.Text('#%d %s' % (pr['number'], pr['title']),
-                            weight=ft.FontWeight.BOLD, size=13,
-                            expand=True)],
-                   spacing=8,
-                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ft.Row(badges + [ft.Text(checks_label, size=12,
-                                     color=checks_color),
-                             ft.Text('提出者: %s' % pr['author'], size=12,
-                                     color='#555555')], spacing=8),
+            _line(_H_TITLE, ft.Row(
+                [_rocket_zone(pr, n_req),
+                 ft.Text('#%d %s' % (pr['number'], pr['title']),
+                         weight=ft.FontWeight.BOLD, size=13,
+                         expand=True, max_lines=1,
+                         overflow=ft.TextOverflow.ELLIPSIS)],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER)),
+            _line(_H_BADGE, ft.Row(
+                badges + [ft.Text(checks_label, size=12,
+                                  color=checks_color),
+                          ft.Text('提出者: %s' % pr['author'], size=12,
+                                  color='#555555')], spacing=8)),
         ]
         if pr['approved'] and not final:
-            lines.append(ft.Text('承認済み: %s' % '、'.join(pr['approved']),
-                                 size=12, color='#15803d'))
+            lines.append(_line(_H_TEXT, ft.Text(
+                '承認済み: %s' % '、'.join(pr['approved']),
+                size=12, color='#15803d', max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS)))
         for rej in pr['rejected']:
-            lines.append(ft.Text(
-                '%s さんが差し戻し: %s' % (rej['name'],
-                                           rej['comment'] or '(理由なし)'),
-                size=12, color='#b91c1c'))
+            body = '%s さんが差し戻し: %s' % (
+                rej['name'], rej['comment'] or '(理由なし)')
+            # 長い理由は 2 行で切り、全文はマウスを乗せると出す
+            # (行の高さが伸びると下のカードの演出の基点がずれるため)
+            lines.append(_line(_H_REJECT, ft.Text(
+                body, size=12, color='#b91c1c', max_lines=2,
+                overflow=ft.TextOverflow.ELLIPSIS, tooltip=body)))
 
         buttons = []
         if beta is not None and not final:
@@ -2191,22 +2316,27 @@ def main(page: ft.Page):
         _card_buttons[pr['number']] = list(buttons)
         if locked:
             # カード情報は薄く、案内文だけ明るく表示する
-            content = ft.Column([
-                ft.Container(opacity=0.45,
-                             content=ft.Column(lines, spacing=6)),
-                ft.Text('最新版と衝突したため、提出者による統合待ちです。'
-                        '統合されると承認・却下はリセットされ、'
-                        '改めて確認をお願いします。',
-                        size=13, weight=ft.FontWeight.BOLD,
-                        color='#b45309'),
-                ft.Row(buttons, spacing=8),
-            ], spacing=6)
+            rows = [
+                ft.Container(opacity=0.45, height=_stack_height(lines),
+                             content=ft.Column(lines, spacing=_LINE_GAP)),
+                _line(_H_NOTE, ft.Text(
+                    '最新版と衝突したため、提出者による統合待ちです。'
+                    '統合されると承認・却下はリセットされ、'
+                    '改めて確認をお願いします。',
+                    size=13, weight=ft.FontWeight.BOLD, color='#b45309',
+                    max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)),
+                _line(_H_BTNS, ft.Row(buttons, spacing=8)),
+            ]
         else:
-            lines.append(ft.Row(buttons, spacing=8))
-            content = ft.Column(lines, spacing=6)
-        return ft.Container(bgcolor='#f5f7fa', border_radius=6, padding=12,
+            lines.append(_line(_H_BTNS, ft.Row(buttons, spacing=8)))
+            rows = lines
+        # カードの高さは「実際に並べた行」から出す。演出の基点はこの
+        # 高さの積み上げで決まるので、行を足したら自動で追従する
+        return ft.Container(bgcolor='#f5f7fa', border_radius=6,
+                            padding=_CARD_PAD,
+                            height=_CARD_PAD * 2 + _stack_height(rows),
                             opacity=0.72 if final else 1.0,
-                            content=content)
+                            content=ft.Column(rows, spacing=_LINE_GAP))
 
     def _beta_for(pr_number, betas):
         """提出番号に対応するβ版 (リリースノートの #N で対応付け)."""
@@ -2261,6 +2391,9 @@ def main(page: ft.Page):
                                + (' (%s 取得)' % hm if hm else ''))
 
     def _render_reviews_locked(data, stale, animate, status):
+        # 演出のために止めていたカードを戻す。一覧を作り直さない経路
+        # (内容が前回と同じとき) でも必ず通るよう、ここで行う
+        _unfreeze_cards()
         pending, me = data['pending'], data['me']
         betas = ghcli.prereleases(data.get('releases') or [])
         if not stale:
@@ -2293,13 +2426,18 @@ def main(page: ft.Page):
         _rocket_anims.clear()
         _rocket_zones.clear()
         _card_buttons.clear()
+        _card_tops.clear()
         t5_list.controls.clear()
         if not visible:
             t5_list.controls.append(
                 ft.Text('確認・承認待ちの提出はありません', size=14))
+        # カードの上端を積み上げながら控える (演出の基点に使う)
+        top = _LIST_TOP
         for pr in visible:
-            t5_list.controls.append(
-                _review_row(pr, me, _beta_for(pr['number'], betas)))
+            card = _review_row(pr, me, _beta_for(pr['number'], betas))
+            _card_tops[pr['number']] = top
+            top += card.height + _CARD_GAP
+            t5_list.controls.append(card)
         if folded:
             # 非表示にした提出は一覧の一番下に 1 行で畳んでおく
             t5_list.controls.append(ft.Text(
@@ -2424,20 +2562,32 @@ def main(page: ft.Page):
                     break
         run_bg(work)
 
-    tab_beta_review = ft.Container(padding=24, content=ft.Column([
-        ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
-                'ます。β版を確認したら承認してください。%d 人の'
-                '承認がそろうと自動で正式版になり、みなさんのマネージャーに'
-                '自動で取り込まれます 🚀。'
-                '自分の提出は自分では承認できません。'
-                % reviews.required_approvals(config),
-                size=13, color='#555555'),
-        ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
-                'ため、通常の作業には影響しません。', size=12,
-                color='#555555'),
+    def _on_list_scroll(e):
+        """一覧のスクロール量を控える (演出の基点は画面の絶対座標のため)."""
+        try:
+            _list_scroll['pixels'] = float(e.pixels or 0.0)
+        except (TypeError, ValueError):
+            pass
+
+    # 説明文は高さを固定する。ここが伸び縮みすると一覧の位置が動き、
+    # カードごとの演出の基点 (_rocket_base) がずれるため
+    tab_beta_review = ft.Container(padding=_TAB_PAD, content=ft.Column([
+        ft.Container(height=_INTRO_H, content=ft.Column([
+            ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
+                    'ます。β版を確認したら承認してください。%d 人の'
+                    '承認がそろうと自動で正式版になり、みなさんの'
+                    'マネージャーに自動で取り込まれます 🚀。'
+                    '自分の提出は自分では承認できません。'
+                    % reviews.required_approvals(config),
+                    size=13, color='#555555'),
+            ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
+                    'ため、通常の作業には影響しません。', size=12,
+                    color='#555555'),
+        ], spacing=8)),
         t5_list,
         t5_status,
-    ], spacing=16, scroll=ft.ScrollMode.AUTO))
+    ], spacing=_INTRO_GAP, scroll=ft.ScrollMode.AUTO,
+        on_scroll=_on_list_scroll))
 
     # ---------------- 組み立て ----------------
 
