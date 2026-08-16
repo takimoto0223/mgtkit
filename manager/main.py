@@ -177,6 +177,41 @@ def main(page: ft.Page):
         note.value = msg
         page.update()
 
+    # ファイルの選択・保存先の選択に使う共通の部品 (画面に 1 つだけ持つ)
+    file_picker = ft.FilePicker()
+    page.services.append(file_picker)
+
+    async def ask_save_path(file_name, dialog_title='保存先を選んでください'):
+        """保存先をたずねて、そのパスを返す (取り消しなら None).
+
+        ダウンロードの印を押したら、まず**どこに保存するか**を聞く
+        (勝手にダウンロードフォルダへ置くと、あとで探せなくなるため。
+        管理者指示 2026-08)。既定の置き場所はダウンロードフォルダ。
+
+        保存ダイアログを出せない環境 (ブラウザ表示など) では、
+        ダウンロードフォルダの空き名を返して従来どおり保存する。
+        """
+        dest_dir = os.path.join(os.path.expanduser('~'), 'Downloads')
+        try:
+            return await file_picker.save_file(
+                dialog_title=dialog_title, file_name=file_name,
+                initial_directory=dest_dir,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=[file_name.rsplit('.', 1)[-1]])
+        except Exception:
+            log.debug('保存ダイアログを出せません', exc_info=True)
+            os.makedirs(dest_dir, exist_ok=True)
+            return unique_path(os.path.join(dest_dir, file_name))
+
+    def unique_path(path):
+        """すでにあるファイルを黙って上書きしないよう、空き名にずらす."""
+        base, ext = os.path.splitext(path)
+        k, out = 2, path
+        while os.path.exists(out):
+            out = '%s (%d)%s' % (base, k, ext)
+            k += 1
+        return out
+
     def tab_label(text):
         """タブ名 + 件数バッジ (黄色い丸に数字)。バッジ Container を返す."""
         badge = ft.Container(
@@ -579,9 +614,15 @@ def main(page: ft.Page):
         check_update_notice(reschedule=False)
 
     def _download_history_zip(rel, dlg_status):
-        """過去の正式版の ZIP をダウンロードフォルダへ保存する."""
-        def handler(e):
+        """過去の正式版の ZIP を保存する (まず保存先をたずねる)."""
+        async def handler(e):
             btn = e.control
+            dest = await ask_save_path('mgtkit-%s.zip' % rel['tag'],
+                                       '%s の ZIP の保存先' % rel['tag'])
+            if not dest:
+                dlg_status.value = '保存を取り消しました。'
+                page.update()
+                return
             btn.disabled = True     # 反応が見えず二度押しされるのを防ぐ
             dlg_status.value = '%s を取得しています...' % rel['tag']
             page.update()
@@ -594,11 +635,6 @@ def main(page: ft.Page):
                     path, _src = ghcli.download_release(
                         repo, rel['tag'], tmp,
                         has_assets=bool(rel.get('assets')))
-                    dest_dir = os.path.join(os.path.expanduser('~'),
-                                            'Downloads')
-                    os.makedirs(dest_dir, exist_ok=True)
-                    dest = os.path.join(dest_dir,
-                                        'mgtkit-%s.zip' % rel['tag'])
                     shutil.copyfile(path, dest)
                     dlg_status.value = 'ZIP を保存しました: %s' % dest
                 except Exception as e2:
@@ -1057,9 +1093,6 @@ def main(page: ft.Page):
     # (旧・更新タブは廃止: 新しい正式版は自動で取り込み、起動タブの
     #  黄色いタグと「過去の更新ログ」で知らせる)
 
-    file_picker = ft.FilePicker()
-    page.services.append(file_picker)
-
     t4_status = status_text()
     t4_result = ft.Text('', size=14, selectable=True)
     # 手書きの人でも様式 (更新内容 / 制限事項) が揃うよう、項目名の下に
@@ -1156,12 +1189,15 @@ def main(page: ft.Page):
         blank = (not (t4_commit_msg.value or '').strip()
                  and not (t4_limits.value or '').strip())
         if blank and settings.api_key(config):
-            gen_rg = ft.RadioGroup(value='blank', content=ft.Column([
+            # 既定は自動作成 (入力欄の案内「空欄の場合は AI で自動記述
+            # します。(推奨)」と同じ扱いにそろえる)。ここで選び直せるので
+            # 使用料のかかる処理を黙って実行することにはならない
+            gen_rg = ft.RadioGroup(value='ai', content=ft.Column([
+                ft.Radio(value='ai',
+                         label='Claude で自動作成する (推奨。'
+                               'API 使用料が数十円かかります)'),
                 ft.Radio(value='blank',
                          label='空欄のまま提出する (無料)'),
-                ft.Radio(value='ai',
-                         label='Claude で自動作成する '
-                               '(API 使用料が数十円かかります)'),
             ], spacing=0))
             items.append(ft.Container(
                 bgcolor='#ffffff', border_radius=8, padding=12,
@@ -1344,10 +1380,11 @@ def main(page: ft.Page):
                 '計算結果 (mgtkit_out)・PDF や実行ファイル (.bat など) '
                 'コード以外のファイルは自動で除外されます。',
                 size=12, color='#555555'),
-        _t4_field('更新内容', '空欄でも提出できます (扱いは提出時に選択)',
+        _t4_field('更新内容', '空欄の場合は AI で自動記述します。(推奨)',
                   t4_commit_msg),
         _t4_field('ご利用にあたっての制限事項',
-                  '使えない条件など。空欄でも提出できます', t4_limits),
+                  '使えない条件など。空欄の場合は AI で自動記述します。'
+                  '(推奨)', t4_limits),
         ft.Container(t4_submit_btn, margin=ft.Margin(0, 16, 0, 0)),
         t4_status,
         t4_result,
@@ -2016,7 +2053,8 @@ def main(page: ft.Page):
                                       _dialog_size(),
                                       close_label=close_label,
                                       on_open_browser=open_browser,
-                                      run_ui=run_ui)
+                                      run_ui=run_ui,
+                                      ask_save_path=ask_save_path)
 
         def display():
             page.show_dialog(dlg)
