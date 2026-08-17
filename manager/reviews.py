@@ -558,6 +558,31 @@ def cancel_my_review(pr_number, config=None):
                   '-f', 'message=本人が取り消しました'])
 
 
+def release_run_status(config=None):
+    """最後のリリース処理 (release ワークフロー) の状態を返す.
+
+    戻り値: 'running' (処理中) / 'failed' (失敗) / 'done' (成功) /
+            None (確認できない)。
+    公開待ちが長引いたとき、「待てば来る」のか「失敗して来ない」のかを
+    見分けて案内するために使う。
+    """
+    try:
+        out = ghcli.run_gh([
+            'run', 'list', '--repo', paths.repo_slug(config),
+            '--workflow', 'release.yml', '--limit', '1',
+            '--json', 'status,conclusion'], timeout=60)
+        runs = json.loads(out)
+    except (ghcli.GhError, ValueError):
+        return None
+    if not runs:
+        return None
+    run = runs[0]
+    if (run.get('status') or '').lower() != 'completed':
+        return 'running'
+    return ('done' if (run.get('conclusion') or '').lower() == 'success'
+            else 'failed')
+
+
 def delete_betas_for(pr_number, config=None):
     """提出 pr_number に対応するβ版 (prerelease) を削除する.
 
