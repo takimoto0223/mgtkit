@@ -27,9 +27,20 @@ from .gitcli import GitError, ensure_work_repo, run_git
 
 log = logging.getLogger(__name__)
 
+# PR 本文のうちリリースノートへ転載する 2 節の見出し
+# (claude_helper.generate_pr_body の様式と対。
+#  制限事項は表記ゆれを許容するため LIMITS_KEY で部分一致させる)
+UPDATE_KEY = '更新内容'
+LIMITS_KEY = '制限事項'
+LIMITS_KEY_FULL = 'ご利用にあたっての制限事項'
+
 
 class SubmitError(Exception):
     """提出処理の中断。str() はユーザー向けの平易な日本語メッセージ."""
+
+
+class SubmitCancelled(SubmitError):
+    """提出者が確認画面で取り消した (失敗ではない)."""
 
 
 # 実行ファイルは差分対象にしない (ZIP に入っていてもエラーにせず除外)
@@ -354,6 +365,73 @@ def _diff_summary(changes, intentional_deletions):
     return '\n'.join(lines)
 
 
+def _split_sections(body):
+    """PR 本文を「# / ## 見出し」ごとに分ける。### 以下は本文側に含める.
+
+    戻り値: [(見出しの # の数, 見出し, 本文)] を出現順に。
+    見出しより前の文章は ('', '', 本文) として先頭に入る。
+    """
+    out = []
+    level, title, lines = 0, '', []
+    for line in (body or '').replace('\r\n', '\n').split('\n'):
+        m = re.match(r'^(#{1,2})\s+(.+?)\s*$', line)
+        if m:
+            if title or lines:
+                out.append((level, title, '\n'.join(lines).strip()))
+            level, title, lines = len(m.group(1)), m.group(2), []
+        else:
+            lines.append(line)
+    if title or lines:
+        out.append((level, title, '\n'.join(lines).strip()))
+    return out
+
+
+def pr_body_sections(body):
+    """PR 本文を {見出し: 本文} にする (同じ見出しは最初のものを採る)."""
+    sections = {}
+    for _level, title, content in _split_sections(body):
+        if title and title not in sections:
+            sections[title] = content
+    return sections
+
+
+def user_sections(body):
+    """PR 本文から利用者向けの 2 項目 (更新内容, 制限事項) を取り出す.
+
+    リリースノートに転載されるのはこの 2 項目だけ (reviews.release_notes_from_pr)。
+    制限事項は見出しの表記ゆれを許容するため部分一致で拾う。
+    """
+    sections = pr_body_sections(body)
+    limits = next((v for k, v in sections.items() if LIMITS_KEY in k), '')
+    return sections.get(UPDATE_KEY, '').strip(), (limits or '').strip()
+
+
+def body_with_user_sections(body, update_text, limitations):
+    """PR 本文の利用者向け 2 項目だけを差し替える (他の節は順序ごと残す).
+
+    自動作成した本文を提出者が手直ししたときに使う。
+    """
+    head = _user_sections_text(update_text, limitations)
+    rest = []
+    for level, title, content in _split_sections(body):
+        if not title:
+            continue
+        if title == UPDATE_KEY or LIMITS_KEY in title:
+            continue
+        rest.append('%s %s\n\n%s' % ('#' * (level or 2), title, content))
+    return '\n'.join(head + ['']) + '\n'.join(rest)
+
+
+def _user_sections_text(update_text, limitations):
+    """様式どおりの「## 更新内容」「## ご利用にあたっての制限事項」の行."""
+    update = (update_text or '').strip()
+    limits = (limitations or '').strip()
+    if not update:
+        return ['## %s' % LIMITS_KEY_FULL, '', limits, ''] if limits else []
+    return ['## %s' % UPDATE_KEY, '', update, '',
+            '## %s' % LIMITS_KEY_FULL, '', limits or '- なし', '']
+
+
 def fallback_pr_body(update_text, limitations, base_version, summary):
     """手書きの内容 (または空欄) から API を使わず PR 本文を組み立てる.
 
@@ -362,14 +440,7 @@ def fallback_pr_body(update_text, limitations, base_version, summary):
     更新内容が空欄なら「## 更新内容」の節を作らない (リリースノートも
     空欄になる。管理者の指示 2026-08)。
     """
-    update = (update_text or '').strip()
-    limits = (limitations or '').strip()
-    parts = []
-    if update:
-        parts += ['## 更新内容', '', update, '',
-                  '## ご利用にあたっての制限事項', '', limits or '- なし', '']
-    elif limits:
-        parts += ['## ご利用にあたっての制限事項', '', limits, '']
+    parts = _user_sections_text(update_text, limitations)
     parts += ['## 変更ファイルの説明', '',
               'マネージャー経由の提出です (基点: %s)。' % base_version, '',
               '```', summary, '```']
@@ -378,7 +449,7 @@ def fallback_pr_body(update_text, limitations, base_version, summary):
 
 def finalize_submission(prep, intentional_deletions, commit_message='',
                         config=None, on_progress=None, existing_branch=None,
-                        limitations='', use_ai=False):
+                        limitations='', use_ai=False, on_review=None):
     """準備済みの提出を確定する.
 
     intentional_deletions: 「意図的な削除」とユーザーが確認したファイル。
@@ -389,6 +460,11 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
     use_ai: True なら提出のまとめ (コミットメッセージ・PR 本文) を Claude で
     自動生成する (API 使用料は提出者負担のため、UI で本人が選んだときのみ
     True にする)。False なら手書きの内容から API を使わず組み立てる。
+    on_review: 自動生成した「更新内容」「制限事項」を提出者に見せて直させる
+    ための関数 (update, limits) -> (update, limits) / None。この 2 項目は
+    そのまま正式版のリリースノートになるため、本人が一度も読まないまま
+    公開されないようにする (管理者の指示 2026-08)。None を返したら
+    SubmitCancelled を送出する (まだ push していないので副作用は残らない)。
     戻り値: dict(pr_url, branch, commit_message)
     """
     def progress(msg):
@@ -440,6 +516,29 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         if not message:
             message = '%s を基点とした機能追加の提出' % prep['base_version']
 
+        notes = ''
+        if prep['safety']['warnings']:
+            notes = ('# 提出時の警告 (承認時に確認)\n- '
+                     + '\n- '.join(prep['safety']['warnings']))
+        # 本文は送信の前に作る。自動作成のときは提出者に見せて直させるので、
+        # ここで取り消されても push 済みのブランチが残らない
+        body = None
+        if use_ai:
+            progress('提出内容のまとめを作成しています...')
+            body = claude_helper.generate_pr_body(
+                summary, diff_text, prep['base_version'], notes)
+            if body and on_review:
+                reviewed = on_review(*user_sections(body))
+                if reviewed is None:
+                    raise SubmitCancelled('提出を取り消しました。')
+                body = body_with_user_sections(body, *reviewed)
+        if not body:
+            body = fallback_pr_body(commit_message, limitations,
+                                    prep['base_version'], summary)
+        if notes:
+            body += '\n\n' + notes
+        title = message.splitlines()[0][:70]
+
         progress('変更を記録しています...')
         run_git(['-c', 'user.name=%s' % user,
                  '-c', 'user.email=%s@users.noreply.github.com' % user,
@@ -447,22 +546,6 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
 
         progress('GitHub へ送信しています...')
         run_git(['push', '-u', 'origin', branch], cwd=workrepo, timeout=300)
-
-        notes = ''
-        if prep['safety']['warnings']:
-            notes = ('# 提出時の警告 (承認時に確認)\n- '
-                     + '\n- '.join(prep['safety']['warnings']))
-        body = None
-        if use_ai:
-            progress('提出内容のまとめを作成しています...')
-            body = claude_helper.generate_pr_body(
-                summary, diff_text, prep['base_version'], notes)
-        if not body:
-            body = fallback_pr_body(commit_message, limitations,
-                                    prep['base_version'], summary)
-        if notes:
-            body += '\n\n' + notes
-        title = message.splitlines()[0][:70]
 
         if existing_branch:
             # 既存 PR に修正版として積む (新規 PR は作らない)。
