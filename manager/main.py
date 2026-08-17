@@ -2659,7 +2659,7 @@ def main(page: ft.Page):
             ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
                     'ます。β版を確認したら承認してください。%d 人の'
                     '承認がそろうと自動で正式版になり、みなさんの'
-                    'マネージャーに自動で取り込まれます 🚀。'
+                    'マネージャーに自動で取り込まれます。'
                     '自分の提出は自分では承認できません。'
                     % reviews.required_approvals(config),
                     size=13, color='#555555'),
@@ -2739,11 +2739,24 @@ def main(page: ft.Page):
                     _pending_release['until'] = 0.0
                     _auto_update(result['latest'])
                     return
-            # 期限切れ: 黙って消さず、その後の動きを案内する
-            # (定期チェックが続くため、公開されれば自動で取り込まれる)
+            # 期限切れ: 黙って消さず、その後の動きを案内する。
+            # 「まだ処理中」と「失敗して永久に来ない」は伝えることが
+            # 違うため、リリース処理の結果を見て案内を分ける
             _pending_release['until'] = 0.0
-            msg = ('リリースの公開確認ができませんでした。公開されると'
-                   '自動で取り込んでお知らせします。')
+            try:
+                state = reviews.release_run_status(config)
+            except Exception:
+                log.exception('リリース処理の状態を確認できませんでした')
+                state = None
+            if state == 'failed':
+                msg = ('正式版の作成に失敗しました。管理者に連絡して'
+                       'ください (取り込みは行われません)。')
+            elif state == 'running':
+                msg = ('正式版を作成中です (時間がかかっています)。'
+                       '公開されると自動で取り込んでお知らせします。')
+            else:
+                msg = ('リリースの公開確認ができませんでした。公開されると'
+                       '自動で取り込んでお知らせします。')
             t1_preparing_text.value = msg
             t5_status.value = msg
             page.update()

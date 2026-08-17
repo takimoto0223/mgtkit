@@ -89,6 +89,38 @@ class TestCollaborators:
         assert reviews.collaborators({'repo': 'o/r'}) is None
 
 
+class TestReleaseRunStatus:
+    """公開待ちが長引いたとき、処理中か失敗かを見分ける (案内文の分岐)."""
+
+    def _patch(self, monkeypatch, out):
+        monkeypatch.setattr(reviews.ghcli, 'run_gh',
+                            lambda args, timeout=60: out)
+
+    def test_running_while_not_completed(self, monkeypatch):
+        self._patch(monkeypatch,
+                    '[{"status": "in_progress", "conclusion": null}]')
+        assert reviews.release_run_status({'repo': 'o/r'}) == 'running'
+
+    def test_failed_conclusion(self, monkeypatch):
+        self._patch(monkeypatch,
+                    '[{"status": "completed", "conclusion": "failure"}]')
+        assert reviews.release_run_status({'repo': 'o/r'}) == 'failed'
+
+    def test_done_on_success(self, monkeypatch):
+        self._patch(monkeypatch,
+                    '[{"status": "completed", "conclusion": "success"}]')
+        assert reviews.release_run_status({'repo': 'o/r'}) == 'done'
+
+    def test_none_when_unavailable(self, monkeypatch):
+        self._patch(monkeypatch, '[]')
+        assert reviews.release_run_status({'repo': 'o/r'}) is None
+
+        def boom(args, timeout=60):
+            raise reviews.ghcli.GhError('通信エラー')
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', boom)
+        assert reviews.release_run_status({'repo': 'o/r'}) is None
+
+
 class TestSessionCache:
     """起動中ほぼ変わらない情報のキャッシュ (往復削減)."""
 
