@@ -44,6 +44,41 @@ def get():
         return _mem['data']
 
 
+def note_local_change():
+    """利用者が操作した印 (押す前に始まっていた取得の応答を無効にする).
+
+    承認・却下・取り消しは押した瞬間に手元のデータを書き換えて画面を
+    先に切り替える (楽観的更新)。ところが押す前から走っていた取得が
+    その後に返ってくると、中身は「押す前の状態」なので、せっかく
+    切り替えた表示が一度元に戻ってしまう。
+
+    通し番号はもともと取得どうしの前後関係しか見ていないため、操作した
+    という事実をここで番号に反映させる。以後、飛行中だった取得は put()
+    で捨てられ、操作の後に始まった取得だけが採用される。
+    """
+    with _lock:
+        _mem['seq'] += 1
+        _mem['applied_seq'] = _mem['seq']
+        return _mem['seq']
+
+
+def pending_of(number):
+    """手元のスナップショットから提出 1 件を引く (無ければ None).
+
+    取得のたびにスナップショットは新しい dict に入れ替わる。一方、
+    画面は内容が前回と同じなら一覧を作り直さないため、ボタンが古い
+    dict を掴んだままになることがある。その dict を書き換えても最新の
+    スナップショットには乗らないので、楽観的更新は番号で引き直した
+    「今のスナップショットの中の dict」に当てる。
+    """
+    with _lock:
+        data = _mem['data']
+        if not data:
+            return None
+        return next((p for p in data.get('pending') or []
+                     if p.get('number') == number), None)
+
+
 def put(pending, releases, me, seq=None, config=None, merged=None):
     """スナップショットを保存する.
 

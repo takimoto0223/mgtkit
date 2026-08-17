@@ -1667,6 +1667,9 @@ def main(page: ft.Page):
                 _t5_progress('#%d は前の操作を送信しています。'
                              '少し待ってください。' % pr['number'])
                 return
+            # 押す前から走っていた取得は、返ってきても採用しない
+            # (押す前の内容で画面が描き直され、表示が戻ってしまうため)
+            reviewcache.note_local_change()
             # 楽観的更新: 押した瞬間に承認済み表示 (バッジ・点火演出) へ
             # 切り替え、送信は裏で行う。失敗したら取得し直して表示が戻る
             data = reviewcache.get()
@@ -1675,7 +1678,9 @@ def main(page: ft.Page):
                               and me != pr['author'])
             restore = None
             if optimistic:
-                pr['approved'] = sorted(set(pr['approved']) | {me})
+                cur = reviewcache.pending_of(pr['number']) or pr
+                cur['approved'] = pr['approved'] = sorted(
+                    set(cur['approved']) | {me})
                 _render_reviews(data, stale=True, animate=True,
                                 status='#%d を承認しました (送信中...)。'
                                        % pr['number'])
@@ -1874,6 +1879,9 @@ def main(page: ft.Page):
                 _t5_progress('#%d は前の操作を送信しています。'
                              '少し待ってください。' % pr['number'])
                 return
+            # 押す前から走っていた取得は、返ってきても採用しない
+            # (押す前の内容で画面が描き直され、表示が戻ってしまうため)
+            reviewcache.note_local_change()
             # 楽観的更新: 押した瞬間に取り消し後の表示 (バッジ・ボタン・
             # 常駐ロケット) へ切り替え、送信は裏で行う。失敗したら取得し
             # 直して表示が戻る (承認 on_approve と対称の作り)
@@ -1882,14 +1890,16 @@ def main(page: ft.Page):
             optimistic = bool(data is not None and me)
             restore = None
             if optimistic:
-                pr['approved'] = [n for n in pr['approved'] if n != me]
-                pr['rejected'] = [r for r in pr['rejected']
-                                  if r['name'] != me]
+                cur = reviewcache.pending_of(pr['number']) or pr
+                cur['approved'] = pr['approved'] = [
+                    n for n in cur['approved'] if n != me]
+                cur['rejected'] = pr['rejected'] = [
+                    r for r in cur['rejected'] if r['name'] != me]
                 n_req = reviews.required_approvals(config)
-                if (pr.get('rejected_final')
-                        and len(pr['rejected']) < n_req):
+                if (cur.get('rejected_final')
+                        and len(cur['rejected']) < n_req):
                     # 却下確定が解けた: 畳みから戻してすぐ再表示する
-                    pr['rejected_final'] = False
+                    cur['rejected_final'] = pr['rejected_final'] = False
                     localstate.unhide_pr(pr['number'], config)
                     localstate.unmark_auto_folded(pr['number'], config)
                 _render_reviews(data, stale=True, animate=True,
@@ -1977,6 +1987,9 @@ def main(page: ft.Page):
                 rj_btn.disabled = True
                 page.update()
                 page.pop_dialog()
+                # 押す前から走っていた取得は、返ってきても採用しない
+                # (押す前の内容で画面が描き直され、表示が戻ってしまう)
+                reviewcache.note_local_change()
                 # 楽観的更新: 閉じた瞬間に却下表示 (バッジ・煙/爆発演出)
                 # へ切り替え、送信は裏で行う。失敗したら表示が戻る
                 data = reviewcache.get()
@@ -1987,13 +2000,14 @@ def main(page: ft.Page):
                 if optimistic:
                     at = (datetime.datetime.now(datetime.timezone.utc)
                           .isoformat(timespec='seconds'))
+                    cur = reviewcache.pending_of(pr['number']) or pr
                     rejected = (
-                        [r for r in pr['rejected'] if r['name'] != me]
+                        [r for r in cur['rejected'] if r['name'] != me]
                         + [{'name': me, 'comment': comment, 'at': at}])
                     # 却下確定なら、演出が終わるまでカードは触らない
                     crashing = len(rejected) >= n_req
                 if optimistic and not crashing:
-                    pr['rejected'] = rejected
+                    cur['rejected'] = pr['rejected'] = rejected
                     _render_reviews(data, stale=True, animate=True,
                                     status='#%d を差し戻しました '
                                            '(送信中...)。' % pr['number'])
@@ -2006,8 +2020,9 @@ def main(page: ft.Page):
                     crash_state[key] = True
                     if not (crash_state['anim'] and crash_state['net']):
                         return
-                    pr['rejected'] = rejected
-                    pr['rejected_final'] = True
+                    live = reviewcache.pending_of(pr['number']) or pr
+                    live['rejected'] = pr['rejected'] = rejected
+                    live['rejected_final'] = pr['rejected_final'] = True
                     # その場で畳んで残骸の 1 行へ (次の取得を待たない)
                     localstate.hide_pr(pr['number'], config)
                     localstate.mark_auto_folded(pr['number'], config)
