@@ -12,10 +12,18 @@ from playwright.async_api import async_playwright
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 SCRATCH = os.path.dirname(BASE)
-CK = '/usr/local/lib/python3.11/dist-packages/flet_web/web/canvaskit'
-RIVE = os.path.join(SCRATCH, 'package')
-FONT400 = os.path.join(SCRATCH, 'fonts', 'NotoSansJP-400.ttf')
-FONT700 = os.path.join(SCRATCH, 'fonts', 'NotoSansJP-700.ttf')
+# 資産の置き場所は撮影環境で違うため環境変数で上書きできるようにする
+# (GUIDE_SHOTS_CK / _RIVE / _FONT400 / _FONT700)。既定は同梱・標準の場所
+CK = os.environ.get(
+    'GUIDE_SHOTS_CK',
+    '/usr/local/lib/python3.11/dist-packages/flet_web/web/canvaskit')
+RIVE = os.environ.get('GUIDE_SHOTS_RIVE', os.path.join(SCRATCH, 'package'))
+FONT400 = os.environ.get(
+    'GUIDE_SHOTS_FONT400',
+    os.path.join(SCRATCH, 'fonts', 'NotoSansJP-400.ttf'))
+FONT700 = os.environ.get(
+    'GUIDE_SHOTS_FONT700',
+    os.path.join(SCRATCH, 'fonts', 'NotoSansJP-700.ttf'))
 TYPES = {'.wasm': 'application/wasm', '.js': 'text/javascript',
          '.mjs': 'text/javascript', '.ttf': 'font/ttf'}
 URL = 'http://127.0.0.1:8571/'
@@ -47,7 +55,10 @@ async def handle(route):
             return await fulfill_file(
                 route, '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf')
         bold = ('bold' in low or 'wght@700' in low or '/kfol' in low)
-        return await fulfill_file(route, FONT700 if bold else FONT400)
+        path = FONT700 if bold else FONT400
+        if not os.path.isfile(path):   # 用意が無ければ標準の日本語書体
+            path = '/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf'
+        return await fulfill_file(route, path)
     if 'fonts.googleapis.com' in url:
         return await route.fulfill(body='', content_type='text/css')
     await route.abort()
@@ -81,7 +92,9 @@ async def run(mode):
             await pg.mouse.click(250, 93)
             await pg.wait_for_timeout(7000)
             await shot(pg, 'real_beta')
-            await pg.mouse.click(342, 334)
+            # #21 の「フィードバック 2 件」(ロケットが行頭に入って
+            # ボタン行が下がったため座標を更新)
+            await pg.mouse.click(340, 404)
             await pg.wait_for_timeout(4000)
             await shot(pg, 'real_feedback')
         else:

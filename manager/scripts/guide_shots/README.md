@@ -29,3 +29,14 @@
   該当の分岐だけ実行するのが確実
 - 生成物 (`real_*.png`) と `home/` は .gitignore 済み。採用する図だけ
   `manager/readme/src/img/` へコピーする
+
+## 資産の置き場所 (環境変数で上書き)
+
+canvaskit・rive・フォントの場所は撮影環境で違うため、既定値を
+環境変数で上書きできる:
+
+- `GUIDE_SHOTS_CK` — canvaskit のディレクトリ
+  (例: `<venv>/lib/python3.11/site-packages/flet_web/web/canvaskit`)
+- `GUIDE_SHOTS_RIVE` — rive の package ディレクトリ
+- `GUIDE_SHOTS_FONT400` / `GUIDE_SHOTS_FONT700` — Noto Sans JP の TTF。
+  無い環境では標準の日本語書体 (IPA ゴシック) で代用する
