@@ -19,7 +19,7 @@ import webbrowser
 from . import (autofix, conflicts, diffdialog, diffview, feedback, ghcli,
                history, historyview, launcher, localstate, paths,
                reviewcache, reviews, rocketfx, selfupdate, settings,
-               submit, updater, usage)
+               submit, uiguard, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -1352,6 +1352,8 @@ def main(page: ft.Page):
     }
 
     def on_refresh_prs(_):
+        # 押した瞬間の反応: ボタンを止めて進行中を出し、取得は裏で行う
+        t4_refresh_btn.disabled = True
         t4_fix_status.value = '取得中...'
         page.update()
 
@@ -1360,6 +1362,7 @@ def main(page: ft.Page):
                 prs = autofix.list_my_submissions(config)
             except (autofix.AutofixError, ghcli.GhError) as e:
                 t4_fix_status.value = str(e)
+                t4_refresh_btn.disabled = False
                 page.update()
                 return
             t4_pr_list.controls.clear()
@@ -1383,8 +1386,11 @@ def main(page: ft.Page):
                     bgcolor='#f5f7fa', border_radius=6, padding=12,
                     content=ft.Row(row)))
             t4_fix_status.value = ''
+            t4_refresh_btn.disabled = False
             page.update()
         run_bg(work)
+
+    t4_refresh_btn = ft.OutlinedButton('確認', on_click=on_refresh_prs)
 
     tab_submit = ft.Container(padding=24, content=ft.Column([
         ft.Text('作業した mgtkit のフォルダを ZIP にして提出すると、'
@@ -1410,7 +1416,7 @@ def main(page: ft.Page):
         ft.Row([
             ft.Text('提出済みの検証状況', size=14,
                     weight=ft.FontWeight.BOLD),
-            ft.OutlinedButton('確認', on_click=on_refresh_prs),
+            t4_refresh_btn,
         ], spacing=12),
         t4_pr_list,
         t4_fix_status,
@@ -1655,24 +1661,33 @@ def main(page: ft.Page):
 
     def on_approve(pr):
         def handler(_):
+            # 連打の 2 回目以降は捨てる (承認が二重に飛ばないように)。
+            # 黙って捨てると「効いていない」と見えるため一言出す
+            if not _review_guard.begin(pr['number']):
+                _t5_progress('#%d は前の操作を送信しています。'
+                             '少し待ってください。' % pr['number'])
+                return
             # 楽観的更新: 押した瞬間に承認済み表示 (バッジ・点火演出) へ
             # 切り替え、送信は裏で行う。失敗したら取得し直して表示が戻る
             data = reviewcache.get()
             me = (data or {}).get('me')
             optimistic = bool(data is not None and me
                               and me != pr['author'])
+            restore = None
             if optimistic:
                 pr['approved'] = sorted(set(pr['approved']) | {me})
                 _render_reviews(data, stale=True, animate=True,
                                 status='#%d を承認しました (送信中...)。'
                                        % pr['number'])
+            else:
+                # 手元に前回の取得結果がないときは、ボタンを止めて
+                # 進行中の文言を出す (押した瞬間の反応をここで作る)
+                restore = _freeze_card(pr['number'])
+                _t5_progress('#%d の承認を送信しています...' % pr['number'])
 
             def work():
                 released = False
                 try:
-                    if not optimistic:
-                        _t5_progress('#%d の承認を送信しています...'
-                                     % pr['number'])
                     # 提出者は一覧取得時に判明済み。渡して再取得を省く
                     reviews.approve(pr['number'], config,
                                     author=pr['author'])
@@ -1682,6 +1697,12 @@ def main(page: ft.Page):
                     released = _try_auto_release(pr['number'])
                 except (reviews.ReviewError, ghcli.GhError) as e:
                     t5_status.value = str(e)
+                    if restore is not None:
+                        # 凍結経路の失敗は一覧が作り直されないため、
+                        # ここで戻さないとボタンが無効のまま残る
+                        restore()
+                finally:
+                    _review_guard.end(pr['number'])
                 page.update()
                 if not released:
                     # 発射したときは ✨ のあとに _try_auto_release 側で
@@ -1848,6 +1869,11 @@ def main(page: ft.Page):
     def on_cancel_review(pr):
         """自分の承認・却下の取り消し (2 回目のクリックでニュートラルへ)."""
         def handler(_):
+            # 連打の 2 回目以降は捨てる (取り消しが二重に飛ばないように)
+            if not _review_guard.begin(pr['number']):
+                _t5_progress('#%d は前の操作を送信しています。'
+                             '少し待ってください。' % pr['number'])
+                return
             # 楽観的更新: 押した瞬間に取り消し後の表示 (バッジ・ボタン・
             # 常駐ロケット) へ切り替え、送信は裏で行う。失敗したら取得し
             # 直して表示が戻る (承認 on_approve と対称の作り)
@@ -1893,6 +1919,8 @@ def main(page: ft.Page):
                         # 無効のまま残る (楽観的更新の失敗はこの後の
                         # 再取得で表示ごと戻る)
                         restore()
+                finally:
+                    _review_guard.end(pr['number'])
                 page.update()
                 on_refresh_reviews(None)
             run_bg(work)
@@ -1937,6 +1965,17 @@ def main(page: ft.Page):
                     err.value = '却下には理由の入力が必要です。'
                     page.update()
                     return
+                # 連打の 2 回目以降は捨てる。ここが抜けていたため、
+                # 同じ差し戻しが 2〜3 件 GitHub に登録されていた
+                # (自動削除までの残り日数もそのたびに延びていた)
+                if not _review_guard.begin(pr['number']):
+                    err.value = ('前の操作を送信しています。'
+                                 '少し待ってください。')
+                    page.update()
+                    return
+                # 押した瞬間の反応: ボタンを止めてから閉じる
+                rj_btn.disabled = True
+                page.update()
                 page.pop_dialog()
                 # 楽観的更新: 閉じた瞬間に却下表示 (バッジ・煙/爆発演出)
                 # へ切り替え、送信は裏で行う。失敗したら表示が戻る
@@ -1984,12 +2023,14 @@ def main(page: ft.Page):
                     page.update()
                     _play_crash(pr['number'],
                                 done=lambda: _crash_finish('anim'))
+                elif not optimistic:
+                    # 手元に前回の取得結果がないとき: 楽観的な描き直しも
+                    # 演出も無いため、ここで進行中の文言を出す
+                    _t5_progress('#%d の却下を送信しています...'
+                                 % pr['number'])
 
-                def work():
+                def send():
                     try:
-                        if not optimistic:
-                            _t5_progress('#%d の却下を送信しています...'
-                                         % pr['number'])
                         reviews.request_changes(pr['number'], comment,
                                                 config)
                         t5_status.value = ('#%d を差し戻しました。'
@@ -2012,16 +2053,23 @@ def main(page: ft.Page):
                                     done=lambda: on_refresh_reviews(None))
                     else:
                         on_refresh_reviews(None)
+
+                def work():
+                    try:
+                        send()
+                    finally:
+                        _review_guard.end(pr['number'])
                 run_bg(work)
 
+            rj_btn = ft.FilledButton('却下する', on_click=do_reject,
+                                     bgcolor='#b91c1c', color='#ffffff')
             page.show_dialog(ft.AlertDialog(
                 modal=True, title=ft.Text('#%d を却下' % pr['number']),
                 content=ft.Column([reason, err], tight=True, width=480),
                 actions=[
                     ft.TextButton('キャンセル',
                                   on_click=lambda _: page.pop_dialog()),
-                    ft.FilledButton('却下する', on_click=do_reject,
-                                    bgcolor='#b91c1c', color='#ffffff'),
+                    rj_btn,
                 ]))
         return handler
 
@@ -2149,6 +2197,15 @@ def main(page: ft.Page):
                     run_bg(undo)
 
                 def execute(_):
+                    # 連打の 2 回目以降は捨てる (統合と承認リセットが
+                    # 二重に走らないように)
+                    if not _review_guard.begin(pr['number']):
+                        _t5_progress('#%d は前の操作を送信しています。'
+                                     '少し待ってください。' % pr['number'])
+                        return
+                    # 押した瞬間の反応: ボタンを止めてから閉じる
+                    ex_btn.disabled = True
+                    page.update()
                     page.pop_dialog()
                     _t5_progress('最新版との統合を進めています...')
 
@@ -2170,10 +2227,14 @@ def main(page: ft.Page):
                         except (conflicts.ConflictError, GitError,
                                 ghcli.GhError) as e:
                             t5_status.value = str(e)
+                        finally:
+                            _review_guard.end(pr['number'])
                         page.update()
                         on_refresh_reviews(None)
                     run_bg(run_resolve)
 
+                ex_btn = ft.FilledButton('統合を実行', on_click=execute,
+                                         bgcolor=NAVY, color='#ffffff')
                 body = [ft.Text(analysis['explanation'], size=13)]
                 if not analysis['merged_clean']:
                     body.append(policy)
@@ -2185,8 +2246,7 @@ def main(page: ft.Page):
                                       scroll=ft.ScrollMode.AUTO),
                     actions=[
                         ft.TextButton('キャンセル', on_click=cancel),
-                        ft.FilledButton('統合を実行', on_click=execute,
-                                        bgcolor=NAVY, color='#ffffff'),
+                        ex_btn,
                     ]))
                 restore()
                 page.update()
@@ -2216,6 +2276,10 @@ def main(page: ft.Page):
     _fx_busy = {'n': 0}
     # カードごとの操作ボタン (演出中に無効化するための控え)
     _card_buttons = {}
+    # 承認・却下・取り消しなど「提出に対する操作」の二重実行防止の札。
+    # ボタンの無効化・カードの描き直しは押した後に効くため、押した直後に
+    # 届いた 2 回目のクリックはこれで捨てる (uiguard.ActionGuard 参照)
+    _review_guard = uiguard.ActionGuard()
     # 開いたとき自動リリースを試した提出番号 (失敗時の連続再試行を防ぐ)
     _auto_release_tried = set()
     # リリース公開待ちの期限 (この間は定期チェックが更新バッジを消さない)
@@ -2871,16 +2935,22 @@ def main(page: ft.Page):
         err_text = ft.Text('', size=12, color='#b91c1c')
 
         def on_save(_):
-            try:
-                settings.save_settings(name_field.value, key_field.value,
-                                       config)
-            except ValueError as e:
-                err_text.value = str(e)
-                page.update()
-                return
-            page.pop_dialog()
-            page.update()
+            # 押した瞬間にボタンを止めて進行中を出し、保存は裏で行う
+            dialog_busy(save_btn, err_text, '登録しています...')
 
+            def work():
+                try:
+                    settings.save_settings(name_field.value,
+                                           key_field.value, config)
+                except ValueError as e:
+                    dialog_error(save_btn, err_text, str(e))
+                    return
+                page.pop_dialog()
+                page.update()
+            run_bg(work)
+
+        save_btn = ft.FilledButton('登録してはじめる', on_click=on_save,
+                                   bgcolor=NAVY, color='#ffffff')
         page.show_dialog(ft.AlertDialog(
             modal=True,
             title=ft.Text('はじめに登録してください'),
@@ -2894,8 +2964,7 @@ def main(page: ft.Page):
                 key_field,
                 err_text,
             ], tight=True, width=480),
-            actions=[ft.FilledButton('登録してはじめる', on_click=on_save,
-                                     bgcolor=NAVY, color='#ffffff')]))
+            actions=[save_btn]))
 
     # ---------------- 起動時の自動最新化 (直接変更の退避つき) ----------------
 
