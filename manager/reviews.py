@@ -164,6 +164,18 @@ def _is_submission(pr):
     return (pr.get('headRefName') or '').startswith(SUBMISSION_BRANCH_PREFIX)
 
 
+def merged_submissions_query(config=None):
+    """取り込み済みの提出だけを拾う GitHub 検索クエリ.
+
+    リポジトリには提出 (feature/) 以外の PR (管理者によるマネージャー
+    自体の更新) が大量に入るため、「最近の取り込み n 件」では古い提出が
+    押し出されて過去の更新ログの提出者が消える。ブランチ名で絞り込んで
+    確実に拾えるようにする (接頭辞の一致は呼び出し側で再確認する)。
+    """
+    return 'repo:%s is:pr is:merged head:%s' % (
+        paths.repo_slug(config), SUBMISSION_BRANCH_PREFIX)
+
+
 def list_pending(config=None):
     """承認待ちの提出一覧 (open PR + 承認状況 + 検証状況 + 競合有無).
 
@@ -222,8 +234,16 @@ def _build_pending(prs, config):
 # collaborator 一覧は権限によって読めないことがあるため含めない
 # (従来どおり collaborators() のキャッシュ付き取得を使う)
 _SNAPSHOT_QUERY = '''\
-query($owner: String!, $name: String!) {
+query($owner: String!, $name: String!, $submissions: String!) {
   viewer { login }
+  submissions: search(query: $submissions, type: ISSUE, first: 40) {
+    nodes {
+      ... on PullRequest {
+        number title headRefName headRefOid createdAt mergedAt
+        author { login }
+      }
+    }
+  }
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 50) {
       nodes {
@@ -354,7 +374,9 @@ def _snapshot_via_graphql(config):
     out = ghcli.run_gh(['api', 'graphql',
                         '-f', 'query=%s' % _SNAPSHOT_QUERY,
                         '-f', 'owner=%s' % owner,
-                        '-f', 'name=%s' % name])
+                        '-f', 'name=%s' % name,
+                        '-f', 'submissions=%s'
+                        % merged_submissions_query(config)])
     data = json.loads(out)['data']
     me = data['viewer']['login']
     _cache['user'] = me  # ログイン名もこの 1 回から得られる
@@ -362,7 +384,11 @@ def _snapshot_via_graphql(config):
     prs = [_pr_from_graphql(n) for n in repo['pullRequests']['nodes']]
     releases = [_release_from_graphql(n) for n in repo['releases']['nodes']
                 if not n.get('isDraft')]
-    merged = _merged_from_prs((repo.get('merged') or {}).get('nodes') or [])
+    # 直近の取り込み (公開直後の版も確実に拾える) + ブランチ名での検索
+    # (古い提出が新しい PR に押し出されても拾える) の両方から組み立てる
+    merged = _merged_from_prs(
+        ((repo.get('merged') or {}).get('nodes') or [])
+        + ((data.get('submissions') or {}).get('nodes') or []))
     return {'pending': _build_pending(prs, config),
             'releases': releases, 'me': me, 'merged': merged}
 
@@ -410,11 +436,13 @@ def _merged_from_prs(prs):
 
     過去の更新ログの図 (誰がいつ提出し、いつ正式版になったか) 用。
     マネージャー経由の提出 (feature/ ブランチ) のみを対象とする。
+    複数の取得経路をつないで渡せるよう、同じ番号は先に来た方を残す。
     """
-    out = []
+    out, seen = [], set()
     for pr in prs:
-        if not _is_submission(pr):
+        if not _is_submission(pr) or pr['number'] in seen:
             continue
+        seen.add(pr['number'])
         out.append({
             'number': pr['number'],
             'title': pr.get('title') or '',
@@ -429,16 +457,32 @@ def _merged_from_prs(prs):
 
 
 def list_merged(config=None):
-    """取り込み済みの提出一覧 (過去の更新ログの図用・直近 40 件)."""
-    out = ghcli.run_gh([
-        'pr', 'list', '--repo', paths.repo_slug(config),
-        '--state', 'merged', '--limit', '40',
-        '--json', 'number,title,author,headRefName,headRefOid,'
-                  'createdAt,mergedAt'])
+    """取り込み済みの提出一覧 (過去の更新ログの図用).
+
+    直近の取り込み 40 件と、ブランチ名で提出だけを絞り込んだ検索結果を
+    合わせて使う (提出以外の PR が多いリポジトリでも古い提出が
+    こぼれないようにするため。詳細は merged_submissions_query)。
+    """
+    slug = paths.repo_slug(config)
+    fields = ('number,title,author,headRefName,headRefOid,'
+              'createdAt,mergedAt')
+
+    def fetch(extra):
+        out = ghcli.run_gh(['pr', 'list', '--repo', slug,
+                            '--state', 'merged', '--limit', '40',
+                            '--json', fields] + extra)
+        return json.loads(out)
+
     try:
-        prs = json.loads(out)
+        prs = fetch([])
     except ValueError:
         raise ReviewError('取り込み済みの提出一覧を取得できませんでした。')
+    try:
+        prs += fetch(['--search', 'head:%s' % SUBMISSION_BRANCH_PREFIX])
+    except (ValueError, ghcli.GhError):
+        # 検索が使えなくても直近分で図は描ける (古い提出だけが出ない)
+        log.info('提出の検索に失敗 (直近の取り込みだけで図を描きます)',
+                 exc_info=True)
     return _merged_from_prs(prs)
 
 

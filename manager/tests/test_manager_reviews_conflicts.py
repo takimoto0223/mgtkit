@@ -292,6 +292,24 @@ class TestSubmissionFilter:
 _GRAPHQL_SNAPSHOT = {
     'data': {
         'viewer': {'login': 'yamada'},
+        # ブランチ名で提出だけを絞り込んだ検索 (最近の取り込み 40 件から
+        # 押し出された古い提出をここで拾う)
+        'submissions': {'nodes': [
+            {'number': 21, 'title': '木材の断面性能を追加',
+             'headRefName': 'feature/fujitaka-20260720-1',
+             'headRefOid': 'headsha21',
+             'createdAt': '2026-07-20T09:00:00Z',
+             'mergedAt': '2026-07-25T10:00:00Z',
+             'author': {'login': 'fujitaka'}},
+            # merged と重複する分 (二重に出さない)
+            {'number': 29, 'title': '合成梁の検討を追加',
+             'headRefName': 'feature/yamada-20260801-1',
+             'headRefOid': 'headsha29',
+             'createdAt': '2026-08-01T09:00:00Z',
+             'mergedAt': '2026-08-04T10:00:00Z',
+             'author': {'login': 'yamada'}},
+            {},  # PullRequest 以外の検索結果 (無視する)
+        ]},
         'repository': {
             'pullRequests': {'nodes': [
                 {'number': 33, 'title': '組立断面', 'url': 'u',
@@ -376,12 +394,16 @@ class TestFetchSnapshot:
             ['api', 'graphql'],
             ['api', 'repos/o/r/collaborators?per_page=100']]
         assert sorted(c[1] for c in calls[2:]) == [
+            'repos/o/r/compare/main...headsha21?per_page=1',
             'repos/o/r/compare/main...headsha29?per_page=1',
             'repos/o/r/compare/main...headsha33?per_page=1']
+        # 提出の検索クエリも同じ GraphQL 1 回で渡している (往復を増やさない)
+        assert 'submissions=repo:o/r is:pr is:merged head:feature/' \
+            in calls[0]
         assert snap['me'] == 'yamada'
         # ログイン名はこの 1 回でキャッシュされ、追加の gh 呼び出しなし
         assert reviews.current_user() == 'yamada'
-        assert len(calls) == 4
+        assert len(calls) == 5
         # 承認待ち一覧は list_pending と同じ形 (feature/ のみ)
         pr = snap['pending'][0]
         assert [p['number'] for p in snap['pending']] == [33]
@@ -402,14 +424,22 @@ class TestFetchSnapshot:
              'published_at_full': '2026-08-05T00:00:00Z',
              'tag_sha': 'tagsha-beta1',
              'assets': [{'name': 'mgtkit.zip', 'url': 'http://x/z'}]}]
-        # 済み提出は feature/ ブランチのみ・図に必要な要約だけ
+        # 済み提出は feature/ ブランチのみ・図に必要な要約だけ。
+        # 直近の取り込み (#29) と検索で拾った古い提出 (#21) の両方が入り、
+        # 両方に出てくる #29 は 1 件にまとまる
         assert snap['merged'] == [
             {'number': 29, 'title': '合成梁の検討を追加',
              'author': 'yamada', 'created_at': '2026-08-01',
              'created_at_full': '2026-08-01T09:00:00Z',
              'merged_at': '2026-08-04',
              'merged_at_full': '2026-08-04T10:00:00Z',
-             'head_sha': 'headsha29', 'fork_sha': 'forksha-33'}]
+             'head_sha': 'headsha29', 'fork_sha': 'forksha-33'},
+            {'number': 21, 'title': '木材の断面性能を追加',
+             'author': 'fujitaka', 'created_at': '2026-07-20',
+             'created_at_full': '2026-07-20T09:00:00Z',
+             'merged_at': '2026-07-25',
+             'merged_at_full': '2026-07-25T10:00:00Z',
+             'head_sha': 'headsha21', 'fork_sha': 'forksha-33'}]
         # 承認待ちにも提出日が入る (図の帯の左端に使う)
         assert 'created_at' in pr
         # 分岐点コミットが付く (履歴図の基点の事実)
@@ -433,9 +463,11 @@ class TestFetchSnapshot:
         snap = reviews.fetch_snapshot(
             {'repo': 'o/r'},
             known_forks={'33:headsha33': 'memo-33',
-                         '29:headsha29': 'memo-29'})
+                         '29:headsha29': 'memo-29',
+                         '21:headsha21': 'memo-21'})
         assert snap['pending'][0]['fork_sha'] == 'memo-33'
         assert snap['merged'][0]['fork_sha'] == 'memo-29'
+        assert snap['merged'][1]['fork_sha'] == 'memo-21'
 
     def test_falls_back_to_rest_on_graphql_error(self, monkeypatch):
         import json as _json
@@ -492,6 +524,59 @@ class TestFetchSnapshot:
         snap = reviews.fetch_snapshot({'repo': 'o/r'})
         assert snap == {'pending': [], 'releases': [], 'me': 'yamada',
                         'merged': []}
+
+
+class TestListMerged:
+    """取り込み済みの提出一覧 (過去の更新ログの図の提出者・帯の元データ).
+
+    提出 (feature/) 以外の PR が大量にあるリポジトリでも、古い提出が
+    「直近の取り込み n 件」から押し出されて消えないこと。
+    """
+
+    _OLD = {'number': 31, 'title': '二丁溝形鋼の対応',
+            'author': {'login': 'fujitaka'},
+            'headRefName': 'feature/fujitaka-20260807-1',
+            'headRefOid': 'headsha31',
+            'createdAt': '2026-08-07T10:31:32Z',
+            'mergedAt': '2026-08-14T07:17:33Z'}
+
+    def _fake(self, calls, search_result):
+        import json as _json
+
+        def fake(args, timeout=60):
+            calls.append(args)
+            if '--search' in args:
+                if isinstance(search_result, Exception):
+                    raise search_result
+                return _json.dumps(search_result)
+            # 直近の取り込みは提出以外の PR で埋まっている
+            return _json.dumps([
+                {'number': 100 + i, 'title': 'マネージャー修正',
+                 'author': {'login': 't'},
+                 'headRefName': 'claude/app-manager-x',
+                 'headRefOid': 'sha%d' % i,
+                 'createdAt': '2026-08-16T00:00:00Z',
+                 'mergedAt': '2026-08-16T01:00:00Z'} for i in range(40)])
+        return fake
+
+    def test_old_submission_survives_recent_prs(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reviews.ghcli, 'run_gh',
+                            self._fake(calls, [self._OLD]))
+        merged = reviews.list_merged({'repo': 'o/r'})
+        assert [m['number'] for m in merged] == [31]
+        assert merged[0]['author'] == 'fujitaka'
+        assert merged[0]['merged_at'] == '2026-08-14'
+        # 直近の取り込みと、ブランチ名で絞った検索の 2 本立て
+        assert ['--search', 'head:feature/'] == calls[1][-2:]
+
+    def test_search_failure_keeps_recent(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            reviews.ghcli, 'run_gh',
+            self._fake(calls, reviews.ghcli.GhError('検索できません')))
+        # 検索が使えなくても図は描ける (古い提出だけが出ない)
+        assert reviews.list_merged({'repo': 'o/r'}) == []
 
 
 class TestRejectedFinal:
