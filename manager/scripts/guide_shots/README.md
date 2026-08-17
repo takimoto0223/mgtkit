@@ -36,7 +36,9 @@ canvaskit・rive・フォントの場所は撮影環境で違うため、既定�
 環境変数で上書きできる:
 
 - `GUIDE_SHOTS_CK` — canvaskit のディレクトリ
-  (例: `<venv>/lib/python3.11/site-packages/flet_web/web/canvaskit`)
+  (例: `<venv>/lib/python3.11/site-packages/flet_web/web/canvaskit`)。
+  flet 0.86 では canvaskit は本体に同梱されず **`flet-web` パッケージが
+  別途必要** (`pip install flet-web`)。入れないと画面が真っ白になる
 - `GUIDE_SHOTS_RIVE` — rive の package ディレクトリ
 - `GUIDE_SHOTS_FONT400` / `GUIDE_SHOTS_FONT700` — Noto Sans JP の TTF。
   無い環境では標準の日本語書体 (IPA ゴシック) で代用する
