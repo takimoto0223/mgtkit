@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>バージョン管理と同時開発のしくみ — mgtkit 開発資料</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "IPAPGothic", "IPAGothic", sans-serif;
+         color: #0f172a; font-size: 9.2pt; line-height: 1.55; }
+  .page { width: 210mm; height: 296mm; page-break-after: always;
+          position: relative; padding: 13mm 14mm 16mm; overflow: hidden;
+          background: #ffffff; }
+  .page:last-child { page-break-after: auto; }
+
+  /* ---- 共通パーツ ---- */
+  .foot { position: absolute; bottom: 7mm; left: 14mm; right: 14mm;
+          display: flex; justify-content: space-between;
+          font-size: 7.5pt; color: #94a3b8;
+          border-top: 1px solid #e2e8f0; padding-top: 4px; }
+  .secno { display: inline-block; background: #1e3a5f; color: #fff;
+           border-radius: 4px; padding: 1px 8px; font-size: 9.5pt;
+           margin-right: 8px; }
+  h2 { font-size: 12pt; color: #1e3a5f; margin: 12px 0 6px; }
+  h3 { font-size: 10pt; color: #0f172a; margin: 10px 0 4px;
+       border-left: 4px solid #0d9488; padding-left: 8px; }
+  p { margin: 3px 0; }
+  ul { margin: 3px 0 5px; padding-left: 18px; }
+  li { margin: 2px 0; }
+  .term { color: #7c3aed; font-weight: bold; }
+  code { font-family: Consolas, "BIZ UDGothic", monospace;
+         background: #f1f5f9; border-radius: 3px; padding: 0 4px;
+         font-size: 8.6pt; }
+  .fig { text-align: center; margin: 6px 0 2px; }
+  .cap { color: #64748b; font-size: 7.8pt; text-align: center;
+         margin: 0 0 6px; }
+  .card { border: 1px solid #e2e8f0; border-radius: 8px;
+          padding: 8px 12px; margin: 6px 0; }
+  .card.bad { border-color: #fecaca; background: #fff7f7; }
+  .card.good { border-color: #a7f3d0; background: #f6fffb; }
+  .card.warn { border-color: #fde68a; background: #fffcf0; }
+  .card b.h { display: block; margin-bottom: 2px; }
+  .card.bad b.h { color: #b91c1c; }
+  .card.good b.h { color: #047857; }
+  .card.warn b.h { color: #b45309; }
+  table { border-collapse: collapse; width: 100%; font-size: 8.6pt;
+          margin: 5px 0; }
+  th, td { border: 1px solid #e2e8f0; padding: 4px 8px; text-align: left; }
+  th { background: #1e3a5f; color: #fff; font-weight: normal; }
+  tr:nth-child(even) td { background: #f8fafc; }
+
+  /* ---- 表紙帯 ---- */
+  .cover { background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 70%,
+                                       #0d9488 130%);
+           color: #fff; border-radius: 10px; padding: 15px 22px;
+           margin-bottom: 6px; }
+  .cover .k { font-size: 8.5pt; letter-spacing: 3px; color: #5eead4; }
+  .cover h1 { font-size: 19pt; margin: 4px 0 6px; line-height: 1.3; }
+  .cover .d { font-size: 9pt; color: #cbd5e1; }
+  .toc { display: flex; gap: 8px; margin: 6px 0 0; }
+  .toc div { flex: 1; background: #f1f5f9; border-radius: 6px;
+             padding: 6px 8px; font-size: 8pt; color: #334155;
+             border-top: 3px solid #0d9488; }
+  .toc b { display: block; color: #1e3a5f; font-size: 8.6pt; }
+
+  /* ---- 用語カード ---- */
+  .termgrid { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+  .tcard { width: calc(33.3% - 6px); border: 1px solid #e2e8f0; /* 9語 3x3 */
+           border-radius: 8px; padding: 7px 10px; }
+  .tcard .tt { color: #7c3aed; font-weight: bold; font-size: 9.5pt; }
+  .tcard .te { color: #64748b; font-size: 7.8pt; }
+  .tcard p { font-size: 8.3pt; margin-top: 2px; }
+  .tcard svg { float: right; margin: 2px 0 2px 6px; }
+  .tcard .gloss { display: block; color: #64748b; font-size: 7.6pt;
+                  margin-top: 2px; }
+  .tcard .usage { display: block; color: #0d9488; font-size: 7.8pt;
+                  margin-top: 2px; }
+
+  /* ---- 2 ページ目だけ密度を上げる (9 語グリッドを収めるため) ---- */
+  #p2 h2 { margin: 8px 0 4px; }
+  #p2 h3 { margin: 7px 0 3px; }
+  #p2 p { margin: 2px 0; }
+  #p2 .termgrid { gap: 6px; margin: 4px 0; }
+  #p2 .tcard { padding: 5px 9px; }
+  #p2 .tcard p { font-size: 8.0pt; }
+  #p2 .tcard .gloss { font-size: 7.3pt; margin-top: 1px; }
+  #p2 .tcard .usage { font-size: 7.5pt; margin-top: 1px; }
+  #p2 table { font-size: 8.2pt; margin: 4px 0; }
+  #p2 th, #p2 td { padding: 3px 7px; }
+  #p2 .fig { margin: 3px 0 1px; }
+  #p2 .fig svg { width: 600px; height: 141px; }
+  .cols { display: flex; gap: 10px; }
+  .col { flex: 1; }
+</style>
+</head>
+<body>
+
+<!-- ================= 1 ページ目: 表紙 + 1章 ================= -->
+<div class="page">
+<div class="cover">
+  <h1>バージョン管理と同時開発のしくみ</h1>
+  <div class="d">なぜ Git で管理するのか / 同時に直したら何が起きるのか — アプリマネージャーの裏側を仕組みから理解する</div>
+</div>
+<div class="toc">
+  <div><b>1. なぜ Git か</b>共有フォルダの限界と履歴管理</div>
+  <div><b>2. 運用のかたち</b>用語・対応表・ライフサイクル</div>
+  <div><b>3. 同時開発</b>提出時とリリース時に起きること</div>
+  <div><b>4. β版基点の開発</b>スタックの記録とリスク</div>
+  <div><b>5. プラクティス</b>結局どうすべきか</div>
+</div>
+
+<h2><span class="secno">1</span>なぜ Git で管理するのか</h2>
+
+<h3>1.1 Dropbox でも「工夫」はできる — それでも残る合流の壁</h3>
+<p>フォルダを人ごと・版ごとに分ければ上書き事故や競合コピーは減らせますし、Dropbox にも版履歴・復元機能はあります。<b>問題は保存ではなく、分けたフォルダを「元の 1 本に混ぜ直す」工程</b> — ここを支援する仕組みが存在しないことです。</p>
+<div class="fig">
+<svg width="640" height="140" viewBox="0 0 640 140" font-family="IPAPGothic, sans-serif">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="8" refY="5"
+    markerWidth="6.5" markerHeight="6.5" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker></defs>
+  <rect x="0" y="0" width="640" height="140" rx="8" fill="#f8fafc"/>
+  <rect x="20" y="52" width="120" height="38" rx="6" fill="#fff"
+        stroke="#1e3a5f" stroke-width="1.3"/>
+  <text x="80" y="68" font-size="8.8" text-anchor="middle"
+        font-weight="bold" fill="#1e3a5f">mgtkit_v1.2</text>
+  <text x="80" y="82" font-size="7.8" text-anchor="middle"
+        fill="#64748b">共通の出発点</text>
+  <rect x="220" y="14" width="150" height="38" rx="6" fill="#fff"
+        stroke="#d97706" stroke-width="1.3"/>
+  <text x="295" y="30" font-size="8.8" text-anchor="middle"
+        font-weight="bold" fill="#92400e">mgtkit_X版</text>
+  <text x="295" y="44" font-size="7.8" text-anchor="middle"
+        fill="#64748b">(A) を追加して独自進化</text>
+  <rect x="220" y="90" width="150" height="38" rx="6" fill="#fff"
+        stroke="#2563eb" stroke-width="1.3"/>
+  <text x="295" y="106" font-size="8.8" text-anchor="middle"
+        font-weight="bold" fill="#1e40af">mgtkit_Y版</text>
+  <text x="295" y="120" font-size="7.8" text-anchor="middle"
+        fill="#64748b">(B) を追加して独自進化</text>
+  <line x1="140" y1="60" x2="214" y2="36" stroke="#d97706"
+        stroke-width="1.8" marker-end="url(#m1)"/>
+  <line x1="140" y1="82" x2="214" y2="106" stroke="#2563eb"
+        stroke-width="1.8" marker-end="url(#m1)"/>
+  <circle cx="470" cy="71" r="24" fill="#fef2f2" stroke="#dc2626"
+          stroke-width="1.6"/>
+  <text x="470" y="77" font-size="16" text-anchor="middle"
+        fill="#dc2626" font-weight="bold">?</text>
+  <line x1="370" y1="36" x2="447" y2="60" stroke="#94a3b8"
+        stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#m1)"/>
+  <line x1="370" y1="106" x2="447" y2="83" stroke="#94a3b8"
+        stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#m1)"/>
+  <text x="560" y="56" font-size="8.8" text-anchor="middle"
+        fill="#dc2626" font-weight="bold">2 つを 1 本に戻す道具がない</text>
+  <text x="560" y="72" font-size="8" text-anchor="middle"
+        fill="#64748b">誰かが全ファイルを目視で見比べ、</text>
+  <text x="560" y="85" font-size="8" text-anchor="middle"
+        fill="#64748b">手でコピペして貼り合わせる</text>
+  <text x="560" y="98" font-size="8" text-anchor="middle"
+        fill="#64748b">(見落とせば片方の機能が消える)</text>
+</svg>
+</div>
+<p class="cap">フォルダを分けた瞬間、版は分岐する。分岐を安全に「合流」させる工程だけが、永遠に手作業のまま残る</p>
+<div class="card bad"><b class="h">フォルダ分け運用でも残る 3 つの限界</b>
+<ul>
+<li><b>合流が全手作業</b> — 2 つのフォルダの差を目視で洗い出し、行単位の取捨選択を人間が全ファイルで行う。並行数×人数に比例して破綻する</li>
+<li><b>「共通の出発点」の記録がない</b> — どの版から分かれたかを覚えていないので、「相手が消した行」と「自分が足した行」の区別すら機械的にできない</li>
+<li><b>機能単位の履歴と検証ゲートがない</b> — 履歴はファイル単位の自動保存で「この 5 ファイルで 1 機能・理由はこれ」が残らず、テスト・承認を通ってから反映という関門も作れない</li>
+</ul></div>
+
+<h3>1.2 Git の本領 — 「合流」が仕組み化され、機能が積み上がる</h3>
+<p>Git は最初から<b>「分岐して、合流する」ために設計された道具</b>です。全員の共通の出発点 (共通祖先) を必ず記録しているため、<span class="term">マージ</span>時は 3 点比較で自動合成でき、判断が要る箇所 (同じ行) だけを人間に問い合わせます。</p>
+<div class="fig">
+<svg width="640" height="122" viewBox="0 0 640 122" font-family="IPAPGothic, sans-serif">
+  <defs><marker id="m1b" viewBox="0 0 10 10" refX="8" refY="5"
+    markerWidth="6.5" markerHeight="6.5" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker></defs>
+  <rect x="0" y="0" width="640" height="132" rx="8" fill="#f8fafc"/>
+  <!-- 階段 -->
+  <rect x="30" y="92" width="130" height="26" rx="4" fill="#e2e8f0"/>
+  <text x="95" y="109" font-size="8.8" text-anchor="middle"
+        fill="#334155">v1.2 (土台)</text>
+  <rect x="170" y="66" width="130" height="52" rx="4" fill="#cbd5e1"/>
+  <text x="235" y="84" font-size="8.8" text-anchor="middle"
+        fill="#1e3a5f" font-weight="bold">v1.3 = +機能A</text>
+  <text x="235" y="98" font-size="7.6" text-anchor="middle"
+        fill="#475569">メンバー X の成果が乗る</text>
+  <rect x="310" y="40" width="130" height="78" rx="4" fill="#99f6e4"/>
+  <text x="375" y="58" font-size="8.8" text-anchor="middle"
+        fill="#0f766e" font-weight="bold">v1.4 = +機能B</text>
+  <text x="375" y="72" font-size="7.6" text-anchor="middle"
+        fill="#475569">メンバー Y の成果が積み上がる</text>
+  <rect x="450" y="14" width="130" height="104" rx="4" fill="#5eead4"/>
+  <text x="515" y="32" font-size="8.8" text-anchor="middle"
+        fill="#134e4a" font-weight="bold">v1.5 = +機能C</text>
+  <text x="515" y="46" font-size="7.6" text-anchor="middle"
+        fill="#134e4a">次の誰かの成果も…</text>
+  <!-- 供給矢印 -->
+  <line x1="235" y1="30" x2="235" y2="62" stroke="#d97706"
+        stroke-width="2" marker-end="url(#m1b)"/>
+  <text x="235" y="22" font-size="7.8" text-anchor="middle"
+        fill="#92400e">マージ (A)</text>
+  <line x1="375" y1="18" x2="375" y2="36" stroke="#2563eb"
+        stroke-width="2" marker-end="url(#m1b)"/>
+  <text x="375" y="12" font-size="7.8" text-anchor="middle"
+        fill="#1e40af">マージ (B)</text>
+</svg>
+</div>
+<p class="cap">合流のたびに幹へ機能が積み上がる。並行して作られた成果が、失われずに 1 本の製品へ蓄積されていく</p>
+<div class="card good"><b class="h">複数人開発での Git の強み — ここが本質</b>
+<ul>
+<li><b>機能が積み上がる</b> — 全員の成果が<span class="term">マージ</span>で幹 (main) に合流し、v1.2 → v1.3 → v1.4 と<b>雪だるま式に蓄積</b>される。フォルダ分け運用の「どれが最新? 誰の版に何が入ってる?」が構造的に消える</li>
+<li><b>合流コストがほぼ一定</b> — 共通祖先を知る 3-way <span class="term">マージ</span>が自動合成するため、2 人でも 10 人でも合流の手間はほぼ変わらない。<b>人数が増えるほどフォルダ運用との差が開く</b></li>
+<li><b>積む前に検査でき、段ごとの記録が残る</b> — 各段の手前に CI + 2 人の承認のゲート。<span class="term">コミット</span>には「誰が・なぜ」が残り、段単位の巻き戻し (revert) と原因行の特定 (blame) ができる</li>
+</ul></div>
+<div class="foot"><span>mgtkit 開発資料 — バージョン管理と同時開発のしくみ</span><span>1 / 5</span></div>
+</div>
+
+<!-- ================= 2 ページ目: 2章 用語 + 対応表 ================= -->
+<div class="page" id="p2">
+<h2><span class="secno">2</span>mgtkit での Git 運用のかたち</h2>
+
+<h3>2.1 用語ミニ辞典 — 9 語だけ覚えれば全部読める</h3>
+<div class="termgrid">
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <line x1="4" y1="13" x2="36" y2="13" stroke="#94a3b8" stroke-width="2"/>
+      <circle cx="20" cy="13" r="6" fill="#7c3aed"/></svg>
+    <span class="tt">コミット</span> <span class="te">commit</span>
+    <p>変更の最小単位。「誰が・いつ・何を・なぜ」を持つ保存点。SHA で一意に指せる<span class="gloss">SHA(シャー) = コミットごとに付く英数字の識別番号。指紋のようなもの</span><span class="usage">用例:「コミットを積む」</span></p>
+  </div>
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <path d="M4 18 H18 C26 18, 28 8, 36 8" stroke="#d97706"
+            stroke-width="2" fill="none"/>
+      <line x1="4" y1="18" x2="36" y2="18" stroke="#94a3b8" stroke-width="2"/>
+      <circle cx="18" cy="18" r="4" fill="#1e3a5f"/></svg>
+    <span class="tt">ブランチ</span> <span class="te">branch</span>
+    <p>履歴の枝分かれ。幹 = メインブランチ (main)。作業はそこからブランチを切って隔離し、幹を検証済みだけに保つ<span class="usage">用例:「ブランチを切る」(= 新しい枝を作る)</span></p>
+  </div>
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <path d="M4 8 C14 8, 18 16, 28 17" stroke="#d97706"
+            stroke-width="2" fill="none"/>
+      <line x1="4" y1="18" x2="36" y2="18" stroke="#94a3b8" stroke-width="2"/>
+      <circle cx="30" cy="18" r="5" fill="#059669"/></svg>
+    <span class="tt">マージ</span> <span class="te">merge</span>
+    <p>枝の合流。共通祖先と両者の 3 点を見比べて自動合成 (3-way マージ)<span class="gloss">squash(スカッシュ)マージ = 細かい履歴を 1 つのコミットにまとめて合流。リリースで採用</span><span class="usage">用例:「マージする」「取り込む」</span></p>
+  </div>
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <rect x="4" y="5" width="22" height="16" rx="3" fill="#eef2ff"
+            stroke="#7c3aed" stroke-width="1.5"/>
+      <path d="M28 13 h8 m-3 -3 l3 3 l-3 3" stroke="#7c3aed"
+            stroke-width="1.8" fill="none"/></svg>
+    <span class="tt">プルリクエスト</span> <span class="te">pull request / PR</span>
+    <p>「この枝を幹に入れて」というレビュー申請。差分・承認・CI がぶら下がる<span class="usage">用例:「PR を出す」</span></p>
+  </div>
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <rect x="4" y="4" width="15" height="12" rx="2" fill="#f1f5f9"
+            stroke="#64748b" stroke-width="1.3"/>
+      <rect x="14" y="10" width="15" height="12" rx="2" fill="#fff"
+            stroke="#0d9488" stroke-width="1.5"/></svg>
+    <span class="tt">クローン</span> <span class="te">clone</span>
+    <p>履歴ごとリポジトリを複製。setup.bat の初回がこれ。全員が完全な写しを持つ<span class="usage">用例:「クローンする」</span></p>
+  </div>
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <rect x="12" y="12" width="18" height="11" rx="2" fill="#f0fdfa"
+            stroke="#0d9488" stroke-width="1.5"/>
+      <path d="M21 2 v7 m-3.5 -3.5 l3.5 3.5 l3.5 -3.5" stroke="#0d9488"
+            stroke-width="1.8" fill="none"/></svg>
+    <span class="tt">プル</span> <span class="te">pull</span>
+    <p>リポジトリの最新の内容を、自分の PC の mgtkit フォルダ (C:\Users\(自分)\mgtkit) へ取り込む<span class="usage">用例:「最新をプルする」</span></p>
+  </div>
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <rect x="12" y="3" width="18" height="11" rx="2" fill="#f0fdfa"
+            stroke="#0d9488" stroke-width="1.5"/>
+      <path d="M21 24 v-7 m-3.5 3.5 l3.5 -3.5 l3.5 3.5" stroke="#0d9488"
+            stroke-width="1.8" fill="none"/></svg>
+    <span class="tt">プッシュ</span> <span class="te">push</span>
+    <p>手元の枝のコミットを GitHub へ送って同期する。プルの反対方向。送るだけで、枝の合流 (マージ) はしない<span class="usage">用例:「プッシュする」</span></p>
+  </div>
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <circle cx="14" cy="13" r="9" fill="#fff7ed" stroke="#d97706"
+            stroke-width="1.5"/>
+      <path d="M10 13 l3 3 l6 -7" stroke="#d97706" stroke-width="2"
+            fill="none"/>
+      <text x="28" y="18" font-size="9" fill="#d97706"
+            font-weight="bold">OK</text></svg>
+    <span class="tt">CI</span> <span class="te">continuous integration</span>
+    <p>提出 (PR) のたびに自動で走る検査。テストと安全チェックで、メインブランチに入れても安全かを確かめる。通過するとβ版が発行される<span class="usage">用例:「CI が通る」「CI が落ちる」</span></p>
+  </div>
+  <div class="tcard">
+    <svg width="40" height="26" viewBox="0 0 40 26">
+      <path d="M4 6 C14 6, 16 12, 20 13" stroke="#d97706"
+            stroke-width="2" fill="none"/>
+      <path d="M4 20 C14 20, 16 14, 20 13" stroke="#1e3a5f"
+            stroke-width="2" fill="none"/>
+      <circle cx="22" cy="13" r="5" fill="#fee2e2" stroke="#b91c1c"
+            stroke-width="1.6"/>
+      <text x="19" y="17" font-size="10" fill="#b91c1c"
+            font-weight="bold">!</text></svg>
+    <span class="tt">衝突</span> <span class="te">conflict / コンフリクト</span>
+    <p>2 つの変更が同じ箇所を別々に変えていて、自動合成 (マージ) できない状態。どちらを採るか決めて解消してから合流する<span class="gloss">くわしくは 3.2 (提出時)・3.3 (リリース時) 参照</span><span class="usage">用例:「衝突を解消する」</span></p>
+  </div>
+  
+</div>
+
+<h3>2.2 マネージャーのボタン ⇔ Git 操作 対応表</h3>
+<p>メンバーが Git を直接触ることはありません。ボタンの裏で走っているのが下の操作です。</p>
+<table>
+<tr><th style="width:30%">マネージャーの操作</th><th>裏で走る Git / GitHub 操作</th></tr>
+<tr><td>setup.bat (初回)</td><td><code>git clone</code> (= <span class="term">クローン</span>) — リポジトリ全体を <code>C:\Users\(自分)\mgtkit</code> へ複製</td></tr>
+<tr><td>マネージャー起動.bat</td><td><code>git pull</code> (= <span class="term">プル</span>) — 起動のたびに最新の内容を <code>C:\Users\(自分)\mgtkit</code> へ取り込む</td></tr>
+<tr><td>起動 / 更新</td><td>Releases から ZIP 取得 + <code>version.json</code> に基点<span class="term">コミット</span> SHA を記録 (スナップショット。クローンではない)</td></tr>
+<tr><td>更新版を提出</td><td>基点 SHA から<span class="term">ブランチ</span> <code>feature/名前-日付-連番</code> 作成 → 差分を<span class="term">コミット</span> → <span class="term">プッシュ</span> → <span class="term">プルリクエスト</span>作成 → CI が自動で走る (メインブランチに入れても安全かの検査)</td></tr>
+<tr><td>承認 / 却下</td><td>PR レビュー (Approve / Request changes)。2 回目のクリック = 自分のレビューを取り消し (dismiss)</td></tr>
+<tr><td>リリース</td><td>squash <span class="term">マージ</span> → バージョンタグ → Release 発行 → β版 (prerelease) 削除</td></tr>
+<tr><td>最新版と統合<br><span style="font-size:7.6pt; color:#64748b">(先行してメインブランチにマージされたβ版と衝突すると、GitHub が自動検出して表示)</span></td><td>最新の内容を<span class="term">プル</span> → <code>git merge main</code> (= <span class="term">マージ</span>) で自分の枝に取り込み → <span class="term">衝突</span>部分を解消 (<code>--ours</code> 自分優先 / <code>--theirs</code> 最新版優先 / AI 両立マージ 両方の機能を残す) → <span class="term">コミット</span> → <span class="term">プッシュ</span></td></tr>
+</table>
+<p class="cap" style="text-align:left; margin:2px 0 0">※ 提出時に CI を通っていても衝突は起こり得ます (CI = その時点の幹に入れて安全かの検査 / 衝突 = その後に幹が進んで同じ箇所が重なった状態。「最新版と統合」で解消)。</p>
+
+<h3 style="margin-top:8px">2.3 版のライフサイクル — 取得からリリースまで</h3>
+<div class="fig">
+<svg width="640" height="150" viewBox="0 0 640 150" font-family="IPAPGothic, sans-serif">
+  <defs><marker id="m2" viewBox="0 0 10 10" refX="8" refY="5"
+    markerWidth="6.5" markerHeight="6.5" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker></defs>
+  <rect x="0" y="0" width="640" height="150" rx="8" fill="#f8fafc"/>
+  <!-- steps row1 -->
+  <rect x="16" y="18" width="140" height="40" rx="6" fill="#fff"
+        stroke="#1e3a5f" stroke-width="1.3"/>
+  <text x="86" y="35" font-size="9" text-anchor="middle"
+        font-weight="bold" fill="#1e3a5f">① 取得</text>
+  <text x="86" y="49" font-size="7.8" text-anchor="middle"
+        fill="#475569">安定版 ZIP + 基点のしおり</text>
+  <rect x="176" y="18" width="140" height="40" rx="6" fill="#fff"
+        stroke="#1e3a5f" stroke-width="1.3"/>
+  <text x="246" y="35" font-size="9" text-anchor="middle"
+        font-weight="bold" fill="#1e3a5f">② 作業</text>
+  <text x="246" y="49" font-size="7.8" text-anchor="middle"
+        fill="#475569">手元で自由に編集 (Git なし)</text>
+  <rect x="336" y="18" width="140" height="40" rx="6" fill="#fff"
+        stroke="#7c3aed" stroke-width="1.3"/>
+  <text x="406" y="35" font-size="9" text-anchor="middle"
+        font-weight="bold" fill="#7c3aed">③ 提出</text>
+  <text x="406" y="49" font-size="7.8" text-anchor="middle"
+        fill="#475569">ブランチ + コミット + PR</text>
+  <rect x="496" y="18" width="128" height="40" rx="6" fill="#fff"
+        stroke="#b45309" stroke-width="1.3"/>
+  <text x="560" y="35" font-size="9" text-anchor="middle"
+        font-weight="bold" fill="#b45309">④ 検証 (CI)</text>
+  <text x="560" y="49" font-size="7.8" text-anchor="middle"
+        fill="#475569">自動テスト → β版発行</text>
+  <!-- steps row2 (right to left) -->
+  <rect x="496" y="92" width="128" height="40" rx="6" fill="#fff"
+        stroke="#b45309" stroke-width="1.3"/>
+  <text x="560" y="109" font-size="9" text-anchor="middle"
+        font-weight="bold" fill="#b45309">⑤ 試用と承認</text>
+  <text x="560" y="123" font-size="7.8" text-anchor="middle"
+        fill="#475569">β版を試して 2 人が承認</text>
+  <rect x="336" y="92" width="140" height="40" rx="6" fill="#fff"
+        stroke="#059669" stroke-width="1.3"/>
+  <text x="406" y="109" font-size="9" text-anchor="middle"
+        font-weight="bold" fill="#059669">⑥ リリース</text>
+  <text x="406" y="123" font-size="7.8" text-anchor="middle"
+        fill="#475569">squash マージ + タグ</text>
+  <rect x="176" y="92" width="140" height="40" rx="6" fill="#fff"
+        stroke="#059669" stroke-width="1.3"/>
+  <text x="246" y="109" font-size="9" text-anchor="middle"
+        font-weight="bold" fill="#059669">⑦ 新しい安定版</text>
+  <text x="246" y="123" font-size="7.8" text-anchor="middle"
+        fill="#475569">全員の「更新」タブに出現</text>
+  <!-- arrows -->
+  <line x1="156" y1="38" x2="172" y2="38" stroke="#64748b"
+        stroke-width="1.6" marker-end="url(#m2)"/>
+  <line x1="316" y1="38" x2="332" y2="38" stroke="#64748b"
+        stroke-width="1.6" marker-end="url(#m2)"/>
+  <line x1="476" y1="38" x2="492" y2="38" stroke="#64748b"
+        stroke-width="1.6" marker-end="url(#m2)"/>
+  <line x1="560" y1="58" x2="560" y2="88" stroke="#64748b"
+        stroke-width="1.6" marker-end="url(#m2)"/>
+  <line x1="496" y1="112" x2="480" y2="112" stroke="#64748b"
+        stroke-width="1.6" marker-end="url(#m2)"/>
+  <line x1="336" y1="112" x2="320" y2="112" stroke="#64748b"
+        stroke-width="1.6" marker-end="url(#m2)"/>
+  <path d="M 176 112 C 100 112, 86 90, 86 62" stroke="#64748b"
+        stroke-width="1.6" fill="none" marker-end="url(#m2)"
+        stroke-dasharray="4 3"/>
+  <text x="100" y="90" font-size="7.8" fill="#64748b">次の開発へ</text>
+</svg>
+</div>
+<p class="cap">正式版は必ず ①→⑦ の一方通行を通る。検証と承認を飛ばして main に入る道はない (ブランチ保護で強制)</p>
+<div class="foot"><span>mgtkit 開発資料 — バージョン管理と同時開発のしくみ</span><span>2 / 5</span></div>
+</div>
+
+<!-- ================= 3 ページ目: 3章 前半 ================= -->
+<div class="page">
+<h2><span class="secno">3</span>ケーススタディ: 2 人が同時に開発したら</h2>
+
+<h3>3.1 前提条件</h3>
+<p>メンバー X が機能 <b>(A)</b>、メンバー Y が機能 <b>(B)</b> を、どちらも<b>安定版 v1.2 (コミット S)</b> を基点に同時に開発しているとします。お互いの作業は知らないまま進みます。</p>
+
+<h3>3.2 提出時 — 衝突は原理的に起きない</h3>
+<div class="fig">
+<svg width="640" height="120" viewBox="0 0 640 120" font-family="IPAPGothic, sans-serif">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="8" refY="5"
+    markerWidth="6.5" markerHeight="6.5" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker></defs>
+  <rect x="0" y="0" width="640" height="120" rx="8" fill="#f8fafc"/>
+  <line x1="30" y1="60" x2="300" y2="60" stroke="#1e3a5f" stroke-width="3"/>
+  <circle cx="120" cy="60" r="9" fill="#1e3a5f"/>
+  <text x="120" y="84" font-size="9" text-anchor="middle">main
+    (S = v1.2)</text>
+  <path d="M 127 54 C 190 26, 260 26, 330 26" stroke="#d97706"
+        stroke-width="2.5" fill="none" marker-end="url(#m3)"/>
+  <circle cx="240" cy="31" r="6" fill="#d97706"/>
+  <text x="415" y="24" font-size="8.5" fill="#92400e">feature/x-… に (A) → PR #11</text>
+  <path d="M 127 66 C 190 94, 260 94, 330 94" stroke="#2563eb"
+        stroke-width="2.5" fill="none" marker-end="url(#m3)"/>
+  <circle cx="240" cy="89" r="6" fill="#2563eb"/>
+  <text x="415" y="98" font-size="8.5" fill="#1e40af">feature/y-… に (B) → PR #12</text>
+  <text x="415" y="56" font-size="8.5" fill="#64748b">2 本の枝は互いを知らない。</text>
+  <text x="415" y="70" font-size="8.5" fill="#64748b">提出は基点 S との差分だけ。</text>
+</svg>
+</div>
+<ul>
+<li>提出 = 「基点 S と ZIP の差分を新しい<span class="term">ブランチ</span>に<span class="term">コミット</span>して<span class="term">プルリクエスト</span>を作る」操作。<b>比較相手は常に自分の基点だけ</b>。他人と同じ行を直していても提出は成功する</li>
+<li>提出時に落ちるのは <b>CI (pytest) の不合格・秘密情報の検出・サイズ超過</b>など。これは<b>プログラム/内容の問題</b>で、マージ衝突とはレイヤーが違う</li>
+<li>衝突は「どちらかの枝が main に入って main が進んだ後」に、残った PR の合流可否判定 (mergeable) が再計算されて初めて出現する</li>
+</ul>
+
+<div class="card warn"><b class="h">よくある誤解の整理</b>
+<ul>
+<li>「提出でエラーが出た = 誰かとぶつかった」→ <b>違う</b>。提出時のエラーは検証 (テスト) の不合格。ぶつかり (衝突) はリリース段階の概念 (→ 3.3.2)</li>
+<li>「衝突 = 誰かの作業が消える」→ <b>消えない</b>。両方の変更が保全された上で「どう混ぜるか」を人間 (提出者) が選ぶ</li>
+<li>「衝突は怖い」→ 解消は 3 択 1 クリック。<b>本当に怖いのは衝突ではなく、衝突を検出できないフォルダ運用</b></li>
+</ul></div>
+<div class="foot"><span>mgtkit 開発資料 — バージョン管理と同時開発のしくみ</span><span>3 / 5</span></div>
+</div>
+
+<!-- ================= 4 ページ目: 3.4 衝突する場合 ================= -->
+<div class="page">
+<h3>3.3 リリース時 — 枝の合流と衝突</h3>
+<p>提出が承認されて<span class="term">マージ</span>される段階で、初めて 2 本の枝が出会います。結果は 2 通りだけです。</p>
+<p style="font-weight:bold; color:#1e3a5f; margin-top:8px">3.3.1 衝突しない場合 (別のファイル・別の行) — 3-way マージで自動合流</p>
+
+<div class="fig">
+<svg width="640" height="138" viewBox="0 0 640 138" font-family="IPAPGothic, sans-serif">
+  <defs><marker id="m4" viewBox="0 0 10 10" refX="8" refY="5"
+    markerWidth="6.5" markerHeight="6.5" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker></defs>
+  <rect x="0" y="0" width="640" height="138" rx="8" fill="#f8fafc"/>
+  <line x1="30" y1="66" x2="610" y2="66" stroke="#1e3a5f" stroke-width="3"/>
+  <circle cx="90" cy="66" r="9" fill="#1e3a5f"/>
+  <text x="90" y="90" font-size="9" text-anchor="middle">S (v1.2)</text>
+  <circle cx="330" cy="66" r="9" fill="#059669"/>
+  <text x="330" y="90" font-size="9" text-anchor="middle">S′ = (A) 入り
+    (v1.3)</text>
+  <circle cx="560" cy="66" r="9" fill="#059669"/>
+  <text x="560" y="90" font-size="9" text-anchor="middle">(A)+(B) 入り
+    (v1.4)</text>
+  <path d="M 97 60 C 150 30, 250 30, 300 30 C 318 30, 326 44, 328 56"
+        stroke="#d97706" stroke-width="2.5" fill="none" marker-end="url(#m4)"/>
+  <text x="195" y="22" font-size="8.8" text-anchor="middle"
+        fill="#92400e">(A) 先に承認 → squash マージ</text>
+  <path d="M 97 72 C 190 112, 400 112, 480 112 C 530 112, 552 92, 557 78"
+        stroke="#2563eb" stroke-width="2.5" fill="none" marker-end="url(#m4)"/>
+  <text x="300" y="128" font-size="8.8" text-anchor="middle"
+        fill="#1e40af">(B) は S・S′・B の 3 点比較 (3-way マージ) で自動合成</text>
+  <text x="430" y="40" font-size="8.3" fill="#475569">触った行が重ならなければ</text>
+  <text x="430" y="53" font-size="8.3" fill="#475569">人手ゼロで両方入りが完成</text>
+</svg>
+</div>
+<ul>
+<li>ブランチ保護の <code>strict status checks</code> により、<b>合流後の状態で CI が再実行されてから</b>でないと<span class="term">マージ</span>できない</li>
+<li>「文字は衝突しないが意味的に非互換」(片方が関数の引数を変え、片方が旧仕様で呼ぶ等) は Git では検出できないが、この<b>合流後 CI が最後の網</b>になる</li>
+</ul>
+<p style="font-weight:bold; color:#1e3a5f; margin-top:8px">3.3.2 衝突する場合 (同じ行) — 統合待ちロック → 3 択で解消</p>
+<p>まず「衝突とは何か」を 1 枚で。</p>
+<div class="fig">
+<svg width="640" height="158" viewBox="0 0 640 158" font-family="IPAPGothic, sans-serif">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="8" refY="5"
+    markerWidth="6.5" markerHeight="6.5" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker></defs>
+  <rect x="0" y="0" width="640" height="158" rx="8" fill="#f8fafc"/>
+  <rect x="215" y="12" width="210" height="34" rx="6" fill="#fff"
+        stroke="#1e3a5f" stroke-width="1.3"/>
+  <text x="320" y="26" font-size="8.3" text-anchor="middle"
+        fill="#64748b">共通の出発点 S — s_check.py 120 行目</text>
+  <text x="320" y="40" font-size="9" text-anchor="middle"
+        font-family="Consolas, monospace" fill="#0f172a">limit = 0.85 * F</text>
+  <rect x="45" y="72" width="240" height="40" rx="6" fill="#fffbeb"
+        stroke="#d97706" stroke-width="1.4"/>
+  <text x="165" y="87" font-size="8.3" text-anchor="middle"
+        fill="#92400e">(A) メンバー X: 基準改定で係数を変更</text>
+  <text x="165" y="103" font-size="9" text-anchor="middle"
+        font-family="Consolas, monospace" fill="#92400e">limit = 0.90 * F</text>
+  <rect x="355" y="72" width="240" height="40" rx="6" fill="#eff6ff"
+        stroke="#2563eb" stroke-width="1.4"/>
+  <text x="475" y="87" font-size="8.3" text-anchor="middle"
+        fill="#1e40af">(B) メンバー Y: 記号を Fy に統一</text>
+  <text x="475" y="103" font-size="9" text-anchor="middle"
+        font-family="Consolas, monospace" fill="#1e40af">limit = 0.85 * Fy</text>
+  <line x1="265" y1="46" x2="185" y2="68" stroke="#d97706"
+        stroke-width="1.8" marker-end="url(#m7)"/>
+  <line x1="375" y1="46" x2="455" y2="68" stroke="#2563eb"
+        stroke-width="1.8" marker-end="url(#m7)"/>
+  <line x1="165" y1="112" x2="295" y2="136" stroke="#94a3b8"
+        stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#m7)"/>
+  <line x1="475" y1="112" x2="345" y2="136" stroke="#94a3b8"
+        stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#m7)"/>
+  <rect x="240" y="128" width="160" height="24" rx="12" fill="#fef2f2"
+        stroke="#dc2626" stroke-width="1.5"/>
+  <text x="320" y="144" font-size="9" text-anchor="middle"
+        fill="#dc2626" font-weight="bold">同じ行に 2 つの正解候補</text>
+</svg>
+</div>
+<p class="cap">衝突の正体 = 「同じ行に対する 2 通りの変更」。どちらも業務的には正しいから、機械には選べない — 選ぶのは人間の仕事として残る<br>※ コード・数値・人物の行動はすべて説明用の架空の例です (実際の提出・実コードとは無関係)</p>
+
+
+<div class="fig">
+<svg width="640" height="210" viewBox="0 0 640 210" font-family="IPAPGothic, sans-serif">
+  <defs><marker id="m5" viewBox="0 0 10 10" refX="8" refY="5"
+    markerWidth="6.5" markerHeight="6.5" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker></defs>
+  <rect x="0" y="0" width="640" height="210" rx="8" fill="#f8fafc"/>
+  <!-- step1 -->
+  <rect x="18" y="20" width="188" height="76" rx="8" fill="#fff"
+        stroke="#dc2626" stroke-width="1.4"/>
+  <text x="112" y="40" font-size="9.5" text-anchor="middle"
+        font-weight="bold" fill="#b91c1c">STEP 1 検出</text>
+  <text x="112" y="57" font-size="8.2" text-anchor="middle"
+        fill="#475569">GitHub が 3-way マージを試し</text>
+  <text x="112" y="70" font-size="8.2" text-anchor="middle"
+        fill="#475569">同一行の変更を検出</text>
+  <text x="112" y="86" font-size="8.2" text-anchor="middle"
+        fill="#b91c1c">mergeable = CONFLICTING</text>
+  <!-- step2 -->
+  <rect x="226" y="20" width="188" height="76" rx="8" fill="#fff"
+        stroke="#b45309" stroke-width="1.4"/>
+  <text x="320" y="40" font-size="9.5" text-anchor="middle"
+        font-weight="bold" fill="#b45309">STEP 2 統合待ちロック</text>
+  <text x="320" y="57" font-size="8.2" text-anchor="middle"
+        fill="#475569">カードをグレー表示にして</text>
+  <text x="320" y="70" font-size="8.2" text-anchor="middle"
+        fill="#475569">全員の承認・却下・試用を停止</text>
+  <text x="320" y="86" font-size="8.2" text-anchor="middle"
+        fill="#b45309">動けるのは提出者だけ</text>
+  <!-- step3 -->
+  <rect x="434" y="20" width="188" height="76" rx="8" fill="#fff"
+        stroke="#059669" stroke-width="1.4"/>
+  <text x="528" y="40" font-size="9.5" text-anchor="middle"
+        font-weight="bold" fill="#047857">STEP 3 解消と仕切り直し</text>
+  <text x="528" y="57" font-size="8.2" text-anchor="middle"
+        fill="#475569">git merge main + 3 択で確定</text>
+  <text x="528" y="70" font-size="8.2" text-anchor="middle"
+        fill="#475569">→ push で PR 更新</text>
+  <text x="528" y="86" font-size="8.2" text-anchor="middle"
+        fill="#047857">全員の承認・却下を自動リセット</text>
+  <line x1="206" y1="58" x2="222" y2="58" stroke="#64748b"
+        stroke-width="1.8" marker-end="url(#m5)"/>
+  <line x1="414" y1="58" x2="430" y2="58" stroke="#64748b"
+        stroke-width="1.8" marker-end="url(#m5)"/>
+  <!-- 3択 -->
+  <rect x="70" y="122" width="500" height="70" rx="8" fill="#fff"
+        stroke="#e2e8f0" stroke-width="1.2"/>
+  <text x="320" y="140" font-size="9" text-anchor="middle"
+        font-weight="bold" fill="#1e3a5f">提出者に表示される 3 択
+    (Git の衝突マーカーは見せない)</text>
+  <rect x="90" y="150" width="140" height="30" rx="5" fill="#f0fdf4"
+        stroke="#059669"/>
+  <text x="160" y="163" font-size="8.2" text-anchor="middle"
+        fill="#047857">両方の機能を残す (推奨)</text>
+  <text x="160" y="175" font-size="7.5" text-anchor="middle"
+        fill="#64748b">AI が両立するよう統合</text>
+  <rect x="250" y="150" width="140" height="30" rx="5" fill="#fffbeb"
+        stroke="#b45309"/>
+  <text x="320" y="163" font-size="8.2" text-anchor="middle"
+        fill="#92400e">自分の機能を優先</text>
+  <text x="320" y="175" font-size="7.5" text-anchor="middle"
+        fill="#64748b">git checkout --ours</text>
+  <rect x="410" y="150" width="140" height="30" rx="5" fill="#eff6ff"
+        stroke="#2563eb"/>
+  <text x="480" y="163" font-size="8.2" text-anchor="middle"
+        fill="#1e40af">最新版を優先</text>
+  <text x="480" y="175" font-size="7.5" text-anchor="middle"
+        fill="#64748b">git checkout --theirs</text>
+</svg>
+</div>
+<ul>
+<li>解消は提出者の見えない作業用<span class="term">クローン</span> (workrepo) 内で <code>git merge origin/main</code> を実行して行う。<code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> マーカーはメンバーの目に触れない</li>
+<li>push で PR の中身が変わるため、<b>全員の承認・却下を自動 dismiss</b>。「レビューした時と違うコードがマージされる」事故を仕組みで防ぐ</li>
+<li>フィードバックは削除せず「以前の版へのフィードバック」として記録保持。件数カウントは統合後の新β版宛てで仕切り直し</li>
+<li>衝突したまま<span class="term">マージ</span>する道はない — 承認がそろっても自動リリースは行われず、GitHub 側もマージを拒否する (二重ガード)</li>
+</ul>
+
+
+<div class="foot"><span>mgtkit 開発資料 — バージョン管理と同時開発のしくみ</span><span>4 / 5</span></div>
+</div>
+
+<!-- ================= 5 ページ目: 4章 + 5章 ================= -->
+<div class="page">
+<h2><span class="secno">4</span>応用: β版を基点にした開発 (スタックド PR)</h2>
+
+<h3>4.1 系譜は version.json の基点 SHA で自動記録される</h3>
+<div class="fig">
+<svg width="640" height="122" viewBox="0 0 640 122" font-family="IPAPGothic, sans-serif">
+  <defs><marker id="m6" viewBox="0 0 10 10" refX="8" refY="5"
+    markerWidth="6.5" markerHeight="6.5" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker></defs>
+  <rect x="0" y="0" width="640" height="122" rx="8" fill="#f8fafc"/>
+  <line x1="30" y1="70" x2="240" y2="70" stroke="#1e3a5f" stroke-width="3"/>
+  <circle cx="110" cy="70" r="9" fill="#1e3a5f"/>
+  <text x="110" y="94" font-size="9" text-anchor="middle">main
+    (S = 安定版 A)</text>
+  <path d="M 117 64 C 170 34, 240 34, 290 34" stroke="#d97706"
+        stroke-width="2.5" fill="none"/>
+  <circle cx="290" cy="34" r="7" fill="#d97706"/>
+  <text x="290" y="18" font-size="8.8" text-anchor="middle"
+        fill="#92400e">β版 A-1 (PR #11 の head)</text>
+  <path d="M 297 32 C 370 26, 430 48, 490 48" stroke="#059669"
+        stroke-width="2.5" fill="none" marker-end="url(#m6)"/>
+  <circle cx="490" cy="48" r="7" fill="#059669"/>
+  <text x="490" y="32" font-size="8.8" text-anchor="middle"
+        fill="#047857">A-1-1 (メンバー Y の提出)</text>
+  <text x="490" y="70" font-size="8" text-anchor="middle"
+        fill="#475569">version.json の基点 = A-1 の SHA</text>
+  <text x="320" y="112" font-size="8.3" text-anchor="middle"
+        fill="#64748b">A-1-1 の枝は A-1 の head から分岐 = 親のコミットを土台ごと含む「スタック」構造</text>
+</svg>
+</div>
+<ul>
+<li>β版フォルダの <code>version.json</code> にはβ版<span class="term">ブランチ</span>の head SHA が入っている。これを基点に提出すると新しい枝は<b>その SHA から分岐</b>し、親子関係 (A → A-1 → A-1-1) が履歴に自動で残る</li>
+<li>マネージャーの「差分」は<b>基点 (A-1) との差分だけ</b>を表示 → レビュー負担は増えない。GitHub 上の PR diff (対 main) には A-1 + A-1-1 の両方が写る</li>
+</ul>
+
+<h3>4.2 リスクは 3 つ</h3>
+<div class="cols">
+<div class="col"><div class="card bad"><b class="h">① 基点の消滅</b><div class="fig"><svg width="180" height="74" viewBox="0 0 180 74" font-family="IPAPGothic, sans-serif">
+  <line x1="8" y1="52" x2="80" y2="52" stroke="#1e3a5f" stroke-width="2.5"/>
+  <path d="M 40 50 C 60 32, 78 28, 96 28" stroke="#d97706"
+        stroke-width="2" fill="none" stroke-dasharray="4 3" opacity="0.6"/>
+  <circle cx="100" cy="28" r="6" fill="#d97706" opacity="0.45"/>
+  <line x1="92" y1="20" x2="108" y2="36" stroke="#dc2626" stroke-width="2.5"/>
+  <line x1="108" y1="20" x2="92" y2="36" stroke="#dc2626" stroke-width="2.5"/>
+  <text x="100" y="12" font-size="7.5" text-anchor="middle"
+        fill="#dc2626">A-1 が削除</text>
+  <path d="M 106 26 C 126 22, 138 26, 148 30" stroke="#94a3b8"
+        stroke-width="1.5" fill="none" stroke-dasharray="3 3"/>
+  <circle cx="155" cy="32" r="6" fill="#059669"/>
+  <text x="155" y="48" font-size="7.5" text-anchor="middle"
+        fill="#475569">A-1-1</text>
+  <text x="95" y="70" font-size="7.4" text-anchor="middle"
+        fill="#64748b">土台を失って宙に浮き、提出不能に</text>
+</svg></div>
+
+親 PR が却下確定・取り下げで消えると枝ごと削除され、基点 SHA が辿れなくなる。A-1-1 は「基点となる版が履歴に見つかりません」で<b>提出不能</b>。安定版から移植し直しになる</div></div>
+<div class="col"><div class="card warn"><b class="h">② 親リリース後の縮退</b><div class="fig"><svg width="180" height="74" viewBox="0 0 180 74" font-family="IPAPGothic, sans-serif">
+  <line x1="8" y1="52" x2="172" y2="52" stroke="#1e3a5f" stroke-width="2.5"/>
+  <circle cx="120" cy="52" r="6" fill="#0d9488"/>
+  <text x="118" y="68" font-size="7.2" text-anchor="middle"
+        fill="#475569">A-1′ (squash 済・別 SHA)</text>
+  <path d="M 26 50 C 44 30, 60 24, 76 24" stroke="#d97706"
+        stroke-width="2" fill="none"/>
+  <circle cx="78" cy="24" r="5" fill="#d97706"/>
+  <text x="46" y="14" font-size="7.4" text-anchor="middle"
+        fill="#92400e">A-1 (旧)</text>
+  <circle cx="112" cy="20" r="5" fill="#059669"/>
+  <path d="M 83 23 C 93 21, 100 20, 107 20" stroke="#059669"
+        stroke-width="2" fill="none"/>
+  <text x="130" y="14" font-size="7.4" text-anchor="middle"
+        fill="#14532d">A-1-1</text>
+  <path d="M 117 24 C 132 30, 142 38, 148 46" stroke="#dc2626"
+        stroke-width="1.6" fill="none" stroke-dasharray="4 3"/>
+  <text x="152" y="36" font-size="8.5" fill="#dc2626"
+        font-weight="bold">!</text>
+</svg></div>
+
+親が squash <span class="term">マージ</span>されると main には「同内容だが別 SHA」が入る。子の合流はたいてい自動解決するが、autofix 等で親の最終形が違うと<b>衝突化しやすい</b> (→ 統合待ちフローで解消)</div></div>
+<div class="col"><div class="card warn"><b class="h">③ レビュー責任の曖昧化</b><div class="fig"><svg width="180" height="74" viewBox="0 0 180 74" font-family="IPAPGothic, sans-serif">
+  <rect x="22" y="36" width="120" height="22" rx="4" fill="#fffbeb"
+        stroke="#b45309" stroke-width="1.2"/>
+  <text x="82" y="50" font-size="7.6" text-anchor="middle"
+        fill="#92400e">A-1 (親) — まだ未承認</text>
+  <rect x="22" y="8" width="120" height="22" rx="4" fill="#f0fdf4"
+        stroke="#059669" stroke-width="1.2"/>
+  <text x="82" y="22" font-size="7.6" text-anchor="middle"
+        fill="#14532d">A-1-1 (子) — 承認した</text>
+  <path d="M 150 12 l5 6 l9 -10" stroke="#059669" stroke-width="2.5"
+        fill="none"/>
+  <text x="156" y="52" font-size="12" text-anchor="middle"
+        fill="#dc2626" font-weight="bold">?</text>
+  <text x="88" y="70" font-size="7.4" text-anchor="middle"
+        fill="#64748b">親の分まで承認したことになる…?</text>
+</svg></div>
+
+親が未承認のまま子を承認すると「親の内容込みの承認か」が不明瞭に。<b>親の決着 (リリース or 却下) を待ってから子を審査</b>するのが原則</div></div>
+</div>
+
+<h2><span class="secno">5</span>推奨プラクティス — 結局どうすべきか</h2>
+<table>
+<tr><th style="width:26%">場面</th><th>推奨</th></tr>
+<tr><td>基点の選び方</td><td>原則<b>最新の安定版</b>。β版基点 (スタック) は「親が確実にリリースされる連作」のみ</td></tr>
+<tr><td>着手前</td><td>同じファイルを触りそうな作業は<b>一声かける</b>。衝突は解消できるが、しないのが一番安い</td></tr>
+<tr><td>提出の粒度</td><td><b>小さく・こまめに</b>。差分が小さいほどレビューも合流も速く、衝突面積も小さい</td></tr>
+<tr><td>衝突したら</td><td>怖がらず「最新版と統合」→ 迷ったら<b>「両方の機能を残す」</b>。解消後は承認が仕切り直しになるので再確認を依頼</td></tr>
+<tr><td>β版基点で作る前に</td><td>親の承認見込みを確認。<b>親が消えると積んだ作業ごと戻れなくなる</b>ことを理解して積む</td></tr>
+</table>
+<p class="cap" style="text-align:left; margin-top:8px">本資料の仕組みはすべてアプリマネージャーが自動で代行します。メンバーが覚える操作は「ZIP を選ぶ・ボタンを押す」だけです。</p>
+<div class="foot"><span>mgtkit 開発資料 — バージョン管理と同時開発のしくみ</span><span>5 / 5</span></div>
+</div>
+
+</body>
+</html>
