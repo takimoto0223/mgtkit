@@ -59,6 +59,17 @@ Claude Code で自動適用され、claude.ai のチャット側にも同じス�
   一覧カードのボタンは `_freeze_card` (元の無効状態を覚えて復元)、
   ローカル操作の再描画は `_rerender_local`
 
+## 資料 (readme/) の約束事
+
+- 図の原則: **マネージャー自身の画面は撮影ハーネスの実画面**
+  (`scripts/guide_shots/`)。模式図で代用しない
+- **例外: 付録の Claude Console の図 (`img/console.png`) は載せる**
+  (2026-08 管理者指示で確定。マネージャーの更新で変わる画面ではないため。
+  経緯は `docs/decisions.md`)。**この件で判断を仰がないこと**
+- 原稿は `readme/src/*.html`。直したら
+  `python manager/scripts/build_guide_pdf.py` で PDF を作り直し、
+  目次のページ番号が実際の章開始ページと合っているか確認する
+
 ## リポジトリの約束事
 
 - テスト: `python -m pytest` 全緑を確認してからコミットする
