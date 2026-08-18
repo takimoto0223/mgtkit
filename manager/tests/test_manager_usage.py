@@ -31,6 +31,15 @@ class TestPricing:
         assert usage.usd_jpy_rate(
             _config(tmp_path, usd_jpy_rate='abc')) == 159.70
 
+    def test_model_name(self, tmp_path):
+        # どのモデルの単価かを画面に出すため config の claude_model を使う
+        assert usage.model_name(_config(tmp_path)) == 'claude-opus-5'
+        assert usage.model_name(
+            _config(tmp_path, claude_model='claude-sonnet-5')) \
+            == 'claude-sonnet-5'
+        assert usage.model_name(
+            _config(tmp_path, claude_model='')) == 'claude-opus-5'
+
     def test_rates_updated_at(self, tmp_path):
         # 既定は「単価とレートを最後に確認した日」。config で上書きできる
         assert usage.rates_updated_at(_config(tmp_path)) == '2026-08-18'

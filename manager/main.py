@@ -252,6 +252,7 @@ def main(page: ft.Page):
         rate = usage.usd_jpy_rate(config)
         p = usage.pricing(config)
         updated = usage.rates_updated_at(config)
+        model = usage.model_name(config)
 
         def usd(v):
             return '$%.2f' % v if (v >= 0.005 or v == 0) else '$%.3f' % v
@@ -261,6 +262,10 @@ def main(page: ft.Page):
 
         def short(d):
             return d[5:].replace('-', '/')
+
+        def unit(v):
+            # 単価は $5.00 でなく $5、$2.50 は $2.50 と出す
+            return '$' + ('%.2f' % v).rstrip('0').rstrip('.')
 
         max_usd = max((u for _, u, _, _, _ in s['days']), default=0.0)
         bars = [ft.Container(
@@ -307,10 +312,10 @@ def main(page: ft.Page):
                            s['total_calls'], format(s['total_in'], ','),
                            format(s['total_out'], ',')),
                         size=13, weight=ft.FontWeight.BOLD),
-                ft.Text('※ 単価 (100万トークンあたり): 入力 $%.2f = %s / '
-                        '出力 $%.2f = %s'
-                        % (p['input_per_mtok'], jpy(p['input_per_mtok']),
-                           p['output_per_mtok'], jpy(p['output_per_mtok'])),
+                ft.Text('※ %s  入力 %s / 出力 %s per 100万トークン '
+                        '(Anthropic 公式料金表)'
+                        % (model, unit(p['input_per_mtok']),
+                           unit(p['output_per_mtok'])),
                         size=11, color='#6b7280'),
                 ft.Text('　 為替レート: $1 = ¥%.2f ・ '
                         '単価と為替レートの確認日: %s' % (rate, updated),

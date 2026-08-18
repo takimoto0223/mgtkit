@@ -10,6 +10,8 @@
   後から単価設定を変えても過去の記録は変わらない
 - 円表示は manager.usd_jpy_rate での換算。単価とレートを最後に
   確認した日は manager.rates_updated_at に持ち、画面に出す
+- 単価はモデルごとに違うため、どのモデルの単価かも画面に出す
+  (manager.claude_model)
 """
 import datetime
 import json
@@ -23,7 +25,8 @@ log = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()
 
-# claude-opus-5 の既定単価 ($/MTok)。config manager.api_pricing で上書き可
+# 既定モデルと、その既定単価 ($/MTok)。config で上書き可
+DEFAULT_MODEL = 'claude-opus-5'
 DEFAULT_PRICING = {'input_per_mtok': 5.0, 'output_per_mtok': 25.0}
 DEFAULT_USD_JPY = 159.70
 # 上の単価と為替レートを最後に確認した日 (config manager.rates_updated_at)
@@ -43,6 +46,11 @@ def pricing(config=None):
     p = dict(DEFAULT_PRICING)
     p.update(_mgr(config).get('api_pricing') or {})
     return p
+
+
+def model_name(config=None):
+    """単価がどのモデルのものかを示す名前 (画面に出す)."""
+    return _mgr(config).get('claude_model') or DEFAULT_MODEL
 
 
 def usd_jpy_rate(config=None):
