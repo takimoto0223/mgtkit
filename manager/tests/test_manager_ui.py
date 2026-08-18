@@ -255,15 +255,12 @@ class _NoTimer:
         pass
 
 
-def test_launch_after_an_update_tells_where_the_new_version_landed(
-        monkeypatch):
-    """更新版を取り込んだあと最初の「起動」で取り込み先を知らせること.
+def _page_with_a_downloaded_update(monkeypatch):
+    """更新版を自動で取り込み終えた直後の画面を作る (取得・起動は偽物).
 
-    黄色いタグだけでは見落とすという管理者の指摘への対応。同じ版で
-    二度は出さない (押すたびに出ると邪魔になる)。
+    戻り値: (page, launched)。launched にはアプリを開いた回数が入る。
     """
     from manager import main as manager_main
-    from manager import paths
 
     monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
                         lambda *a, **k: {'stashed': []})
@@ -299,6 +296,20 @@ def test_launch_after_an_update_tells_where_the_new_version_landed(
     page = _FakePage()
     manager_main.main(page)
     assert installed == ['v1.2']          # 起動時に自動で取り込まれた
+    return page, launched
+
+
+def test_launch_after_an_update_tells_where_the_new_version_landed(
+        monkeypatch):
+    """更新版が届いたあと最初の「起動」で取り込み先を知らせること.
+
+    黄色いタグだけでは見落とすという管理者の指摘への対応。知らせを
+    読み終えて (ボタンを押して) からアプリを開き、同じ版で二度は
+    出さない。
+    """
+    from manager import paths
+
+    page, launched = _page_with_a_downloaded_update(monkeypatch)
     before = len(page.dialogs)            # 初回登録ダイアログの分
 
     _launch_button(page).on_click(None)
@@ -316,3 +327,30 @@ def test_launch_after_an_update_tells_where_the_new_version_landed(
     _launch_button(page).on_click(None)
     assert len(page.dialogs) == before     # 同じ版で二度は出さない
     assert len(launched) == 2
+
+
+def test_closing_the_update_notice_leaves_the_launch_button_usable(
+        monkeypatch):
+    """知らせをボタン以外で閉じても「起動」が押せなくならないこと.
+
+    閉じ方によっては (Esc など) ボタンが無効のまま固まり、マネージャーを
+    開き直すまで起動できなくなる。そのときは知らせを未読のまま残し、
+    次の「起動」でもう一度出す。
+    """
+    page, launched = _page_with_a_downloaded_update(monkeypatch)
+    before = len(page.dialogs)
+    button = _launch_button(page)
+
+    button.on_click(None)
+    dialog = page.dialogs[-1]
+    assert button.disabled                 # 知らせを出しているあいだは止める
+
+    page.pop_dialog()                      # ボタンを押さずに閉じられた
+    dialog.on_dismiss(None)
+    assert not button.disabled             # 押せる状態に戻る
+    assert not launched
+
+    button.on_click(None)                  # 未読なのでもう一度出す
+    assert len(page.dialogs) == before + 1
+    _dialog_button(page.dialogs[-1], 'アプリを開く').on_click(None)
+    assert launched

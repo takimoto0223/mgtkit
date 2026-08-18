@@ -537,16 +537,34 @@ def main(page: ft.Page):
             then_open()
             return
 
+        opened = {'done': False}   # 連打で二重に開かないための札
+
         def on_open(_):
-            _update_state['downloaded'] = None
+            if opened['done']:
+                return
+            opened['done'] = True
+            _update_state['downloaded'] = None   # 読まれてから消す
             page.pop_dialog()
             t1_status.value = 'アプリを開いています...'
             page.update()
             run_bg(then_open)   # 開くのは時間がかかるので裏で
 
+        def on_dismiss(_):
+            """ボタン以外で閉じられたとき (Esc など) の後始末.
+
+            知らせは未読のまま (札は下ろさない) にして次の「起動」で
+            もう一度出し、押せる状態へ戻す。ここを戻さないと「起動」が
+            無効のまま固まり、マネージャーを開き直すまで起動できない。
+            """
+            if opened['done']:
+                return
+            t1_status.value = ''
+            t1_launch_btn.disabled = False
+            page.update()
+
         t1_update_tag.visible = False
         page.show_dialog(ft.AlertDialog(
-            modal=True,
+            modal=True, on_dismiss=on_dismiss,
             title=ft.Text('更新版が自動でダウンロードされました'),
             content=ft.Column([
                 ft.Text('最新の正式版 %s が、この PC の次のフォルダに'
