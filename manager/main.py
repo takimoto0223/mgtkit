@@ -1568,7 +1568,7 @@ def main(page: ft.Page):
                                                 on_progress=progress)
                     _, url = launcher.launch_app(
                         beta, paths.beta_port(config), channel='beta')
-                    t5_status.value = ('β版 %s を起動しました (安定版とは'
+                    t5_status.value = ('β版 %s を起動しました (正式版とは'
                                        '別画面・別データ): %s'
                                        % (release['tag'], url))
                 except (ghcli.GhError, launcher.LaunchError,
@@ -2857,7 +2857,7 @@ def main(page: ft.Page):
                     '自分の提出は自分では承認できません。'
                     % reviews.required_approvals(config),
                     size=13, color='#555555'),
-            ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
+            ft.Text('β版は正式版とは別フォルダ・別データ・別画面で起動する'
                     'ため、通常の作業には影響しません。', size=12,
                     color='#555555'),
         ], spacing=8)),

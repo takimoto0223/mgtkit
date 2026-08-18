@@ -85,6 +85,8 @@ def seed_state():
     os.makedirs(root, exist_ok=True)
     sp = os.path.join(root, 'settings.json')
     # 初回登録画面 (real_firstrun) を撮るときは未登録のままにする
+    # (取り込み前の状態までは作らない。GitHub につながないハーネスでは
+    #  取り込みが失敗して赤いエラーが背景に写ってしまうため)
     if os.environ.get('GUIDE_SHOTS_FIRSTRUN'):
         if os.path.exists(sp):
             os.remove(sp)
@@ -111,8 +113,8 @@ def seed_state():
         d2 = (today - datetime.timedelta(days=1)).isoformat()
         with open(up, 'w', encoding='utf-8') as f:
             json.dump({'days': {
-                d1: {'in': 1187, 'out': 992, 'calls': 1, 'usd': 0.0307},
-                d2: {'in': 2456, 'out': 1310, 'calls': 2, 'usd': 0.0450},
+                d1: {'in': 31200, 'out': 4180, 'calls': 1, 'usd': 0.2605},
+                d2: {'in': 58900, 'out': 8640, 'calls': 2, 'usd': 0.5105},
             }}, f, ensure_ascii=False, indent=1)
 
 

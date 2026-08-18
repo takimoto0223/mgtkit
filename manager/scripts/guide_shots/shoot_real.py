@@ -64,10 +64,10 @@ async def handle(route):
     await route.abort()
 
 
-async def new_page(p, height=860):
+async def new_page(p, height=860, width=1180):
     browser = await p.chromium.launch(
         executable_path='/opt/pw-browsers/chromium')
-    pg = await browser.new_page(viewport={'width': 1180, 'height': height})
+    pg = await browser.new_page(viewport={'width': width, 'height': height})
     for pat in ('https://www.gstatic.com/**',
                 'https://cdn.jsdelivr.net/**',
                 'https://fonts.gstatic.com/**',
@@ -84,7 +84,7 @@ CROP = {
     'real_launch': 551, 'real_beta': 636, 'real_submit': 500,
     'real_usage': 760, 'real_submit_dialog': 640,
     'real_submit_manual': 760, 'real_submit_review': 700,
-    'real_firstrun': 647,
+    'real_firstrun': 647, 'real_history': 950,
 }
 
 
@@ -110,25 +110,32 @@ TAB_BETA = (145, 93)
 TAB_SUBMIT = (285, 93)
 
 
+# モードごとの画面の大きさ。更新ログは図が横スクロールせずに収まり
+# 一覧まで写る大きさ、フィードバックは下の余白が空きすぎない高さにする
+# (狭いと図の左端に横スクロールのマークが出て「v1.0 初回配布」に重なる)
+HEIGHT = {'history': 1020, 'beta': 700}
+WIDTH = {'history': 1440}
+
+
 async def run(mode):
     """1 モード = 1 ページ。ダイアログは Escape で閉じない (modal=True) ため、
     ダイアログを開く撮影はモードを分けてページを開き直す。"""
     async with async_playwright() as p:
-        browser, pg = await new_page(p)
+        browser, pg = await new_page(p, HEIGHT.get(mode, 860),
+                                     WIDTH.get(mode, 1180))
         if mode == 'firstrun':
             await shot(pg, 'real_firstrun')
         elif mode in ('launch', 'main'):
             await shot(pg, 'real_launch')
-            # 過去の更新ログ
-            await pg.mouse.click(204, 222)
-            await pg.wait_for_timeout(6000)
-            await shot(pg, 'real_history')
-            await pg.keyboard.press('Escape')
-            await pg.wait_for_timeout(1500)
             # API 利用量 (右上のアイコン)
             await pg.mouse.click(1142, 30)
             await pg.wait_for_timeout(2500)
             await shot(pg, 'real_usage')
+        elif mode == 'history':
+            # 過去の更新ログ (図と一覧の両方が入る高さで撮る)
+            await pg.mouse.click(204, 222)
+            await pg.wait_for_timeout(6000)
+            await shot(pg, 'real_history')
         elif mode == 'submit':
             await pg.mouse.click(*TAB_SUBMIT)
             await pg.wait_for_timeout(2500)
@@ -159,7 +166,8 @@ async def run(mode):
             await pg.wait_for_timeout(4000)
             await shot(pg, 'real_feedback')
         else:
-            raise SystemExit('mode: firstrun / launch / submit / review / beta')
+            raise SystemExit(
+                'mode: firstrun / launch / history / submit / review / beta')
         await browser.close()
 
 

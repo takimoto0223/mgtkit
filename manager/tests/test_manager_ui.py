@@ -166,7 +166,7 @@ def test_tabs_are_ordered_by_how_often_they_are_used(monkeypatch):
     # 中身も同じ並びであること (各タブにしかない文言で見分ける)
     panels = [' '.join(_walk_texts(c, [])) for c in tab_view.controls]
     assert '過去の更新ログ' in panels[0]
-    assert 'β版は安定版とは別フォルダ' in panels[1]
+    assert 'β版は正式版とは別フォルダ' in panels[1]
     assert '提出済みの検証状況' in panels[2]
 
 
