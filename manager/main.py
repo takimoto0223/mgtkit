@@ -409,7 +409,9 @@ def main(page: ft.Page):
     # installing: 自動更新の実行中 (二重実行と起動の衝突を防ぐ) /
     # pending: アプリ起動中などで取り込めなかった新しい正式版
     # (次回「起動」時に取り込む)
-    _update_state = {'installing': False, 'pending': None}
+    # downloaded: 取り込み済みでまだ本人に知らせていない版 (次の「起動」で
+    # ダイアログを出す)
+    _update_state = {'installing': False, 'pending': None, 'downloaded': None}
 
     # 空の案内 Text が行として残ると余白がガタつくため、描画のたびに
     # 空なら行ごと畳む (起動タブの案内は設定箇所が多いため一括処理)
@@ -507,11 +509,35 @@ def main(page: ft.Page):
         t1_update_tag.content.value = ('アプリを %s に更新しました。'
                                        'このまま「起動」してお使い'
                                        'いただけます。' % release['tag'])
+        _update_state['downloaded'] = release['tag']
         t1_update_tag.visible = True
         t1_preparing_tag.visible = False
         set_badge(launch_badge, 0)
         t1_notice.value = ''
         _refresh_current_notes()
+        page.update()
+
+    def _notify_downloaded():
+        """取り込み済みの更新版を「起動」のときにダイアログで知らせる.
+
+        黄色いタグは一覧の上に静かに出るだけで見落とす人がいるため、
+        更新版を取り込んだあとの最初の「起動」で、版と保存先を
+        はっきり知らせる (管理者指示 2026-08)。一度知らせたら札を
+        下ろすので、同じ版で何度も出ることはない。
+        """
+        tag = _update_state['downloaded']
+        if not tag:
+            return
+        _update_state['downloaded'] = None
+        page.show_dialog(ft.AlertDialog(
+            title=ft.Text('更新版が自動でダウンロードされました'),
+            content=ft.Text('最新の正式版 %s を、この PC の\n%s\n'
+                            'に取り込みました。'
+                            % (tag, paths.app_dir(stable)),
+                            size=13, width=460, selectable=True),
+            actions=[ft.TextButton('閉じる',
+                                   on_click=lambda e: page.pop_dialog())],
+        ))
         page.update()
 
     def _auto_update(latest):
@@ -611,6 +637,9 @@ def main(page: ft.Page):
                                             on_progress=progress)
                     refresh_local_version(latest=True)
                     _refresh_current_notes()
+                # 取り込みが済んだ版を知らせてからアプリを開く
+                # (ブラウザが前に出る前に本人の目に入るように)
+                _notify_downloaded()
                 _, url = launcher.launch_app(
                     stable, paths.stable_port(config), channel='stable')
                 t1_status.value = 'ブラウザで開きます: %s' % url
@@ -2876,10 +2905,12 @@ def main(page: ft.Page):
         ft.Container(height=_INTRO_H, content=ft.Column([
             ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
                     'ます。β版を確認したら承認してください。%d 人の'
-                    '承認がそろうと自動で正式版になり、みなさんの'
-                    'マネージャーに自動で取り込まれます。'
+                    '承認がそろうと自動で正式版になり、「起動」タブの'
+                    '「起動」を押したときに、みなさんの PC (%s) へ'
+                    '自動で取り込まれます。'
                     '自分の提出は自分では承認できません。'
-                    % reviews.required_approvals(config),
+                    % (reviews.required_approvals(config),
+                       paths.app_dir(stable)),
                     size=13, color='#555555'),
             ft.Text('β版は安定版とは別フォルダ・別データ・別画面で起動する'
                     'ため、通常の作業には影響しません。', size=12,

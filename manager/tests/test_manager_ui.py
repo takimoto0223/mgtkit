@@ -124,7 +124,7 @@ def _walk_texts(control, out):
     value = getattr(control, 'value', None)
     if isinstance(value, str):
         out.append(value)
-    for name in ('content', 'label'):
+    for name in ('content', 'label', 'title'):
         child = getattr(control, name, None)
         if isinstance(child, str):
             out.append(child)
@@ -204,3 +204,103 @@ def test_opening_the_review_tab_refreshes_the_list(monkeypatch):
     page.added[1].on_change(types.SimpleNamespace(
         control=types.SimpleNamespace(selected_index=1)))
     assert called, '承認待ち一覧の取得が呼ばれていない'
+
+
+def _walk_controls(control, out):
+    """コントロール木を平らに集める (ボタンを名前で探すため)."""
+    out.append(control)
+    for name in ('content', 'label'):
+        child = getattr(control, name, None)
+        if child is not None and not isinstance(child, str):
+            _walk_controls(child, out)
+    for name in ('controls', 'tabs', 'actions'):
+        for child in getattr(control, name, None) or []:
+            _walk_controls(child, out)
+    return out
+
+
+def _launch_button(page):
+    for c in _walk_controls(page.added[1], []):
+        if getattr(c, 'content', None) == '起動' and getattr(c, 'on_click',
+                                                            None):
+            return c
+    raise AssertionError('「起動」ボタンが見つかりません')
+
+
+class _NowThread:
+    """裏の処理をその場で最後まで走らせる (取り込みの流れを見るため)."""
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+class _NoTimer:
+    """定期確認の予約はテストでは動かさない."""
+
+    def __init__(self, *a, **k):
+        self.daemon = False
+
+    def start(self):
+        pass
+
+
+def test_launch_after_an_update_tells_where_the_new_version_landed(
+        monkeypatch):
+    """更新版を取り込んだあと最初の「起動」で取り込み先を知らせること.
+
+    黄色いタグだけでは見落とすという管理者の指摘への対応。同じ版で
+    二度は出さない (押すたびに出ると邪魔になる)。
+    """
+    from manager import main as manager_main
+    from manager import paths
+
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+
+    snap = {'pending': [], 'releases': [], 'me': 'yamada-taro', 'merged': []}
+    monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviews, 'fork_memo', lambda *a, **k: {})
+    monkeypatch.setattr(manager_main.reviewcache, 'put',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviewcache, 'load_from_disk',
+                        lambda *a, **k: None)
+
+    latest = {'tag': 'v1.2', 'prerelease': False, 'notes': ''}
+    installed, launched = [], []
+    monkeypatch.setattr(manager_main.updater, 'check_update',
+                        lambda *a, **k: {'has_update': True,
+                                         'latest': latest})
+    monkeypatch.setattr(manager_main.updater, 'install_release',
+                        lambda *a, **k: installed.append(latest['tag']))
+    monkeypatch.setattr(manager_main.updater, 'local_version_info',
+                        lambda *a, **k: {'version': 'v1.2',
+                                         'distributed_at': '2026-08-18'})
+    monkeypatch.setattr(manager_main.launcher, 'port_in_use',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(
+        manager_main.launcher, 'launch_app',
+        lambda *a, **k: (launched.append(True),
+                         (None, 'http://127.0.0.1:8765/'))[1])
+
+    page = _FakePage()
+    manager_main.main(page)
+    assert installed == ['v1.2']          # 起動時に自動で取り込まれた
+    before = len(page.dialogs)            # 初回登録ダイアログの分
+
+    _launch_button(page).on_click(None)
+    assert launched                       # 取り込みの通知後にアプリが開く
+    assert len(page.dialogs) == before + 1
+    told = ' '.join(_walk_texts(page.dialogs[-1], []))
+    assert 'ダウンロード' in told
+    assert 'v1.2' in told
+    assert paths.app_dir(paths.stable_dir(paths.load_config())) in told
+
+    page.pop_dialog()
+    _launch_button(page).on_click(None)
+    assert len(page.dialogs) == before     # 同じ版で二度は出さない
