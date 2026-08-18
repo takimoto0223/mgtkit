@@ -201,14 +201,17 @@ def build_timeline(releases, merged, pending, today=None):
 def base_label(chip):
     """帯の基点の表示名 (「どの版を基に作ったか」として画面に出す文字列).
 
-    提出時に記録された版があれば、それがそのまま答え (β版を基に作った
-    提出なら β の版名になる)。記録が無い古い提出は、日時からの推定だけは
-    取り違えることがあるため「(推定)」と添えて事実と区別する。
+    提出時に記録された版があれば、それがそのまま答え。β版を基に作った
+    提出は β の版名 (v1.3-beta.1 など) になる。β版は正式版の列に居ないので
+    図の線は近い正式版から引くことになるが、**文字は記録どおり**にする
+    (記録があるのに推定した版名を見せる方が誤解を招くため)。
+    記録が無い古い提出だけ、日時からの推定に「(推定)」を添えて区別する。
     """
     c = chip or {}
-    if c.get('base_source') == 'recorded':
-        return c.get('base_version') or c.get('base_tag') or '不明'
-    tag = c.get('base_tag') or c.get('base_version') or ''
+    recorded = c.get('base_version') or ''
+    if recorded:
+        return recorded
+    tag = c.get('base_tag') or ''
     if not tag:
         return '不明'
     return '%s (推定)' % tag if c.get('base_source') == 'estimate' else tag

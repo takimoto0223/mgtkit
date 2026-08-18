@@ -965,6 +965,7 @@ def main(page: ft.Page):
                 bool(r.get('prerelease')), r.get('notes'))
                for r in (data.get('releases') or [])]
         pend = [(p.get('number'), p.get('fork_sha'),
+                 p.get('base_version'), p.get('base_commit'),
                  p.get('created_at_full'), p.get('title'),
                  p.get('author'), bool(p.get('rejected_final')))
                 for p in (data.get('pending') or [])]

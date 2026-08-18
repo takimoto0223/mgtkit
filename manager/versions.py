@@ -16,8 +16,8 @@ _VER_RE = re.compile(
 # 提出の基点を PR 本文に残す印。GitHub の画面には出ない HTML コメント。
 # 印を入れる前の提出のために、fallback_pr_body の定型文からも拾えるようにする
 _BASE_MARKER = re.compile(
-    r'<!--\s*mgtkit-base\s+version=(?P<version>\S+)'
-    r'(?:\s+commit=(?P<commit>[0-9a-fA-F]*))?\s*-->')
+    r'<!--\s*mgtkit-base\s+version=(?P<version>\S*)'
+    r'(?:\s+commit=(?P<commit>[^\s>]*))?\s*-->')
 _BASE_LEGACY = re.compile(
     r'マネージャー経由の提出です\s*[（(]\s*基点:\s*(?P<version>[^)）\s]+)')
 
@@ -33,18 +33,21 @@ def base_from_body(body):
 
     1) マネージャーが入れた印 (提出時の記録そのもの)
     2) 印が無い古い提出は、本文の定型文「(基点: vX.Y)」から拾う
-    版が分からなかった提出 ('?') は記録が無いものとして None を返す。
+    版名が分からなかった提出 ('?') でも、コミットが残っていればそれで
+    版を突き止められるので記録として返す。どちらも無ければ None。
     """
     for pat in (_BASE_MARKER, _BASE_LEGACY):
         m = pat.search(body or '')
         if m is None:
             continue
         version = (m.group('version') or '').strip()
-        if not version or version == '?':
-            continue
+        if version == '?':
+            version = ''
         groups = m.groupdict()
         commit = (groups.get('commit') or '').strip() \
             if 'commit' in groups else ''
+        if not version and not commit:
+            continue
         return {'version': version, 'commit': commit}
     return None
 

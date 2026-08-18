@@ -2,7 +2,7 @@
 """過去の更新ログの時系列図モデル (manager/history.py) のテスト."""
 import datetime
 
-from manager import history
+from manager import history, versions
 
 D = datetime.date
 
@@ -101,6 +101,46 @@ class TestBuildTimeline:
         assert c['base_source'] == 'recorded'
         # 表示は記録どおりの版名 (β版から作った提出もそのまま出す)
         assert history.base_label(c) == 'v0.9'
+
+    def test_beta_base_is_shown_as_recorded(self):
+        """β版を基に作った提出は、β版の版名をそのまま出す.
+
+        β版は正式版の列に居ないので図の線は近い正式版から引くが、
+        「どの版を基に作ったか」の文字は記録どおりにする (記録がある
+        のに推定した版名を見せる方が誤解を招くため)。
+        """
+        rel = [dict(_rel('v1.1', '2026-08-14'), tag_sha='sha-v11'),
+               dict(_rel('v1.2-beta.1', '2026-08-16', prerelease=True),
+                    tag_sha='sha-b1'),
+               dict(_rel('v1.0', '2026-08-06'), tag_sha='sha-v10')]
+        pend = [{'number': 90, 'title': 'x', 'author': 'a',
+                 'created_at': '2026-08-17',
+                 'base_version': 'v1.2-beta.1', 'base_commit': 'sha-b1'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 18))
+        c = tl['chips'][0]
+        # 線は正式版から引く (β版はグレーの本線に居ない)
+        assert c['base_tag'] == 'v1.1'
+        # 文字は記録どおり。推定扱いの「(推定)」は付けない
+        assert history.base_label(c) == 'v1.2-beta.1'
+
+    def test_record_without_version_still_resolves_by_commit(self):
+        # version.json の版名が空でも、記録のコミットが残っていれば
+        # そこから版を突き止める (印は version=? で書かれる)
+        body = versions.base_marker('', 'sha-v10')
+        assert versions.base_from_body(body) == {'version': '',
+                                                 'commit': 'sha-v10'}
+        rel = [dict(_rel('v1.1', '2026-08-14'), tag_sha='sha-v11'),
+               dict(_rel('v1.0', '2026-08-06'), tag_sha='sha-v10')]
+        base = versions.base_from_body(body)
+        pend = [{'number': 91, 'title': 'x', 'author': 'a',
+                 'created_at': '2026-08-16',
+                 'base_version': base['version'],
+                 'base_commit': base['commit']}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 18))
+        c = tl['chips'][0]
+        assert c['base_tag'] == 'v1.0'
+        assert c['base_source'] == 'recorded'
+        assert history.base_label(c) == 'v1.0'
 
     def test_estimated_base_is_marked_as_such(self):
         # 記録も分岐点も無い古い提出は推定。事実と区別できる表示にする
