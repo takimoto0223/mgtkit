@@ -1,5 +1,6 @@
 """manager/usage.py (API 利用量の記録・集計) のテスト。"""
 import datetime
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -10,6 +11,21 @@ def _config(tmp_path, **mgr):
     m = {'install_root': str(tmp_path)}
     m.update(mgr)
     return {'manager': m}
+
+
+class TestNoNetwork:
+    """単価・為替レートは外部 API から取らない (管理者指示 2026-08)。
+
+    ネットから取ると起動やダイアログ表示のたびに通信が増え、失敗時の
+    分岐も要る。人が公式料金表を見て config に書く固定値で通す。
+    """
+
+    def test_usage_module_does_not_reach_network(self):
+        src = inspect.getsource(usage)
+        # import 行に通信手段が現れないこと (URL は表示用の文字列なのでよい)
+        for name in ('urllib', 'requests', 'http.client', 'httpx', 'socket'):
+            assert 'import %s' % name not in src, name
+            assert 'from %s' % name not in src, name
 
 
 class TestPricing:
@@ -30,6 +46,29 @@ class TestPricing:
             _config(tmp_path, usd_jpy_rate=145)) == 145.0
         assert usage.usd_jpy_rate(
             _config(tmp_path, usd_jpy_rate='abc')) == 159.70
+
+    def test_model_name(self, tmp_path):
+        # どのモデルの単価かを画面に出すため config の claude_model を使う
+        assert usage.model_name(_config(tmp_path)) == 'claude-opus-5'
+        assert usage.model_name(
+            _config(tmp_path, claude_model='claude-sonnet-5')) \
+            == 'claude-sonnet-5'
+        assert usage.model_name(
+            _config(tmp_path, claude_model='')) == 'claude-opus-5'
+
+    def test_pricing_url(self, tmp_path):
+        # 単価の裏を取れるよう料金表の URL を画面に出す
+        assert usage.pricing_url(_config(tmp_path)) == (
+            'https://platform.claude.com/docs/ja/about-claude/pricing')
+        assert usage.pricing_url(
+            _config(tmp_path, pricing_url='https://example.com/p')) == (
+            'https://example.com/p')
+
+    def test_rates_updated_text(self, tmp_path):
+        # 画面には yyyy/mm/dd で出す
+        assert usage.rates_updated_text(_config(tmp_path)) == '2026/08/18'
+        assert usage.rates_updated_text(
+            _config(tmp_path, rates_updated_at='2026-09-01')) == '2026/09/01'
 
     def test_rates_updated_at(self, tmp_path):
         # 既定は「単価とレートを最後に確認した日」。config で上書きできる

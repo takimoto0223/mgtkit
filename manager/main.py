@@ -251,7 +251,9 @@ def main(page: ft.Page):
         s = usage.summary(config)
         rate = usage.usd_jpy_rate(config)
         p = usage.pricing(config)
-        updated = usage.rates_updated_at(config)
+        updated = usage.rates_updated_text(config)
+        model = usage.model_name(config)
+        price_url = usage.pricing_url(config)
 
         def usd(v):
             return '$%.2f' % v if (v >= 0.005 or v == 0) else '$%.3f' % v
@@ -261,6 +263,10 @@ def main(page: ft.Page):
 
         def short(d):
             return d[5:].replace('-', '/')
+
+        def unit(v):
+            # 単価は $5.00 でなく $5、$2.50 は $2.50 と出す
+            return '$' + ('%.2f' % v).rstrip('0').rstrip('.')
 
         max_usd = max((u for _, u, _, _, _ in s['days']), default=0.0)
         bars = [ft.Container(
@@ -307,16 +313,27 @@ def main(page: ft.Page):
                            s['total_calls'], format(s['total_in'], ','),
                            format(s['total_out'], ',')),
                         size=13, weight=ft.FontWeight.BOLD),
-                ft.Text('※ 単価 (100万トークンあたり): 入力 $%.2f = %s / '
-                        '出力 $%.2f = %s'
-                        % (p['input_per_mtok'], jpy(p['input_per_mtok']),
-                           p['output_per_mtok'], jpy(p['output_per_mtok'])),
+                ft.Text('※ %s  入力 %s/出力 %s per 100万トークン'
+                        % (model, unit(p['input_per_mtok']),
+                           unit(p['output_per_mtok'])),
                         size=11, color='#6b7280'),
-                ft.Text('　 為替レート: $1 = ¥%.2f ・ '
-                        '単価と為替レートの確認日: %s' % (rate, updated),
+                # 出典はクリックでブラウザが開く (裏を取りに行きやすく)
+                ft.Text(spans=[
+                    ft.TextSpan('　 ('),
+                    ft.TextSpan(
+                        price_url,
+                        ft.TextStyle(
+                            color=NAVY,
+                            decoration=ft.TextDecoration.UNDERLINE),
+                        url=price_url,
+                        tooltip='ブラウザで料金表を開きます'),
+                    ft.TextSpan(')'),
+                ], size=11, color='#6b7280'),
+                ft.Text('　 為替レート: $1 = ¥%.2f　　　　確認日: %s'
+                        % (rate, updated),
                         size=11, color='#6b7280'),
-                ft.Text('円の額はこのレートでの換算です。正確な請求額は '
-                        'Claude Console で確認してください。'
+                ft.Container(height=4),
+                ft.Text('正確な請求額は Claude Console で確認してください。'
                         '他の PC や他のアプリでの利用は含みません。',
                         size=11, color='#6b7280'),
             ], tight=True, width=620),
