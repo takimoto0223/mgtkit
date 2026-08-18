@@ -336,7 +336,7 @@
   <text x="86" y="35" font-size="9" text-anchor="middle"
         font-weight="bold" fill="#1e3a5f">① 取得</text>
   <text x="86" y="49" font-size="7.8" text-anchor="middle"
-        fill="#475569">安定版 ZIP + 基点のしおり</text>
+        fill="#475569">正式版 ZIP + 基点のしおり</text>
   <rect x="176" y="18" width="140" height="40" rx="6" fill="#fff"
         stroke="#1e3a5f" stroke-width="1.3"/>
   <text x="246" y="35" font-size="9" text-anchor="middle"
@@ -371,7 +371,7 @@
   <rect x="176" y="92" width="140" height="40" rx="6" fill="#fff"
         stroke="#059669" stroke-width="1.3"/>
   <text x="246" y="109" font-size="9" text-anchor="middle"
-        font-weight="bold" fill="#059669">⑦ 新しい安定版</text>
+        font-weight="bold" fill="#059669">⑦ 新しい正式版</text>
   <text x="246" y="123" font-size="7.8" text-anchor="middle"
         fill="#475569">全員に自動で配布</text>
   <!-- arrows -->
@@ -402,7 +402,7 @@
 <h2><span class="secno">3</span>ケーススタディ: 2 人が同時に開発したら</h2>
 
 <h3>3.1 前提条件</h3>
-<p>メンバー X が機能 <b>(A)</b>、メンバー Y が機能 <b>(B)</b> を、どちらも<b>安定版 v1.2 (コミット S)</b> を基点に同時に開発しているとします。お互いの作業は知らないまま進みます。</p>
+<p>メンバー X が機能 <b>(A)</b>、メンバー Y が機能 <b>(B)</b> を、どちらも<b>正式版 v1.2 (コミット S)</b> を基点に同時に開発しているとします。お互いの作業は知らないまま進みます。</p>
 
 <h3>3.2 提出時 — 衝突は原理的に起きない</h3>
 <div class="fig">
@@ -616,7 +616,7 @@
   <line x1="30" y1="70" x2="240" y2="70" stroke="#1e3a5f" stroke-width="3"/>
   <circle cx="110" cy="70" r="9" fill="#1e3a5f"/>
   <text x="110" y="94" font-size="9" text-anchor="middle">main
-    (S = 安定版 A)</text>
+    (S = 正式版 A)</text>
   <path d="M 117 64 C 170 34, 240 34, 290 34" stroke="#d97706"
         stroke-width="2.5" fill="none"/>
   <circle cx="290" cy="34" r="7" fill="#d97706"/>
@@ -658,7 +658,7 @@
         fill="#64748b">土台を失って宙に浮き、提出不能に</text>
 </svg></div>
 
-親 PR が却下確定・取り下げで消えると枝ごと削除され、基点 SHA が辿れなくなる。A-1-1 は「基点となる版が履歴に見つかりません」で<b>提出不能</b>。安定版から移植し直しになる</div></div>
+親 PR が却下確定・取り下げで消えると枝ごと削除され、基点 SHA が辿れなくなる。A-1-1 は「基点となる版が履歴に見つかりません」で<b>提出不能</b>。正式版から移植し直しになる</div></div>
 <div class="col"><div class="card warn"><b class="h">② 親リリース後の縮退</b><div class="fig"><svg width="180" height="74" viewBox="0 0 180 74" font-family="IPAPGothic, sans-serif">
   <line x1="8" y1="52" x2="172" y2="52" stroke="#1e3a5f" stroke-width="2.5"/>
   <circle cx="120" cy="52" r="6" fill="#0d9488"/>
@@ -704,7 +704,7 @@
 <h2><span class="secno">5</span>推奨プラクティス — 結局どうすべきか</h2>
 <table>
 <tr><th style="width:26%">場面</th><th>推奨</th></tr>
-<tr><td>基点の選び方</td><td>原則<b>最新の安定版</b>。β版基点 (スタック) は「親が確実にリリースされる連作」のみ</td></tr>
+<tr><td>基点の選び方</td><td>原則<b>最新の正式版</b>。β版基点 (スタック) は「親が確実にリリースされる連作」のみ</td></tr>
 <tr><td>着手前</td><td>同じファイルを触りそうな作業は<b>一声かける</b>。衝突は解消できるが、しないのが一番安い</td></tr>
 <tr><td>提出の粒度</td><td><b>小さく・こまめに</b>。差分が小さいほどレビューも合流も速く、衝突面積も小さい</td></tr>
 <tr><td>衝突したら</td><td>怖がらず「最新版と統合」→ 迷ったら<b>「両方の機能を残す」</b>。解消後は承認が仕切り直しになるので再確認を依頼</td></tr>
