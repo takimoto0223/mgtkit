@@ -103,6 +103,50 @@ jobs:
           print('ガード OK')
           EOF
 
+      # マネージャー本体を更新する PR では、API の単価と為替レートを
+      # 公式料金表で確認し直したか (config.json rates_updated_at) を見る。
+      # ネットには一切つながず、リポジトリの中身だけで判定する。
+      - name: マネージャー更新時の単価確認ガード
+        run: |
+          python3 - <<'EOF'
+          import datetime, json, subprocess, sys
+          base = 'origin/${{ github.base_ref }}'
+          files = subprocess.check_output(
+              ['git', 'diff', '--name-only', base + '...HEAD'],
+              text=True).split()
+          # 資料・テスト・撮影スクリプトは「アプリの更新」に数えない
+          skip = ('manager/docs/', 'manager/readme/', 'manager/tests/',
+                  'manager/scripts/')
+          touched = [f for f in files
+                     if f.startswith('manager/') and not f.startswith(skip)]
+          if not touched:
+              print('マネージャー本体の変更はありません')
+              sys.exit(0)
+          with open('config.json', encoding='utf-8') as f:
+              mgr = (json.load(f).get('manager') or {})
+          raw = str(mgr.get('rates_updated_at') or '')
+          try:
+              checked = datetime.date.fromisoformat(raw)
+          except ValueError:
+              print('config.json の manager.rates_updated_at が '
+                    'yyyy-mm-dd で入っていません: %r' % raw)
+              sys.exit(1)
+          days = (datetime.date.today() - checked).days
+          print('単価と為替レートの確認日: %s (%d 日前)' % (raw, days))
+          if days > 90:
+              print('')
+              print('マネージャーを更新する PR です。API の単価と為替レートを')
+              print('確認し直してください (%d 日前の値のままです):' % days)
+              print('  1. %s' % mgr.get(
+                  'pricing_url',
+                  'https://platform.claude.com/docs/ja/about-claude/pricing'))
+              print('     で %s の単価を見る' % mgr.get('claude_model', ''))
+              print('  2. config.json の api_pricing / usd_jpy_rate を直す')
+              print('  3. config.json の rates_updated_at を今日の日付にする')
+              sys.exit(1)
+          print('ガード OK')
+          EOF
+
   # 提出 (feature/*) の検証がすべて通ったらβ版を自動リリース
   beta-release:
     needs: [test, safety]

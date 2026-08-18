@@ -317,7 +317,18 @@ def main(page: ft.Page):
                         % (model, unit(p['input_per_mtok']),
                            unit(p['output_per_mtok'])),
                         size=11, color='#6b7280'),
-                ft.Text('　 (%s)' % price_url, size=11, color='#6b7280'),
+                # 出典はクリックでブラウザが開く (裏を取りに行きやすく)
+                ft.Text(spans=[
+                    ft.TextSpan('　 ('),
+                    ft.TextSpan(
+                        price_url,
+                        ft.TextStyle(
+                            color=NAVY,
+                            decoration=ft.TextDecoration.UNDERLINE),
+                        url=price_url,
+                        tooltip='ブラウザで料金表を開きます'),
+                    ft.TextSpan(')'),
+                ], size=11, color='#6b7280'),
                 ft.Text('　 為替レート: $1 = ¥%.2f　　　　確認日: %s'
                         % (rate, updated),
                         size=11, color='#6b7280'),

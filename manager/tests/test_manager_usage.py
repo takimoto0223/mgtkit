@@ -1,5 +1,6 @@
 """manager/usage.py (API 利用量の記録・集計) のテスト。"""
 import datetime
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -10,6 +11,21 @@ def _config(tmp_path, **mgr):
     m = {'install_root': str(tmp_path)}
     m.update(mgr)
     return {'manager': m}
+
+
+class TestNoNetwork:
+    """単価・為替レートは外部 API から取らない (管理者指示 2026-08)。
+
+    ネットから取ると起動やダイアログ表示のたびに通信が増え、失敗時の
+    分岐も要る。人が公式料金表を見て config に書く固定値で通す。
+    """
+
+    def test_usage_module_does_not_reach_network(self):
+        src = inspect.getsource(usage)
+        # import 行に通信手段が現れないこと (URL は表示用の文字列なのでよい)
+        for name in ('urllib', 'requests', 'http.client', 'httpx', 'socket'):
+            assert 'import %s' % name not in src, name
+            assert 'from %s' % name not in src, name
 
 
 class TestPricing:
