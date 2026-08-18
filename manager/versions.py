@@ -1,11 +1,52 @@
 # -*- coding: utf-8 -*-
-"""バージョン表記 (vX.Y / vX.Y-beta.N) の解析・比較と version.json の読み書き."""
+"""バージョン表記 (vX.Y / vX.Y-beta.N) の解析・比較と version.json の読み書き.
+
+提出の「基点」(提出者がマネージャーで取得した版) の記録もここに置く。
+配布 ZIP の version.json に書いてある版がその答えで、提出時に PR 本文へ
+書き写しておき、過去の更新ログの図はそれを読む
+(git や日時からの推定は取り違えるため。manager/docs/decisions.md)。
+"""
 import json
 import os
 import re
 
 _VER_RE = re.compile(
     r'^v(?P<major>\d+)\.(?P<minor>\d+)(?:-beta\.(?P<beta>\d+))?$')
+
+# 提出の基点を PR 本文に残す印。GitHub の画面には出ない HTML コメント。
+# 印を入れる前の提出のために、fallback_pr_body の定型文からも拾えるようにする
+_BASE_MARKER = re.compile(
+    r'<!--\s*mgtkit-base\s+version=(?P<version>\S+)'
+    r'(?:\s+commit=(?P<commit>[0-9a-fA-F]*))?\s*-->')
+_BASE_LEGACY = re.compile(
+    r'マネージャー経由の提出です\s*[（(]\s*基点:\s*(?P<version>[^)）\s]+)')
+
+
+def base_marker(version, commit=''):
+    """提出の基点 (取得した版) を PR 本文へ残す印。本文の先頭行に置く."""
+    return '<!-- mgtkit-base version=%s commit=%s -->' % (
+        version or '?', commit or '')
+
+
+def base_from_body(body):
+    """PR 本文から提出の基点を読む。戻り値: dict(version, commit) / None.
+
+    1) マネージャーが入れた印 (提出時の記録そのもの)
+    2) 印が無い古い提出は、本文の定型文「(基点: vX.Y)」から拾う
+    版が分からなかった提出 ('?') は記録が無いものとして None を返す。
+    """
+    for pat in (_BASE_MARKER, _BASE_LEGACY):
+        m = pat.search(body or '')
+        if m is None:
+            continue
+        version = (m.group('version') or '').strip()
+        if not version or version == '?':
+            continue
+        groups = m.groupdict()
+        commit = (groups.get('commit') or '').strip() \
+            if 'commit' in groups else ''
+        return {'version': version, 'commit': commit}
+    return None
 
 
 def parse_version(tag):

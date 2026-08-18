@@ -12,9 +12,11 @@
   「公開日以前で最も新しい取り込み」を新しい順に貪欲に対応付ける
   (マネージャーの運用では取り込み → 数分でリリースなので日付で安定する)。
   対応が付かない最古の版は「初回配布」扱い
-- 帯の基点 (どの版から作ったか) は、提出の分岐点コミット (fork_sha) が
-  指すリリースタグ。分からないときだけ「提出日以前で最も新しい正式版」に
-  倒す (自分が公開された版と同じになった場合はその 1 つ前)
+- 帯の基点 (どの版から作ったか) は、提出時に記録された版
+  (提出者がマネージャーで取得した版。配布 ZIP の version.json 由来で
+  PR 本文に残る)。記録が無い古い提出だけ、分岐点コミット → 提出日時、
+  の順に推定へ倒す。推定した基点は表示でそれと分かるようにする
+  (base_source: 'recorded' / 'fork' / 'estimate')
 """
 import datetime
 import re
@@ -116,7 +118,10 @@ def build_timeline(releases, merged, pending, today=None):
                       'start': start, 'end': s['date'],
                       'created_full': _when(pr, 'created_at'),
                       'fork_sha': pr.get('fork_sha') or '',
-                      'base_tag': None, 'target_tag': s['tag'],
+                      'base_version': pr.get('base_version') or '',
+                      'base_commit': pr.get('base_commit') or '',
+                      'base_tag': None, 'base_source': 'estimate',
+                      'target_tag': s['tag'],
                       'pending': False, 'lane': -1})
     for p in pending:
         if p.get('rejected_final'):
@@ -130,29 +135,50 @@ def build_timeline(releases, merged, pending, today=None):
                       'start': start, 'end': None,
                       'created_full': _when(p, 'created_at'),
                       'fork_sha': p.get('fork_sha') or '',
-                      'base_tag': None, 'target_tag': None,
+                      'base_version': p.get('base_version') or '',
+                      'base_commit': p.get('base_commit') or '',
+                      'base_tag': None, 'base_source': 'estimate',
+                      'target_tag': None,
                       'pending': True, 'lane': -1})
 
-    # 基点 (どの版から作られたか):
-    # 1) 分岐点コミット (fork_sha = 提出のいちばん古いコミットの親) が
-    #    リリースタグの commit と一致すれば、それが事実。手元の版が
-    #    古いまま提出されるのは普通にあるので (新しい版の公開直後に
-    #    提出されると特に紛らわしい)、日時からの推定では取り違える
-    # 2) 分からなければ「提出日時以前で最も新しい正式版」で推定
-    #    (時刻まで比較。自分の公開版と同じなら 1 つ前)
+    # 基点 (どの版から作られたか) は次の順で決める:
+    # 1) 提出時に記録された版 (提出者が取得した配布物の version.json を
+    #    提出が写したもの)。これだけが事実で、あとは推定
+    # 2) 記録が無い古い提出は、分岐点コミット (提出のいちばん古い
+    #    コミットの親) がリリースタグと一致すればそれ
+    # 3) それも分からなければ「提出日時以前で最も新しい正式版」で推定
+    #    (時刻まで比較)。新しい版の公開直後に古い版から提出されると
+    #    取り違えるため、あくまで最後の手段
     dates = {s['tag']: s['date'] for s in stables}
     order = {s['tag']: i for i, s in enumerate(stables)}
     sha_to_tag = {s['release'].get('tag_sha'): s['tag'] for s in stables
                   if s['release'].get('tag_sha')}
+
+    def _usable(tag, limit):
+        # 自分が公開された版より後の版は基点にできない (同じ日に複数の版が
+        # 出たときに前後が入れ替わるのを防ぐ)
+        return bool(tag) and order.get(tag, len(stables)) < limit
+
     for c in chips:
-        # 自分が公開された版より後の版を基点にはできない (同じ日に
-        # 複数の版が出たときに前後が入れ替わるのを防ぐ)
         limit = order.get(c['target_tag'], len(stables))
         candidates = stables[:limit]
-        fork = c.get('fork_sha')
-        if fork and order.get(sha_to_tag.get(fork), len(stables)) < limit:
-            c['base_tag'] = sha_to_tag[fork]
+        # 1) 提出時の記録 (版名そのもの → 記録されたコミット の順に照合)
+        recorded = c.get('base_version') or ''
+        tag = recorded if _usable(recorded, limit) else ''
+        if not tag:
+            by_sha = sha_to_tag.get(c.get('base_commit') or '')
+            tag = by_sha if _usable(by_sha, limit) else ''
+        if tag:
+            c['base_tag'] = tag
+            c['base_source'] = 'recorded'
             continue
+        # 2) 分岐点コミット
+        by_fork = sha_to_tag.get(c.get('fork_sha') or '')
+        if _usable(by_fork, limit):
+            c['base_tag'] = by_fork
+            c['base_source'] = 'fork'
+            continue
+        # 3) 提出日時からの推定
         base = None
         created = c.get('created_full') or c['start'].isoformat()
         for s in candidates:
@@ -164,11 +190,28 @@ def build_timeline(releases, merged, pending, today=None):
         if base is None and candidates:
             base = candidates[0]['tag']
         c['base_tag'] = base
+        c['base_source'] = 'estimate'
 
     chips.sort(key=lambda c: (c['start'], c['number'] or 0))
     _assign_lanes(chips, today, dates)
     authors = sorted({c['author'] for c in chips})
     return {'stables': stables, 'chips': chips, 'authors': authors}
+
+
+def base_label(chip):
+    """帯の基点の表示名 (「どの版を基に作ったか」として画面に出す文字列).
+
+    提出時に記録された版があれば、それがそのまま答え (β版を基に作った
+    提出なら β の版名になる)。記録が無い古い提出は、日時からの推定だけは
+    取り違えることがあるため「(推定)」と添えて事実と区別する。
+    """
+    c = chip or {}
+    if c.get('base_source') == 'recorded':
+        return c.get('base_version') or c.get('base_tag') or '不明'
+    tag = c.get('base_tag') or c.get('base_version') or ''
+    if not tag:
+        return '不明'
+    return '%s (推定)' % tag if c.get('base_source') == 'estimate' else tag
 
 
 def _assign_lanes(chips, today, base_dates):

@@ -702,7 +702,7 @@ def main(page: ft.Page):
             c = payload
             color = history.person_color(c['author'], authors)
             meta = ('%s #%s · %s を基に作成 · %s 提出'
-                    % (c['author'], c['number'], c['base_tag'] or '?',
+                    % (c['author'], c['number'], history.base_label(c),
                        history.fmt_date(c['start'], with_year=True)))
             content = [
                 ft.Row([_person_dot(color),
@@ -734,7 +734,7 @@ def main(page: ft.Page):
             if c:
                 color = history.person_color(c['author'], authors)
                 meta = ('%s #%s · %s を基に作成 · %s 提出 → %s 公開'
-                        % (c['author'], c['number'], c['base_tag'] or '?',
+                        % (c['author'], c['number'], history.base_label(c),
                            history.fmt_date(c['start'], with_year=True),
                            history.fmt_date(c['end'])))
             else:

@@ -11,7 +11,7 @@ import zipfile
 
 import pytest
 
-from manager import claude_helper, submit
+from manager import claude_helper, submit, versions
 from manager.gitcli import run_git
 
 
@@ -323,6 +323,42 @@ class TestFullFlow:
         assert 'app v2' in content
         # 開発用ファイルは基点のまま維持される
         assert 'tests/test_x.py' in tree
+
+    def test_pr_body_records_the_base_version(self, repo_env, tmp_path,
+                                              gh_mock):
+        """提出時に「提出者が取得した版」を PR 本文へ機械可読で残す.
+
+        過去の更新ログの図はこれを読む (git や日時からの推定ではなく)。
+        """
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        submit.finalize_submission(prep, [], 'msg', {})
+
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        body = create[create.index('--body') + 1]
+        base = versions.base_from_body(body)
+        assert base == {'version': 'v1.0',
+                        'commit': repo_env['base_sha']}
+        # 印は本文の先頭 (リリースノートの節の抽出を邪魔しない)
+        assert body.startswith('<!-- mgtkit-base ')
+        assert '## 更新内容' in body
+
+    def test_resubmission_keeps_the_base_record(self, repo_env, tmp_path,
+                                                gh_mock):
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        first = submit.finalize_submission(prep, [], 'msg', {})
+        z2 = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v3")\n'}),
+            name='again.zip')
+        prep2 = submit.prepare_submission(z2, {}, repo_env['workrepo'])
+        submit.finalize_submission(prep2, [], 'msg2', {},
+                                   existing_branch=first['branch'])
+        edit = [c for c in gh_mock if c[:2] == ['pr', 'edit']][-1]
+        body = edit[edit.index('--body') + 1]
+        assert versions.base_from_body(body)['version'] == 'v1.0'
 
     def test_sequence_number_increments(self, repo_env, tmp_path, gh_mock):
         today = datetime.date.today().strftime('%Y%m%d')

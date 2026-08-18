@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from . import feedback, ghcli, paths
+from . import feedback, ghcli, paths, versions
 from .autofix import AUTOFIX_PREFIX, _summarize_checks
 from .gitcli import ensure_work_repo, run_git
 from .submit import workrepo_dir
@@ -210,6 +210,7 @@ def _build_pending(prs, config):
             continue
         summary = approval_summary(pr.get('reviews'), members)
         since = rejected_since(summary, n_req)
+        base = versions.base_from_body(pr.get('body')) or {}
         result.append({
             'number': pr['number'],
             'title': pr['title'],
@@ -221,6 +222,9 @@ def _build_pending(prs, config):
             'head_sha': pr.get('headRefOid') or '',
             # 提出時の説明文 (差分表示が使う。クリック時の往復をなくす)
             'body': pr.get('body') or '',
+            # 提出時に記録された基点 (提出者が取得した版。図が読む)
+            'base_version': base.get('version', ''),
+            'base_commit': base.get('commit', ''),
             'approved': summary['approved'],
             'rejected': summary['rejected'],
             'rejected_final': len(summary['rejected']) >= n_req,
@@ -244,7 +248,7 @@ query($owner: String!, $name: String!, $submissions: String!) {
   submissions: search(query: $submissions, type: ISSUE, first: 40) {
     nodes {
       ... on PullRequest {
-        number title headRefName headRefOid createdAt mergedAt
+        number title headRefName headRefOid createdAt mergedAt body
         author { login }
       }
     }
@@ -274,7 +278,7 @@ query($owner: String!, $name: String!, $submissions: String!) {
     merged: pullRequests(states: MERGED, first: 40,
                          orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number title headRefName headRefOid createdAt mergedAt
+        number title headRefName headRefOid createdAt mergedAt body
         author { login }
       }
     }
@@ -441,15 +445,18 @@ def _release_from_graphql(node):
 def _merged_from_prs(prs):
     """PR dict (gh --json / GraphQL 変換済み) から済み提出の要約を作る.
 
-    過去の更新ログの図 (誰がいつ提出し、いつ正式版になったか) 用。
-    マネージャー経由の提出 (feature/ ブランチ) のみを対象とする。
-    複数の取得経路をつないで渡せるよう、同じ番号は先に来た方を残す。
+    過去の更新ログの図 (誰がいつ提出し、どの版を基に作り、いつ正式版に
+    なったか) 用。マネージャー経由の提出 (feature/ ブランチ) のみを
+    対象とする。複数の取得経路をつないで渡せるよう、同じ番号は先に来た方を
+    残す。本文そのものは持ち回らず、基点の記録だけ抜き出して持つ
+    (保存しておくスナップショットを太らせないため)。
     """
     out, seen = [], set()
     for pr in prs:
         if not _is_submission(pr) or pr['number'] in seen:
             continue
         seen.add(pr['number'])
+        base = versions.base_from_body(pr.get('body')) or {}
         out.append({
             'number': pr['number'],
             'title': pr.get('title') or '',
@@ -459,6 +466,8 @@ def _merged_from_prs(prs):
             'merged_at': (pr.get('mergedAt') or '')[:10],
             'merged_at_full': pr.get('mergedAt') or '',
             'head_sha': pr.get('headRefOid') or '',
+            'base_version': base.get('version', ''),
+            'base_commit': base.get('commit', ''),
         })
     return out
 
@@ -472,7 +481,7 @@ def list_merged(config=None):
     """
     slug = paths.repo_slug(config)
     fields = ('number,title,author,headRefName,headRefOid,'
-              'createdAt,mergedAt')
+              'createdAt,mergedAt,body')
 
     def fetch(extra):
         out = ghcli.run_gh(['pr', 'list', '--repo', slug,

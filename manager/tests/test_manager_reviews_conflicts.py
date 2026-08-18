@@ -345,6 +345,8 @@ _GRAPHQL_SNAPSHOT = {
                  'headRefOid': 'headsha29',
                  'createdAt': '2026-08-01T09:00:00Z',
                  'mergedAt': '2026-08-04T10:00:00Z',
+                 'body': '<!-- mgtkit-base version=v1.3 commit=c13 -->\n'
+                         '## 更新内容\n- 合成梁\n',
                  'author': {'login': 'yamada'}},
                 {'number': 30, 'title': 'マネージャー修正',
                  'headRefName': 'claude/app-manager-y',
@@ -435,15 +437,17 @@ class TestFetchSnapshot:
              'created_at_full': '2026-08-01T09:00:00Z',
              'merged_at': '2026-08-04',
              'merged_at_full': '2026-08-04T10:00:00Z',
-             'head_sha': 'headsha29', 'fork_sha': 'forksha-29',
-             'fork_kind': 'first-parent'},
+             'head_sha': 'headsha29',
+             'base_version': 'v1.3', 'base_commit': 'c13',
+             'fork_sha': 'forksha-29', 'fork_kind': 'first-parent'},
             {'number': 21, 'title': '木材の断面性能を追加',
              'author': 'fujitaka', 'created_at': '2026-07-20',
              'created_at_full': '2026-07-20T09:00:00Z',
              'merged_at': '2026-07-25',
              'merged_at_full': '2026-07-25T10:00:00Z',
-             'head_sha': 'headsha21', 'fork_sha': 'forksha-21',
-             'fork_kind': 'first-parent'}]
+             'head_sha': 'headsha21',
+             'base_version': '', 'base_commit': '',
+             'fork_sha': 'forksha-21', 'fork_kind': 'first-parent'}]
         # 承認待ちにも提出日が入る (図の帯の左端に使う)
         assert 'created_at' in pr
         # 分岐点コミットが付く (履歴図の基点の事実)
