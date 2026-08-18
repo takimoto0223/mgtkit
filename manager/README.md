@@ -48,6 +48,9 @@
   `readme/アプリマネージャー使い方ガイド.pdf` の 2 ファイルだけで完結します
 - `readme/` にはほかに「バージョン管理と同時開発のしくみ」
   「リポジトリ公開運用の考え方」の説明資料があります
+- 資料の原稿は `readme/src/` の HTML です。図は `scripts/guide_shots/` で
+  本物の UI を架空データで動かして撮り、`scripts/build_guide_pdf.py` で
+  PDF に刷ります (UI を変えたら図と本文の追従も同じ提出でやること)
 - 設計判断・運用ルールの詳細は `docs/decisions.md` を参照してください
 
 ## フォルダ構成
@@ -60,4 +63,4 @@
 | `tests/` | マネージャーの回帰テスト (pytest。CI で自動実行) |
 | `readme/` | 使い方ガイドほか説明資料 (PDF) |
 | `docs/` | 設計・運用の記録 (decisions.md) |
-| `scripts/` | setup.bat (メンバー配布用)・ブランチ保護スクリプト |
+| `scripts/` | setup.bat (メンバー配布用)・資料の図と PDF の作成・ブランチ保護スクリプト |

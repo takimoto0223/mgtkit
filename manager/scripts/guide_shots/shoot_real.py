@@ -64,10 +64,10 @@ async def handle(route):
     await route.abort()
 
 
-async def new_page(p):
+async def new_page(p, height=860):
     browser = await p.chromium.launch(
         executable_path='/opt/pw-browsers/chromium')
-    pg = await browser.new_page(viewport={'width': 1180, 'height': 860})
+    pg = await browser.new_page(viewport={'width': 1180, 'height': height})
     for pat in ('https://www.gstatic.com/**',
                 'https://cdn.jsdelivr.net/**',
                 'https://fonts.gstatic.com/**',
@@ -78,28 +78,48 @@ async def new_page(p):
     return browser, pg
 
 
+# 図ごとの高さ (px)。撮影は 1180x860 で行い、下の余白を落として
+# ガイドに載る形にそろえる (載せる図の縦横比を安定させるため)
+CROP = {
+    'real_launch': 551, 'real_beta': 636, 'real_submit': 500,
+    'real_usage': 760, 'real_submit_dialog': 640,
+    'real_submit_manual': 760, 'real_submit_review': 700,
+    'real_firstrun': 647,
+}
+
+
 async def shot(pg, name):
-    await pg.screenshot(path=os.path.join(BASE, name + '.png'))
+    path = os.path.join(BASE, name + '.png')
+    await pg.screenshot(path=path)
+    h = CROP.get(name)
+    if h:
+        try:
+            from PIL import Image
+            im = Image.open(path)
+            if im.height > h:
+                im.crop((0, 0, im.width, h)).save(path)
+        except ImportError:
+            print('  (Pillow が無いため切り抜きは省略)')
     print('saved', name)
 
 
+# 画面ごとの座標 (flutter は canvas 描画のため座標クリック)。
+# タブの並びは 起動 / β版の確認と承認 / 更新版を提出 (#134)
+TAB_LAUNCH = (30, 93)
+TAB_BETA = (145, 93)
+TAB_SUBMIT = (285, 93)
+
+
 async def run(mode):
+    """1 モード = 1 ページ。ダイアログは Escape で閉じない (modal=True) ため、
+    ダイアログを開く撮影はモードを分けてページを開き直す。"""
     async with async_playwright() as p:
         browser, pg = await new_page(p)
         if mode == 'firstrun':
             await shot(pg, 'real_firstrun')
-        elif mode == 'beta':
-            await pg.mouse.click(145, 93)
-            await pg.wait_for_timeout(7000)
-            await shot(pg, 'real_beta')
-            # #21 の「フィードバック 2 件」(ロケットが行頭に入って
-            # ボタン行が下がったため座標を更新)
-            await pg.mouse.click(340, 404)
-            await pg.wait_for_timeout(4000)
-            await shot(pg, 'real_feedback')
-        else:
+        elif mode in ('launch', 'main'):
             await shot(pg, 'real_launch')
-            # 過去の更新ログ (flutter は canvas 描画のため座標クリック)
+            # 過去の更新ログ
             await pg.mouse.click(204, 222)
             await pg.wait_for_timeout(6000)
             await shot(pg, 'real_history')
@@ -109,28 +129,39 @@ async def run(mode):
             await pg.mouse.click(1142, 30)
             await pg.wait_for_timeout(2500)
             await shot(pg, 'real_usage')
-            await pg.keyboard.press('Escape')
-            await pg.wait_for_timeout(1500)
-            # 提出タブ (並びは 起動 / β版の確認と承認 / 更新版を提出)
-            await pg.mouse.click(285, 93)
+        elif mode == 'submit':
+            await pg.mouse.click(*TAB_SUBMIT)
             await pg.wait_for_timeout(2500)
             await shot(pg, 'real_submit')
             # 提出確認ダイアログ (pick_files はハーネスが差し込む)
             await pg.mouse.click(110, 294)
             await pg.wait_for_timeout(4000)
             await shot(pg, 'real_submit_dialog')
-            await pg.keyboard.press('Escape')
-            await pg.wait_for_timeout(1500)
-            # β版の確認と承認タブ
-            await pg.mouse.click(145, 93)
+            # 「自分で入力する」を選ぶと同じ画面に記入欄が出る
+            await pg.mouse.click(339, 494)
+            await pg.wait_for_timeout(2500)
+            await shot(pg, 'real_submit_manual')
+        elif mode == 'review':
+            # 「Claude で自動作成する」(既定) のまま提出 → 確認画面
+            await pg.mouse.click(*TAB_SUBMIT)
+            await pg.wait_for_timeout(2500)
+            await pg.mouse.click(110, 294)
+            await pg.wait_for_timeout(4000)
+            await pg.mouse.click(819, 563)
+            await pg.wait_for_timeout(4000)
+            await shot(pg, 'real_submit_review')
+        elif mode == 'beta':
+            await pg.mouse.click(*TAB_BETA)
             await pg.wait_for_timeout(7000)
             await shot(pg, 'real_beta')
-            # フィードバック一覧 (#21 の「フィードバック 2 件」)
+            # 「フィードバック 2 件」(#21)
             await pg.mouse.click(340, 404)
             await pg.wait_for_timeout(4000)
             await shot(pg, 'real_feedback')
+        else:
+            raise SystemExit('mode: firstrun / launch / submit / review / beta')
         await browser.close()
 
 
 if __name__ == '__main__':
-    asyncio.run(run(sys.argv[1] if len(sys.argv) > 1 else 'main'))
+    asyncio.run(run(sys.argv[1] if len(sys.argv) > 1 else 'launch'))

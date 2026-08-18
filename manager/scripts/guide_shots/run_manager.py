@@ -84,7 +84,11 @@ def seed_state():
     root = paths.install_root()
     os.makedirs(root, exist_ok=True)
     sp = os.path.join(root, 'settings.json')
-    if not os.path.exists(sp):
+    # 初回登録画面 (real_firstrun) を撮るときは未登録のままにする
+    if os.environ.get('GUIDE_SHOTS_FIRSTRUN'):
+        if os.path.exists(sp):
+            os.remove(sp)
+    elif not os.path.exists(sp):
         with open(sp, 'w', encoding='utf-8') as f:
             # キー名は settings.load_settings が見る 'name'。API キーは
             # 使わないのでダミー (本物らしい文字列は置かない)
@@ -94,8 +98,22 @@ def seed_state():
     appd = paths.app_dir(paths.stable_dir())
     if not os.path.exists(os.path.join(appd, 'version.json')):
         os.makedirs(appd, exist_ok=True)
+        # 配布日は偽 gh の v1.1 の公開日に合わせる (図どうしの食い違い防止)
         versions.write_version_json(appd, 'v1.1', 'b2c3d4' + '0' * 34,
-                                    '2026-08-07')
+                                    '2026-08-14')
+    # API 利用量の図が「利用はありません」にならないよう、架空の利用を
+    # 2 日ぶん置く (直近 30 日のグラフに入る日付にする)
+    up = os.path.join(root, 'usage.json')
+    if not os.path.exists(up):
+        import datetime
+        today = datetime.date.today()
+        d1 = (today - datetime.timedelta(days=4)).isoformat()
+        d2 = (today - datetime.timedelta(days=1)).isoformat()
+        with open(up, 'w', encoding='utf-8') as f:
+            json.dump({'days': {
+                d1: {'in': 1187, 'out': 992, 'calls': 1, 'usd': 0.0307},
+                d2: {'in': 2456, 'out': 1310, 'calls': 2, 'usd': 0.0450},
+            }}, f, ensure_ascii=False, indent=1)
 
 
 seed_state()

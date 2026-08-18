@@ -16,17 +16,41 @@
 
 パス (rive・フォントの置き場所) は撮影環境に合わせて調整すること。
 
+## 撮り方
+
+```
+python manager/scripts/guide_shots/run_manager.py &     # 架空データで起動
+python manager/scripts/guide_shots/shoot_real.py <モード>
+```
+
+モードは **1 モード = 1 ページ**で、開いたダイアログは閉じずに終わる
+(ダイアログが Escape で閉じないため、続きは別モードで開き直す):
+
+| モード | 撮れる図 |
+| --- | --- |
+| `launch` | `real_launch` / `real_history` / `real_usage` |
+| `submit` | `real_submit` / `real_submit_dialog` / `real_submit_manual` |
+| `review` | `real_submit_review` (自動作成の確認画面) |
+| `beta` | `real_beta` / `real_feedback` |
+| `firstrun` | `real_firstrun` (`GUIDE_SHOTS_FIRSTRUN=1` を付けて起動する) |
+
+撮影は 1180x860 で行い、`shoot_real.py` の `CROP` にある図は下の余白を
+落とす (Pillow が要る。無ければ切り抜きだけ飛ばす)。図を差し替えたら
+`python manager/scripts/build_guide_pdf.py guide` で PDF を作り直す
+(目次のページ番号が変わっていないかも確認すること)。
+
+必要な物: `pip install flet flet-web playwright pillow`
+
 ## 撮影時の注意 (2026-08)
 
 - 起動には「登録済み・取り込み済み」の状態が要る。無いと初回登録
   ダイアログが全画面を覆い、どのコマも同じ絵になる。`run_manager.py`
   が起動時に `settings.json` (名前 = 山田太郎、キーはダミー) と
   `stable/mgtkit/version.json` (v1.1) を用意する
-- **ダイアログは Escape で閉じない** (modal=True のため)。`shoot_real.py`
-  の後半 (提出確認 → β版タブ) は Escape 頼みなので、そのままでは
-  ダイアログが被ったまま撮れる。連続撮影するときは「キャンセル」
-  ボタンを座標クリックする形に直すこと。1 枚だけ撮り直すなら
-  該当の分岐だけ実行するのが確実
+- **ダイアログは Escape で閉じない** (modal=True のため)。以前は 1 回の
+  実行で全部撮ろうとしてダイアログが被ったまま撮れていたので、
+  ダイアログを開くコマはモードを分けた (上の表)。座標クリックのため、
+  UI の位置が変わったらモードの座標も直すこと
 - 生成物 (`real_*.png`) と `home/` は .gitignore 済み。採用する図だけ
   `manager/readme/src/img/` へコピーする
 
