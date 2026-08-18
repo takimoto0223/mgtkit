@@ -89,7 +89,7 @@ async def run(mode):
         if mode == 'firstrun':
             await shot(pg, 'real_firstrun')
         elif mode == 'beta':
-            await pg.mouse.click(250, 93)
+            await pg.mouse.click(145, 93)
             await pg.wait_for_timeout(7000)
             await shot(pg, 'real_beta')
             # #21 の「フィードバック 2 件」(ロケットが行頭に入って
@@ -111,22 +111,22 @@ async def run(mode):
             await shot(pg, 'real_usage')
             await pg.keyboard.press('Escape')
             await pg.wait_for_timeout(1500)
-            # 提出タブ
-            await pg.mouse.click(118, 93)
+            # 提出タブ (並びは 起動 / β版の確認と承認 / 更新版を提出)
+            await pg.mouse.click(285, 93)
             await pg.wait_for_timeout(2500)
             await shot(pg, 'real_submit')
             # 提出確認ダイアログ (pick_files はハーネスが差し込む)
-            await pg.mouse.click(111, 528)
+            await pg.mouse.click(110, 294)
             await pg.wait_for_timeout(4000)
             await shot(pg, 'real_submit_dialog')
             await pg.keyboard.press('Escape')
             await pg.wait_for_timeout(1500)
             # β版の確認と承認タブ
-            await pg.mouse.click(250, 93)
+            await pg.mouse.click(145, 93)
             await pg.wait_for_timeout(7000)
             await shot(pg, 'real_beta')
             # フィードバック一覧 (#21 の「フィードバック 2 件」)
-            await pg.mouse.click(342, 334)
+            await pg.mouse.click(340, 404)
             await pg.wait_for_timeout(4000)
             await shot(pg, 'real_feedback')
         await browser.close()

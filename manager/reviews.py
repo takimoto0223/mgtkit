@@ -15,10 +15,10 @@ import re
 import threading
 import time
 
-from . import feedback, ghcli, paths, versions
+from . import feedback, ghcli, paths, submit, versions
 from .autofix import AUTOFIX_PREFIX, _summarize_checks
 from .gitcli import ensure_work_repo, run_git
-from .submit import workrepo_dir
+from .submit import user_sections, workrepo_dir
 
 log = logging.getLogger(__name__)
 
@@ -845,33 +845,8 @@ def next_stable_version(config=None):
     return 'v%d.%d' % (major, minor + 1)
 
 
-# PR 本文のうちリリースノートへ転載する節 (claude_helper.generate_pr_body の
-# 様式と対)。「制限事項」は見出しの表記ゆれを許容するため部分一致で拾う
-_NOTES_LIMITS_KEY = '制限事項'
+# 制限事項が実質「なし」のときは節ごと省く (様式は submit 側と共通)
 _NOTES_NO_LIMITS = re.compile(r'^[-*・]?\s*(特に)?(なし|ありません)[。.]?$')
-
-
-def _pr_body_sections(body):
-    """PR 本文を「## 見出し」ごとに分割する。### 以下は本文側に含める.
-
-    「# 提出時の警告」のような # 見出しも区切りとして扱う (転載対象の節に
-    紛れ込ませないため)。戻り値: {見出し: 本文} (出現順)。
-    """
-    sections = {}
-    current = None
-    lines = []
-    for line in (body or '').replace('\r\n', '\n').split('\n'):
-        m = re.match(r'^#{1,2}\s+(.+?)\s*$', line)
-        if m:
-            if current and current not in sections:
-                sections[current] = '\n'.join(lines).strip()
-            current = m.group(1)
-            lines = []
-        elif current is not None:
-            lines.append(line)
-    if current and current not in sections:
-        sections[current] = '\n'.join(lines).strip()
-    return sections
 
 
 def release_notes_from_pr(pr_body, version):
@@ -882,16 +857,13 @@ def release_notes_from_pr(pr_body, version):
     注意・提出時の警告) は載せない。制限事項が「- なし」だけなら節ごと省く。
     「## 更新内容」が見つからなければ None (呼び出し側が定型文へ戻す)。
     """
-    sections = _pr_body_sections(pr_body)
-    content = sections.get('更新内容')
+    content, limits = user_sections(pr_body)
     if not content:
         return None
-    parts = ['# mgtkit %s リリースノート' % version, '', '## 更新内容', '',
-             content]
-    limits = next((v for k, v in sections.items()
-                   if _NOTES_LIMITS_KEY in k), '').strip()
+    parts = ['# mgtkit %s リリースノート' % version, '',
+             '## %s' % submit.UPDATE_KEY, '', content]
     if limits and not _NOTES_NO_LIMITS.match(limits):
-        parts += ['', '## ご利用にあたっての制限事項', '', limits]
+        parts += ['', '## %s' % submit.LIMITS_KEY_FULL, '', limits]
     return '\n'.join(parts)
 
 

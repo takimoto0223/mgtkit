@@ -99,6 +99,196 @@ def _w_norm(s):
     return s.upper()
 
 
+# かな正規化: カタカナ→ひらがな (半角カナは _w_norm 前に NFKC で全角化)
+_KATA2HIRA = {cp: cp - 0x60 for cp in range(0x30A1, 0x30F7)}
+
+# 漢字・別表記の別名 (照合用にひらがな樹種へ寄せる)
+_W_KANJI_ALIASES = (('唐松', 'からまつ'), ('米松', 'べいまつ'),
+                    ('赤松', 'あかまつ'), ('米栂', 'べいつが'),
+                    ('蝦夷', 'えぞ'), ('杉', 'すぎ'),
+                    ('桧', 'ひのき'), ('檜', 'ひのき'))
+
+
+def _w_fold(s):
+    """_w_norm + 半角カナ全角化 + カタカナ→ひらがな + 漢字別名の吸収."""
+    import unicodedata
+    s = unicodedata.normalize('NFKC', str(s))
+    s = _w_norm(s).translate(_KATA2HIRA)
+    for a, b in _W_KANJI_ALIASES:
+        s = s.replace(a, b)
+    return s
+
+
+# 集成材のせん断強度の樹種群 (資料表2.5)。強軸せん断Fsx-x → 樹種。
+# 検出は文字数の長い語から行う (おうしゅうあかまつ⊃あかまつ 等)。
+# 表に該当樹種群の行が無い場合は自動対応しない (誤った強度を防ぐ)
+_GLULAM_FS_GROUPS = (
+    (4.8, ('いたやかえで', 'かば', 'ぶな', 'みずなら', 'けやき',
+           'アピトン')),
+    (4.2, ('たも', 'しおじ', 'にれ')),
+    (3.6, ('ダフリカからまつ', 'からまつ', 'べいまつ', 'ひのき', 'ひば',
+           'あかまつ', 'くろまつ', 'サザンパイン', 'べいひ',
+           'ホワイトサイプレスパイン', '唐松')),
+    (3.3, ('アラスカイエローシーダー', 'ラジアタパイン', 'べいつが',
+           'つが', 'べにまつ')),
+    (3.0, ('おうしゅうあかまつ', 'ロッジポールパイン',
+           'ポンデローサパイン', 'ジャックパイン', 'えぞまつ',
+           'とどまつ', 'べいもみ', 'もみ', 'スプルース', 'ラワン')),
+    (2.7, ('べいすぎ', 'すぎ')),
+)
+
+
+def _glulam_species_fs(folded_name):
+    """折り畳み済み材料名から集成材の樹種群せん断強度を返す (無ければ None).
+
+    長い語から検出する (おうしゅうあかまつ を あかまつ より先に判定)。
+    """
+    terms = []
+    for fs, sps in _GLULAM_FS_GROUPS:
+        for sp in sps:
+            terms.append((len(_w_fold(sp)), _w_fold(sp), fs))
+    for _ln, sp_f, fs in sorted(terms, reverse=True):
+        if sp_f in folded_name:
+            return fs
+    return None
+
+
+def w_glulam_species_missing(material_name):
+    """集成材 (E-Fパターン) で樹種が未指定の材料名なら True.
+
+    樹種未指定の集成材は標準行へ自動対応するが、せん断基準強度は
+    樹種群 (すぎ系3.0 / からまつ・べいまつ系3.6) で異なるため、
+    UIで注意書きを出す判定に使う。
+    """
+    name = _w_norm(material_name)
+    if not re.search(r'E(\d+)-?F(\d+)', name):
+        return False
+    return _glulam_species_fs(_w_fold(material_name)) is None
+
+
+def w_glulam_species_options(material_name):
+    """樹種未指定の集成材向け: 選べる樹種群の選択肢を返す.
+
+    戻り値: [{'label': 'からまつ・べいまつ系', 'w_index': 行}, ...]
+    (W_AL表にその樹種群の行がある等級のみ)。E-Fパターンでなければ空。
+    """
+    name = _w_norm(material_name)
+    mo = re.search(r'E(\d+)-?F(\d+)', name)
+    if not mo:
+        return []
+    base = _w_norm(material_name)
+    out = []
+    for label, probe in (('からまつ・べいまつ系', 'からまつ'),
+                         ('おうしゅうあかまつ系', 'おうしゅうあかまつ'),
+                         ('すぎ系', 'すぎ'),
+                         ('かば・ぶな・けやき系', 'ぶな'),
+                         ('たも・しおじ系', 'たも'),
+                         ('つが・べいつが系', 'つが')):
+        m = w_al_match(probe + base)
+        if m:
+            out.append({'label': label, 'w_index': int(m)})
+    return out
+
+
+_SP_ORDER = ['あかまつ', 'くろまつ', 'べいまつ', 'からまつ',
+             'ダフリカからまつ', 'ダフリカ', 'ひのき', 'ヒノキ', 'ひば',
+             'べいひ', 'つが', 'べいつが', 'もみ', 'えぞまつ', 'とどまつ',
+             'えぞ・とど', 'べにまつ', 'すぎ', 'べいすぎ', 'スプルース',
+             'かし', 'くり', 'なら', 'ぶな', 'けやき']
+
+_GLULAM_GROUP_LABEL = {3.6: 'からまつ・べいまつ系',
+                       3.0: 'おうしゅうあかまつ系', 2.7: 'すぎ系'}
+
+
+def _sp_sort_key(label):
+    """行ラベルの樹種を _SP_ORDER の並びでソートするキー."""
+    lf = _w_fold(label)
+    for k, sp in enumerate(sorted(_SP_ORDER, key=len, reverse=True)):
+        if lf.startswith(_w_fold(sp)):
+            return (_SP_ORDER.index(sp), label)
+    return (len(_SP_ORDER), label)
+
+
+def _grade_sort_key(label):
+    """等級 (E値・F値・甲乙級) のソートキー (強い順)."""
+    mo = re.search(r'E(\d+)(?:-F(\d+))?', _w_norm(label))
+    if mo:
+        return (-int(mo.group(1)), -int(mo.group(2) or 0))
+    return (0, 0)
+
+
+def w_al_menu():
+    """W_AL表を分類・整列した選択メニュー構造を返す (UIプルダウン用).
+
+    戻り値: [{'label': 見出し, 'items': [...]}]
+      items の要素:
+        {'label': 表示名, 'value': 行番号}                # 単一行
+        {'label': 等級, 'sp': {樹種群ラベル: 行番号}}      # 集成材 (二段選択)
+    """
+    W, names = _load_W_AL()
+    muto, visual, machine, ply, other = [], [], [], [], []
+    glulam = {}  # (区分キー) -> {等級: {樹種群: 行}}
+    for i, nm in enumerate(names, 1):
+        n = str(nm).strip()
+        fs = float(W[i - 1][3])
+        if '合板' in n:
+            ply.append((n, i))
+            continue
+        if '集成材' in n:
+            mo = re.search(r'E\d+-?F\d+', _w_norm(n))
+            if mo:
+                if '同一' in n:
+                    lay = re.search(r'(\d)枚', n)
+                    kind = 'uni%s' % (lay.group(1) if lay else '4')
+                else:
+                    kind = 'sym'
+                grade = mo.group(0)
+                grp = _GLULAM_GROUP_LABEL.get(round(fs, 1))
+                if grp is None:
+                    other.append((n, i))
+                    continue
+                glulam.setdefault(kind, {}).setdefault(grade, {})[grp] = i
+                continue
+        if '無等級' in n:
+            muto.append((n, i))
+        elif ('甲' in n) or ('乙' in n):
+            visual.append((n, i))
+        elif re.search(r'E\d+', n) or ('BP' in n):
+            machine.append((n, i))
+        else:
+            other.append((n, i))
+
+    def rows(lst, key=None):
+        return [{'label': n, 'value': i}
+                for n, i in sorted(lst, key=(key or (lambda t: t[0])))]
+
+    def glu(kind, prefix=''):
+        grades = glulam.get(kind, {})
+        return [{'label': prefix + g, 'sp': grades[g]}
+                for g in sorted(grades, key=_grade_sort_key)]
+
+    menu = [
+        {'label': '無等級', 'items': rows(muto,
+                                       lambda t: _sp_sort_key(t[0]))},
+        {'label': '目視等級', 'items': rows(visual,
+                                        lambda t: (_sp_sort_key(t[0])[0],
+                                                   0 if '甲' in t[0] else 1,
+                                                   t[0]))},
+        {'label': '機械等級', 'items': rows(machine,
+                                        lambda t: (_sp_sort_key(t[0])[0],
+                                                   _grade_sort_key(t[0])))},
+        {'label': '集成材 対称異等級', 'items': glu('sym')},
+        {'label': '集成材 同一等級 (4枚以上)',
+         'items': glu('uni4', '同一4枚 ')},
+        {'label': '集成材 同一等級 (3枚)', 'items': glu('uni3', '同一3枚 ')},
+        {'label': '集成材 同一等級 (2枚)', 'items': glu('uni2', '同一2枚 ')},
+        {'label': '構造用合板', 'items': rows(ply)},
+    ]
+    if other:
+        menu.append({'label': 'その他', 'items': rows(other)})
+    return [g for g in menu if g['items']]
+
+
 def w_al_match(material_name):
     """材料名から W_AL 行番号 (1-based) を自動決定する。不能なら 0.
 
@@ -115,7 +305,7 @@ def w_al_match(material_name):
     W_AL, W_name = _load_W_AL()
     names_n = [_w_norm(n) for n in W_name]
 
-    # 1. E***F*** パターン
+    # 1. E***F*** パターン (集成材)
     mo = re.search(r'E(\d+)-?F(\d+)', name)
     if mo:
         key = 'E%s-F%s' % (mo.group(1), mo.group(2))
@@ -129,10 +319,60 @@ def w_al_match(material_name):
                 exact.append(i + 1)
             else:
                 partial.append(i + 1)
-        if len(exact) == 1:
-            return exact[0]
-        if not exact and len(partial) == 1:
-            return partial[0]
+        # 同一等級のマーカー (「同一」「2枚/3枚/4枚」)。
+        # マーカー無しの場合は層数付きラベル行 (新設の同一等級行) を
+        # 候補から外す = 従来の対応 (対称異等級・無印行) を維持する
+        folded = _w_fold(material_name)
+        uni = '同一' in folded
+        layer = None
+        for ly in ('2枚', '3枚', '4枚'):
+            if ly in folded:
+                layer = ly
+                break
+        def _cand_ok(i):
+            lab = _w_fold(W_name[i - 1])
+            if uni:
+                if '同一' not in lab:
+                    return False
+                # 層数無指定は4枚以上 (層数無記載の既存行を含む)
+                want = layer or '4枚'
+                return (want in lab) or ('枚' not in lab and want == '4枚')
+            return '枚' not in lab
+        cands = [i for i in exact + partial if _cand_ok(i)]
+        # 同一等級4枚以上のフォールバック候補 (この等級が同一等級に
+        # しか無い場合や、旧来の無印行に樹種違いが無い場合に使う)
+        fb = [i for i in exact + partial
+              if '同一' in _w_fold(W_name[i - 1])
+              and (('4枚' in _w_fold(W_name[i - 1]))
+                   or ('枚' not in _w_fold(W_name[i - 1])))]
+        if not cands:
+            cands = fb
+        # 樹種の前置き/後置き (例: すぎE105F300, E105F300唐松) があれば
+        # 樹種群のせん断強度 (資料表2.5) が一致する行を選ぶ
+        rest = folded.replace(key.replace('-', ''), '').replace(key, '')
+        want_fs = _glulam_species_fs(rest)
+        if want_fs is not None:
+            hit = [i for i in cands
+                   if abs(float(W_AL[i - 1][3]) - want_fs) < 1e-9]
+            if not hit and not uni:
+                hit = [i for i in fb
+                       if abs(float(W_AL[i - 1][3]) - want_fs) < 1e-9]
+            if len(hit) == 1:
+                return hit[0]
+            if len(hit) > 1:
+                # ラベルに樹種語が明記された行を優先 (例: 唐松)
+                for i in hit:
+                    lf = _w_fold(W_name[i - 1]).replace(key, '')
+                    if _glulam_species_fs(lf) == want_fs:
+                        return i
+                return hit[0]
+            return 0  # 該当樹種群の行が無い → UIで手動選択
+        exact2 = [i for i in exact if _cand_ok(i)]
+        partial2 = [i for i in partial if _cand_ok(i)]
+        if len(exact2) == 1:
+            return exact2[0]
+        if not exact2 and len(partial2) == 1:
+            return partial2[0]
         return 0
 
     # 2. 構造用合板
@@ -143,36 +383,53 @@ def w_al_match(material_name):
             return names_n.index(_w_norm('構造用合板２級')) + 1
         return 0
 
-    # 3. 樹種名 + 等級
-    species = ['べいまつ', 'からまつ', 'すぎ', 'あかまつ', 'ダフリカ',
-               'ひば', 'ひのき', 'べいつが', 'えぞ・とど', 'えぞとど',
-               'ヒノキ', '同一等級集成材', '対称異等級集成材']
+    # 3. 樹種名 + 等級 (かな種別・主要漢字は _w_fold で同一視)
+    name_f = _w_fold(material_name)
+    names_f = [_w_fold(n) for n in W_name]
+    species = ['べいまつ', 'からまつ', 'すぎ', 'あかまつ', 'ダフリカからまつ',
+               'ダフリカ', 'ひば', 'ひのき', 'べいつが', 'えぞ・とど',
+               'えぞとど', 'えぞまつ', 'とどまつ', 'ヒノキ', 'くろまつ',
+               'べいひ', 'つが', 'もみ', 'べにまつ', 'べいすぎ',
+               'スプルース', 'かし', 'くり', 'なら', 'ぶな', 'けやき',
+               '同一等級集成材', '対称異等級集成材']
     grades = ['無等級(並列使用)', '無等級', '甲1級', '甲2級', '甲3級',
               '乙1級', '乙2級', '乙3級',
               'E50', 'E70', 'E90', 'E110', 'E130', 'E150', 'BP材']
     sp = None
     for s in sorted(species, key=len, reverse=True):
-        if _w_norm(s) in name:
+        if _w_fold(s) in name_f:
             sp = 'えぞ・とど' if s == 'えぞとど' else s
             break
     gr = None
     for g in grades:
-        if _w_norm(g) in name:
+        if _w_fold(g) in name_f:
             gr = g
             break
     if sp is None:
         return 0
-    cand = []
-    for i, n in enumerate(names_n):
-        if not n.startswith(_w_norm(sp)):
-            continue
-        if gr is None:
-            cand.append(i + 1)
-        elif _w_norm(gr) in n:
-            # 無等級 は 無等級(並列使用) にも部分一致するため除外判定
-            if (gr == '無等級' and '並列' in n):
+
+    def _collect(sp_key):
+        out = []
+        for i, n in enumerate(names_f):
+            if not n.startswith(_w_fold(sp_key)):
                 continue
-            cand.append(i + 1)
+            if gr is None:
+                out.append(i + 1)
+            elif _w_fold(gr) in n:
+                # 無等級 は 無等級(並列使用) にも部分一致するため除外判定
+                if (gr == '無等級' and '並列' in n):
+                    continue
+                out.append(i + 1)
+        return out
+
+    cand = _collect(sp)
+    if not cand:
+        # 表の行が別名で登録されている場合のフォールバック
+        # (目視等級: ダフリカからまつ→ダフリカ、えぞまつ/とどまつ→えぞ・とど)
+        alias = {'ダフリカからまつ': 'ダフリカ',
+                 'えぞまつ': 'えぞ・とど', 'とどまつ': 'えぞ・とど'}.get(sp)
+        if alias:
+            cand = _collect(alias)
     if len(cand) == 1:
         return cand[0]
     return 0
