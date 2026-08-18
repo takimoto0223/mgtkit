@@ -219,6 +219,14 @@ def _walk_controls(control, out):
     return out
 
 
+def _dialog_button(dialog, label):
+    """ダイアログの操作ボタンを名前で取り出す."""
+    for c in dialog.actions or []:
+        if getattr(c, 'content', None) == label:
+            return c
+    raise AssertionError('「%s」ボタンが見つかりません' % label)
+
+
 def _launch_button(page):
     for c in _walk_controls(page.added[1], []):
         if getattr(c, 'content', None) == '起動' and getattr(c, 'on_click',
@@ -294,13 +302,17 @@ def test_launch_after_an_update_tells_where_the_new_version_landed(
     before = len(page.dialogs)            # 初回登録ダイアログの分
 
     _launch_button(page).on_click(None)
-    assert launched                       # 取り込みの通知後にアプリが開く
     assert len(page.dialogs) == before + 1
+    assert not launched                   # 読み終えるまでブラウザは開かない
     told = ' '.join(_walk_texts(page.dialogs[-1], []))
     assert 'ダウンロード' in told
     assert 'v1.2' in told
     assert paths.app_dir(paths.stable_dir(paths.load_config())) in told
 
-    page.pop_dialog()
+    _dialog_button(page.dialogs[-1], 'アプリを開く').on_click(None)
+    assert launched                       # 読み終えてから開く
+    assert len(page.dialogs) == before     # 閉じてから札を下ろす
+
     _launch_button(page).on_click(None)
     assert len(page.dialogs) == before     # 同じ版で二度は出さない
+    assert len(launched) == 2
