@@ -24,11 +24,16 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: mgtkit/requirements-dev.txt
+          cache-dependency-path: |
+            mgtkit/requirements-dev.txt
+            mgtkit/manager/requirements.txt
 
+      # アプリ本体の依存 + アプリマネージャーの依存 (flet)。マネージャーは
+      # 図の描画 (historyview) を座標で検査するテストがあり、flet が無いと
+      # そのテストモジュールごと収集できない
       - name: 依存インストール
         working-directory: mgtkit
-        run: pip install -r requirements-dev.txt
+        run: pip install -r requirements-dev.txt -r manager/requirements.txt
 
       # 日本語フォント (fonts-noto-cjk) は Phase 1 では不要。
       # 描画内容を検証する画像回帰テスト導入時 (Phase 2 以降) に追加を検討:
