@@ -285,7 +285,12 @@ query($owner: String!, $name: String!, $submissions: String!) {
     releases(first: 30, orderBy: {field: CREATED_AT, direction: DESC}) {
       nodes {
         tagName name isPrerelease isDraft description publishedAt
-        tagCommit { oid }
+        tagCommit {
+          oid
+          associatedPullRequests(first: 5) {
+            nodes { number headRefName }
+          }
+        }
         releaseAssets(first: 10) { nodes { name downloadUrl } }
       }
     }
@@ -426,9 +431,26 @@ def _pr_from_graphql(node):
     }
 
 
+def _submission_pr_of_commit(commit):
+    """コミットに紐づく提出 (feature/ の PR) の番号。無ければ 0.
+
+    正式版のタグはその版になった提出の取り込みコミットを指すので、
+    ここから「どの提出がどの版になったか」が事実として引ける。
+    管理者自身の PR (claude/* など) は提出ではないので数えない
+    (初回配布の版がそれで埋まってしまうため)。
+    """
+    nodes = ((commit or {}).get('associatedPullRequests') or {}) \
+        .get('nodes') or []
+    for pr in nodes:
+        if _is_submission(pr):
+            return pr.get('number') or 0
+    return 0
+
+
 def _release_from_graphql(node):
     """GraphQL の Release ノードを ghcli.fetch_releases と同じ形に変換."""
     assets = (node.get('releaseAssets') or {}).get('nodes') or []
+    commit = node.get('tagCommit') or {}
     return {
         'tag': node.get('tagName') or '',
         'name': node.get('name') or node.get('tagName') or '',
@@ -436,7 +458,8 @@ def _release_from_graphql(node):
         'notes': node.get('description') or '',
         'published_at': (node.get('publishedAt') or '')[:10],
         'published_at_full': node.get('publishedAt') or '',
-        'tag_sha': (node.get('tagCommit') or {}).get('oid') or '',
+        'tag_sha': commit.get('oid') or '',
+        'pr_number': _submission_pr_of_commit(commit),
         'assets': [{'name': a.get('name'), 'url': a.get('downloadUrl')}
                    for a in assets],
     }

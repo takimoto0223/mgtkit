@@ -8,10 +8,12 @@
 - 点線の帯 = まだ確認中 (きょうの線まで)。同じ時期の帯は上下レーンに分ける
 
 データの対応付け:
-- 正式版 (prerelease でない release) と取り込み済みの提出 (merged PR) は
-  「公開日以前で最も新しい取り込み」を新しい順に貪欲に対応付ける
-  (マネージャーの運用では取り込み → 数分でリリースなので日付で安定する)。
-  対応が付かない最古の版は「初回配布」扱い
+- 正式版 (prerelease でない release) と取り込み済みの提出 (merged PR) は、
+  その版のタグが指すコミットに紐づく提出 (release['pr_number']) で
+  対応付ける。これは GitHub 側の事実。引けなかった版だけ
+  「公開日以前で最も新しい取り込み」で新しい順に貪欲に対応付ける
+  (取り込み → 数分でリリースという運用の前提つき)。
+  どちらでも対応が付かない最古の版は「初回配布」扱い
 - 帯の基点 (どの版から作ったか) は、提出時に記録された版
   (提出者がマネージャーで取得した版。配布 ZIP の version.json 由来で
   PR 本文に残る)。記録が無い古い提出だけ、分岐点コミット → 提出日時、
@@ -96,14 +98,25 @@ def build_timeline(releases, merged, pending, today=None):
         """
         return item.get(key + '_full') or item.get(key) or ''
 
-    # 新しい順に「公開日時以前で最も新しい取り込み」を対応付ける
-    i = len(feats) - 1
+    # 1) タグのコミットに紐づく提出 (事実)。引けた版はここで確定する
+    by_number = {m['number']: m for m in feats}
+    for s in stables:
+        pr = by_number.get(s['release'].get('pr_number'))
+        if pr is not None:
+            s['pr'] = pr
+    # 2) 残り (提出を伴わない版・古い取得経路) だけ日時で貪欲に対応付ける。
+    #    確定済みの提出は候補から外す (使い回して 1 つずつずれるのを防ぐ)
+    taken = {s['pr']['number'] for s in stables if s['pr']}
+    rest = [m for m in feats if m['number'] not in taken]
+    i = len(rest) - 1
     for s in reversed(stables):
+        if s['pr'] is not None:
+            continue
         pub = _when(s['release'], 'published_at')
-        while i >= 0 and _when(feats[i], 'merged_at')[:len(pub)] > pub:
+        while i >= 0 and _when(rest[i], 'merged_at')[:len(pub)] > pub:
             i -= 1
         if i >= 0:
-            s['pr'] = feats[i]
+            s['pr'] = rest[i]
             i -= 1
 
     chips = []

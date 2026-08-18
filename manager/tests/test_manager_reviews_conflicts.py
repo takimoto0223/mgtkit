@@ -359,7 +359,13 @@ _GRAPHQL_SNAPSHOT = {
                  'isPrerelease': True, 'isDraft': False,
                  'description': '提出 #33 の検証通過版です。',
                  'publishedAt': '2026-08-05T00:00:00Z',
-                 'tagCommit': {'oid': 'tagsha-beta1'},
+                 'tagCommit': {'oid': 'tagsha-beta1',
+                               'associatedPullRequests': {'nodes': [
+                                   {'number': 30,
+                                    'headRefName': 'claude/app-manager-y'},
+                                   {'number': 29,
+                                    'headRefName':
+                                        'feature/yamada-20260801-1'}]}},
                  'releaseAssets': {'nodes': [
                      {'name': 'mgtkit.zip', 'downloadUrl': 'http://x/z'}]}},
                 {'tagName': 'v1.0', 'name': 'v1.0', 'isPrerelease': False,
@@ -427,6 +433,9 @@ class TestFetchSnapshot:
              'published_at': '2026-08-05',
              'published_at_full': '2026-08-05T00:00:00Z',
              'tag_sha': 'tagsha-beta1',
+             # タグのコミットに紐づく「提出」の番号 (管理者 PR #30 は
+             # 提出ではないので数えず、feature/ の #29 を採る)
+             'pr_number': 29,
              'assets': [{'name': 'mgtkit.zip', 'url': 'http://x/z'}]}]
         # 済み提出は feature/ ブランチのみ・図に必要な要約だけ。
         # 直近の取り込み (#29) と検索で拾った古い提出 (#21) の両方が入り、

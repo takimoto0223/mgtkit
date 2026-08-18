@@ -961,7 +961,7 @@ def main(page: ft.Page):
         """図の見た目に効く部分の指紋 (裏の再取得で変わったときだけ
         開き直すための比較キー)."""
         rel = [(r.get('tag'), r.get('published_at_full'),
-                r.get('published_at'), r.get('tag_sha'),
+                r.get('published_at'), r.get('tag_sha'), r.get('pr_number'),
                 bool(r.get('prerelease')), r.get('notes'))
                for r in (data.get('releases') or [])]
         pend = [(p.get('number'), p.get('fork_sha'),

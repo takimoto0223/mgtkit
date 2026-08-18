@@ -51,6 +51,55 @@ class TestBuildTimeline:
         assert stables[0]['pr'] is None
         assert [s['pr']['number'] for s in stables[1:]] == [27, 31, 35]
 
+    def test_tag_commit_pairing_is_used_when_present(self):
+        """タグのコミットに紐づく提出があれば、日時ではなくそれで対応付ける."""
+        rel = [dict(_rel('v1.2', '2026-08-18'), pr_number=83),
+               dict(_rel('v1.1', '2026-08-14'), pr_number=31)]
+        mg = [_merged(31, 'fujitaka', '2026-08-07', '2026-08-14'),
+              _merged(83, 'tomiriri', '2026-08-14', '2026-08-18')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 18))
+        by_tag = {s['tag']: s for s in tl['stables']}
+        assert by_tag['v1.1']['pr']['number'] == 31
+        assert by_tag['v1.2']['pr']['number'] == 83
+
+    def test_release_without_submission_does_not_shift_the_rest(self):
+        """提出を伴わない版 (管理者が手で出した版) が混ざっても、
+        他の版の提出者がずれない.
+
+        日時の貪欲マッチだけだと 1 件のずれが後続すべてに波及し、
+        全部の版が別人の名前になる (実機で起きうる並び)。
+        """
+        rel = [dict(_rel('v1.3', '2026-08-20')),            # 手で出した版
+               dict(_rel('v1.2', '2026-08-18'), pr_number=83),
+               dict(_rel('v1.1', '2026-08-14'), pr_number=31),
+               dict(_rel('v1.0', '2026-08-06'))]            # 初回配布
+        mg = [_merged(31, 'fujitaka', '2026-08-07', '2026-08-14'),
+              _merged(83, 'tomiriri', '2026-08-14', '2026-08-18')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 21))
+        got = {s['tag']: (s['pr'] or {}).get('number')
+               for s in tl['stables']}
+        assert got == {'v1.0': None, 'v1.1': 31, 'v1.2': 83, 'v1.3': None}
+
+    def test_falls_back_to_dates_without_tag_pairing(self):
+        # 古い取得経路 (pr_number が無い) では従来どおり日時で対応付ける
+        rel = [_rel('v1.2', '2026-08-18'), _rel('v1.1', '2026-08-14')]
+        mg = [_merged(31, 'fujitaka', '2026-08-07', '2026-08-14'),
+              _merged(83, 'tomiriri', '2026-08-14', '2026-08-18')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 18))
+        by_tag = {s['tag']: s for s in tl['stables']}
+        assert by_tag['v1.1']['pr']['number'] == 31
+        assert by_tag['v1.2']['pr']['number'] == 83
+
+    def test_same_submission_is_not_used_for_two_versions(self):
+        # 事実で確定した提出は、日時の埋め合わせの候補から外す
+        rel = [dict(_rel('v1.2', '2026-08-18'), pr_number=83),
+               dict(_rel('v1.1', '2026-08-17'))]
+        mg = [_merged(83, 'tomiriri', '2026-08-14', '2026-08-16')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 18))
+        got = {s['tag']: (s['pr'] or {}).get('number')
+               for s in tl['stables']}
+        assert got == {'v1.1': None, 'v1.2': 83}
+
     def test_chip_base_and_target(self):
         tl = history.build_timeline(RELEASES, MERGED, PENDING, today=TODAY)
         by_num = {c['number']: c for c in tl['chips']}
