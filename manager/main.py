@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 
 NAVY = '#2b4a6f'
 AMBER = '#b45309'
+RED = '#b3261e'      # 入力の誤り (Material のエラー色。白地に 6.5:1)
 
 # ---- 「β版の確認と承認」一覧の寸法 -----------------------------------------
 #
@@ -1118,8 +1119,9 @@ def main(page: ft.Page):
     # ラベルは TextField に持たせない (未フォーカス時に hint が隠れるため)。
     # hint は薄いグレーでも本文 (ほぼ黒) と十分差がつく #6b7280 (4.8:1)
     _t4_hint = ft.TextStyle(color='#6b7280', size=13)
-    _t4_box = dict(border_color='#9ca3af', focused_border_color=NAVY,
-                   width=600, multiline=True)
+    # 枠は #6b7280 (白地に 4.8:1)。#9ca3af では白カードの上で埋もれる
+    _t4_box = dict(border_color='#6b7280', focused_border_color=NAVY,
+                   width=500, multiline=True)
     t4_commit_msg = ft.TextField(
         hint_text='例:\n・二丁溝形鋼(2C)の断面算定に対応\n'
                   '・計算書の文章出力を改善',
@@ -1131,6 +1133,9 @@ def main(page: ft.Page):
         hint_style=_t4_hint, hint_max_lines=2,
         min_lines=2, max_lines=4, **_t4_box)
 
+    # 空欄のまま提出しようとしたときに、欄の直下に出す理由
+    t4_update_err = ft.Text('', size=12, color=RED, visible=False)
+
     def _t4_field(caption, note, field):
         """様式の 1 項目 (項目名 + 補足 + 入力欄)."""
         return ft.Column([
@@ -1140,12 +1145,78 @@ def main(page: ft.Page):
                    spacing=8, vertical_alignment=ft.CrossAxisAlignment.END),
             field,
         ], spacing=6)
+
+    def _t4_clear_error(_=None):
+        """文字が入った瞬間に赤枠と理由を消す (その場で・通信なし)."""
+        if t4_update_err.visible:
+            t4_update_err.visible = False
+            t4_commit_msg.border_color = '#6b7280'
+            t4_commit_msg.focused_border_color = NAVY
+            page.update()
+    t4_commit_msg.on_change = _t4_clear_error
     t4_submit_btn = ft.FilledButton('ZIP を選んで提出', icon=ft.Icons.UPLOAD,
                                     bgcolor=NAVY, color='#ffffff')
 
     def _submit_progress(msg):
         t4_status.value = msg
         page.update()
+
+    def _review_ai_text(update, limits):
+        """自動作成の結果を提出者に見せて直させる (裏の処理から呼ばれる).
+
+        この 2 項目はそのまま正式版のリリースノートになるため、本人が
+        一度も読まないまま全員に公開されないようにする (管理者指示
+        2026-08)。戻り値: (更新内容, 制限事項) / 取り消しなら None。
+        呼び出し元は run_bg の中なので、答えが出るまでここで待つ。
+        """
+        done = threading.Event()
+        answer = {}
+        # 行数の上限は既定ウィンドウ (760x640) に収まる範囲で決める
+        # (超える分は欄の中がスクロールする)
+        upd = ft.TextField(value=update, min_lines=4, max_lines=7,
+                           multiline=True, width=500, border_color='#6b7280',
+                           focused_border_color=NAVY)
+        lim = ft.TextField(value=limits, min_lines=2, max_lines=4,
+                           multiline=True, width=500, border_color='#6b7280',
+                           focused_border_color=NAVY)
+
+        def finish(value):
+            answer['v'] = value
+            page.pop_dialog()
+            t4_status.value = ('提出しています...' if value else
+                               '提出を取り消しています...')
+            page.update()
+            done.set()
+        dlg = ft.AlertDialog(
+            modal=True, title=ft.Text('この内容で提出します'),
+            content=ft.Column([
+                ft.Text('Claude が下書きしました。おかしなところがあれば'
+                        '直してください。この文章は、正式版になったときの'
+                        '「更新内容」としてそのまま全員に表示されます。',
+                        size=12.5, color='#4b5563'),
+                ft.Text('更新内容', size=13, weight=ft.FontWeight.BOLD,
+                        color='#374151'),
+                upd,
+                ft.Text('ご利用にあたっての制限事項', size=13,
+                        weight=ft.FontWeight.BOLD, color='#374151'),
+                lim,
+            ], tight=True, width=520, spacing=5),
+            actions=[
+                ft.TextButton('取り消す', on_click=lambda _: finish(None)),
+                ft.FilledButton('この内容で提出する', bgcolor=NAVY,
+                                color='#ffffff',
+                                on_click=lambda _: finish((upd.value,
+                                                           lim.value)))])
+        try:
+            page.show_dialog(dlg)
+            page.update()
+        except Exception:
+            # 確認画面を出せなかったら提出しない。本人が読んでいない文章を
+            # 黙って全員に公開するより、取り消して出し直してもらう
+            log.exception('自動作成の確認ダイアログを表示できませんでした')
+            return None
+        done.wait()
+        return answer.get('v')
 
     def _do_finalize(prep, deletions, existing_branch=None, use_ai=False):
         # ダイアログを閉じた直後に反応を見せる (裏の処理は数十秒かかる)
@@ -1158,7 +1229,8 @@ def main(page: ft.Page):
                     prep, deletions, t4_commit_msg.value or '',
                     config, on_progress=_submit_progress,
                     existing_branch=existing_branch,
-                    limitations=t4_limits.value or '', use_ai=use_ai)
+                    limitations=t4_limits.value or '', use_ai=use_ai,
+                    on_review=_review_ai_text if use_ai else None)
                 t4_status.value = ''
                 t4_result.value = (
                     '提出しました。検証を通過するとβ版として発行され、'
@@ -1200,36 +1272,60 @@ def main(page: ft.Page):
                 % (p['number'], p['title'][:30])) for p in my_prs]
             dest_dd = ft.Dropdown(label='提出先', options=options, value='')
             items.append(dest_dd)
-        # 更新内容・制限事項とも空欄なら、説明の作り方を本人に選ばせる
-        # (API 使用料がかかる自動生成を黙って実行しない)。キー未登録なら
-        # 自動生成は使えないため選択肢を出さず空欄のまま提出する
-        gen_rg = None
-        blank = (not (t4_commit_msg.value or '').strip()
-                 and not (t4_limits.value or '').strip())
-        if blank and settings.api_key(config):
-            # 既定は自動作成 (入力欄の案内「空欄の場合は AI で自動記述
-            # します。(推奨)」と同じ扱いにそろえる)。ここで選び直せるので
-            # 使用料のかかる処理を黙って実行することにはならない
-            gen_rg = ft.RadioGroup(value='ai', content=ft.Column([
-                ft.Radio(value='ai',
-                         label='Claude で自動作成する (推奨。'
-                               'API 使用料が数十円かかります)'),
-                ft.Radio(value='blank',
-                         label='空欄のまま提出する (無料)'),
+        # 更新内容の書き方をここで選ばせる (管理者指示 2026-08。提出タブに
+        # 入力欄は置かない)。キー未登録の PC では自動作成を選べないので
+        # 灰色にして理由を出し、手入力だけにする。
+        # 記入欄 (t4_commit_msg / t4_limits) はタブから借りて使い回す:
+        # 作り直さないので、取り消しても選び直しても書きかけが消えない
+        has_key = bool(settings.api_key(config))
+        t4_update_err.visible = False
+        t4_commit_msg.border_color = '#6b7280'
+        t4_commit_msg.focused_border_color = NAVY
+        manual_box = ft.Container(
+            visible=not has_key, margin=ft.Margin(28, 2, 0, 0),
+            content=ft.Column([
+                ft.Text('更新内容', size=13, weight=ft.FontWeight.BOLD,
+                        color='#374151'),
+                t4_commit_msg,
+                t4_update_err,
+                ft.Row([ft.Text('ご利用にあたっての制限事項', size=13,
+                                weight=ft.FontWeight.BOLD, color='#374151'),
+                        ft.Text('無ければ空欄のままで構いません', size=11.5,
+                                color='#6b7280')],
+                       spacing=8,
+                       vertical_alignment=ft.CrossAxisAlignment.END),
+                t4_limits,
+            ], spacing=5))
+
+        def on_gen_change(_):
+            # 手元だけで完結する切り替え。押した場所のすぐ下が変わる
+            manual_box.visible = (gen_rg.value == 'manual')
+            page.update()
+        gen_rg = ft.RadioGroup(
+            value='ai' if has_key else 'manual', on_change=on_gen_change,
+            content=ft.Column([
+                ft.Radio(value='ai', disabled=not has_key,
+                         label='Claude で自動作成する (推奨)　'
+                               'ご自身の API キーで 1 回数十円'),
+            ] + ([] if has_key else [
+                ft.Text('この PC では使えません '
+                        '(設定タブで Claude の API キーを登録すると'
+                        '選べます)。', size=12, color='#6b7280'),
+            ]) + [
+                ft.Radio(value='manual', label='自分で入力する　無料'),
+                manual_box,
             ], spacing=0))
-            items.append(ft.Container(
-                bgcolor='#ffffff', border_radius=8, padding=12,
-                content=ft.Column([
-                    ft.Text('「更新内容」と「制限事項」が空欄です。'
-                            'どうしますか?',
-                            size=13, weight=ft.FontWeight.BOLD),
-                    gen_rg,
-                    ft.Text('自動作成では、提出する変更内容から更新内容と'
-                            '制限事項がまとめられます。空欄のまま提出すると、'
-                            '正式版になったときの更新内容の表示も空欄に'
-                            'なります。',
-                            size=12, color='#4b5563'),
-                ], spacing=6)))
+        items.append(ft.Container(
+            bgcolor='#ffffff', border_radius=8, padding=12,
+            border=ft.Border.all(1, '#e5e7eb'),
+            content=ft.Column([
+                ft.Text('更新内容は誰が書きますか?', size=13,
+                        weight=ft.FontWeight.BOLD),
+                ft.Text('ここで書かれた内容は、正式版になったときの'
+                        '「更新内容」としてそのまま全員に表示されます。',
+                        size=12, color='#4b5563'),
+                gen_rg,
+            ], spacing=4)))
         if del_checks:
             items.append(ft.Text(
                 '基点にあったのに ZIP に無いファイルがあります。'
@@ -1258,16 +1354,32 @@ def main(page: ft.Page):
             run_bg(tidy)
 
         def proceed(_):
+            use_ai = (gen_rg.value == 'ai')
+            if not use_ai and not (t4_commit_msg.value or '').strip():
+                # 灰色のボタンにはせず、押した瞬間に理由を欄の直下へ出す
+                t4_update_err.value = ('更新内容を入力してください '
+                                       '(空欄だと正式版の更新内容も'
+                                       '空欄になります)。')
+                t4_update_err.visible = True
+                t4_commit_msg.border_color = RED
+                t4_commit_msg.focused_border_color = RED
+                page.update()
+                t4_commit_msg.focus()
+                return
             page.pop_dialog()
             deletions = [c.label for c in del_checks if c.value]
             existing = (dest_dd.value or None) if dest_dd else None
-            use_ai = bool(gen_rg is not None and gen_rg.value == 'ai')
             _do_finalize(prep, deletions, existing, use_ai)
 
+        # 確認事項が増える提出 (提出先の選択・削除ファイル・警告) だけ
+        # スクロールにする。常にスクロールにすると、短い既定の状態でも
+        # ダイアログが画面いっぱいに伸びて中身が空白だらけに見えるため
+        long_form = bool(my_prs or del_checks or warnings)
         page.show_dialog(ft.AlertDialog(
             modal=True, title=ft.Text('提出内容の確認'),
-            content=ft.Column(items, tight=True, width=560,
-                              scroll=ft.ScrollMode.AUTO),
+            content=ft.Column(
+                items, tight=True, width=560,
+                scroll=ft.ScrollMode.AUTO if long_form else None),
             actions=[ft.TextButton('キャンセル', on_click=close),
                      ft.FilledButton('提出する', on_click=proceed,
                                      bgcolor=NAVY, color='#ffffff')]))
@@ -1404,11 +1516,8 @@ def main(page: ft.Page):
                 '計算結果 (mgtkit_out)・PDF や実行ファイル (.bat など) '
                 'コード以外のファイルは自動で除外されます。',
                 size=12, color='#555555'),
-        _t4_field('更新内容', '空欄の場合は AI で自動記述します。(推奨)',
-                  t4_commit_msg),
-        _t4_field('ご利用にあたっての制限事項',
-                  '使えない条件など。空欄の場合は AI で自動記述します。'
-                  '(推奨)', t4_limits),
+        ft.Text('更新内容の書き方は、ZIP を選んだあとに選べます。',
+                size=12, color='#555555'),
         ft.Container(t4_submit_btn, margin=ft.Margin(0, 16, 0, 0)),
         t4_status,
         t4_result,
