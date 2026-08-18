@@ -1187,7 +1187,7 @@ def main(page: ft.Page):
                                '提出を取り消しています...')
             page.update()
             done.set()
-        page.show_dialog(ft.AlertDialog(
+        dlg = ft.AlertDialog(
             modal=True, title=ft.Text('この内容で提出します'),
             content=ft.Column([
                 ft.Text('Claude が下書きしました。おかしなところがあれば'
@@ -1206,8 +1206,15 @@ def main(page: ft.Page):
                 ft.FilledButton('この内容で提出する', bgcolor=NAVY,
                                 color='#ffffff',
                                 on_click=lambda _: finish((upd.value,
-                                                           lim.value)))]))
-        page.update()
+                                                           lim.value)))])
+        try:
+            page.show_dialog(dlg)
+            page.update()
+        except Exception:
+            # 確認画面を出せなかったら提出しない。本人が読んでいない文章を
+            # 黙って全員に公開するより、取り消して出し直してもらう
+            log.exception('自動作成の確認ダイアログを表示できませんでした')
+            return None
         done.wait()
         return answer.get('v')
 
