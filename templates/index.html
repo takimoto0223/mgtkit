@@ -147,15 +147,18 @@
     <input type="text" id="mgt_path" class="path"
            placeholder="例: C:\work\model.mgt (フルパス)">
     <button class="sub" onclick="loadMgt()">読み込み</button>
-    <span class="hint">またはアップロード(ここへのドラッグ＆ドロップ可):</span>
-    <input type="file" id="mgt_upload" style="font-size:12px"
-           onchange="uploadTo(this,'mgt_path',loadMgt)">
-    <button class="sub open-folder" data-dir=""
-            title="アップロードファイルの保存先 (Temp&#92;mgtkit_uploads) を開く">保存先フォルダを開く</button>
+    <button class="sub" onclick="pickFile('mgt_path',loadMgt)">ファイルの選択</button>
+    <button class="sub" onclick="pickCaseDir()">フォルダから一括セット</button>
+    <span class="hint">「一括セット」はフォルダ内の mgt と応力ファイル
+      (beam/truss/plate/wall_stress・reaction・deformation) を自動検出して
+      全欄にセットします。選択したファイルは実パスのまま使われ、
+      一時フォルダへのコピーは行いません (ドラッグ＆ドロップは従来通り
+      アップロード扱い)</span>
   </div>
   <div class="row">出力先フォルダ (任意):
     <input type="text" id="mgt_out_base" class="path"
            placeholder="例: C:\work\壁式事例2 (空欄=mgtと同じフォルダ)">
+    <button class="sub" onclick="pickDir('mgt_out_base')">フォルダの選択</button>
     <span class="hint">生成物は &lt;出力先&gt;\mgtkit_out\ のタブ別フォルダ
       (model / stress / ratio_tex / ratio_plot / tex / dxf / qr) に保存されます。
       mgtを「アップロード」で読み込んだ場合はmgtが一時フォルダ(AppData)扱いに
@@ -270,20 +273,17 @@
     <div class="row">beam_stress:
       <input type="text" id="beam_stress_path" class="path"
              placeholder="例: C:\work\beam_stress.txt">
-      <input type="file" style="font-size:12px"
-             onchange="uploadTo(this,'beam_stress_path',loadCases)">
+      <button class="sub" onclick="pickFile('beam_stress_path',loadCases)">ファイルの選択</button>
     </div>
     <div class="row">truss_stress (任意):
       <input type="text" id="truss_stress_path" class="path"
              placeholder="無い場合は空欄">
-      <input type="file" style="font-size:12px"
-             onchange="uploadTo(this,'truss_stress_path')">
+      <button class="sub" onclick="pickFile('truss_stress_path')">ファイルの選択</button>
     </div>
     <div class="row">plate_stress (任意):
       <input type="text" id="plate_stress_path" class="path"
              placeholder="無い場合は空欄">
-      <input type="file" style="font-size:12px"
-             onchange="uploadTo(this,'plate_stress_path')">
+      <button class="sub" onclick="pickFile('plate_stress_path')">ファイルの選択</button>
       <span class="hint">板要素 (面材壁) の面内せん断Fxyの最大値を
         要素中心に注記します</span>
     </div>
@@ -387,21 +387,21 @@
     <legend>入力 (MATLAB版 Midas_QR: 反力図・柱脚データ・せん断力分担図・層間変形角・偏心率)</legend>
     <div class="frow"><span class="flabel w2">beam_stress</span>
       <input type="text" id="q_beam_stress_path" class="path">
-      <input type="file" onchange="uploadTo(this,'q_beam_stress_path')">
+      <button class="sub" onclick="pickFile('q_beam_stress_path')">ファイルの選択</button>
       <span class="hint">空欄なら応力図タブの値を使用</span>
     </div>
     <div class="frow"><span class="flabel w2">truss_stress (任意)</span>
       <input type="text" id="q_truss_stress_path" class="path">
-      <input type="file" onchange="uploadTo(this,'q_truss_stress_path')">
+      <button class="sub" onclick="pickFile('q_truss_stress_path')">ファイルの選択</button>
     </div>
     <div class="frow"><span class="flabel w2">wall_stress (任意)</span>
       <input type="text" id="q_wall_stress_path" class="path">
-      <input type="file" onchange="uploadTo(this,'q_wall_stress_path')">
+      <button class="sub" onclick="pickFile('q_wall_stress_path')">ファイルの選択</button>
       <span class="hint">壁要素がある場合のせん断分担・偏心率に使用</span>
     </div>
     <div class="frow"><span class="flabel w2">plate_stress (任意)</span>
       <input type="text" id="q_plate_stress_path" class="path">
-      <input type="file" onchange="uploadTo(this,'q_plate_stress_path')">
+      <button class="sub" onclick="pickFile('q_plate_stress_path')">ファイルの選択</button>
       <label class="inline">割増係数
         <input type="number" id="q_plate_up" value="1.0" step="0.1"
           style="width:70px"></label>
@@ -409,12 +409,12 @@
     </div>
     <div class="frow"><span class="flabel w2">reaction (反力図・柱脚)</span>
       <input type="text" id="q_reaction_path" class="path">
-      <input type="file" onchange="uploadTo(this,'q_reaction_path')">
+      <button class="sub" onclick="pickFile('q_reaction_path')">ファイルの選択</button>
       <span class="hint">8列 [節点, ケース, FX, FY, FZ, MX, MY, MZ]</span>
     </div>
     <div class="frow"><span class="flabel w2">deformation (変形角・偏心率)</span>
       <input type="text" id="q_deformation_path" class="path">
-      <input type="file" onchange="uploadTo(this,'q_deformation_path')">
+      <button class="sub" onclick="pickFile('q_deformation_path')">ファイルの選択</button>
       <span class="hint">5列 [節点, ケース, dx, dy, dz]</span>
     </div>
     <div class="frow"><span class="flabel w2"></span>
@@ -590,16 +590,16 @@
     <legend>入力 (S造・木造・RC・SRC断面検定)</legend>
     <div class="frow"><span class="flabel">beam_stress</span>
       <input type="text" id="c_beam_stress_path" class="path">
-      <input type="file" onchange="uploadTo(this,'c_beam_stress_path')">
+      <button class="sub" onclick="pickFile('c_beam_stress_path')">ファイルの選択</button>
       <span class="hint">空欄なら応力図タブの値を使用</span>
     </div>
     <div class="frow"><span class="flabel">truss_stress (任意)</span>
       <input type="text" id="c_truss_stress_path" class="path">
-      <input type="file" onchange="uploadTo(this,'c_truss_stress_path')">
+      <button class="sub" onclick="pickFile('c_truss_stress_path')">ファイルの選択</button>
     </div>
     <div class="frow"><span class="flabel">plate_stress (任意)</span>
       <input type="text" id="c_plate_stress_path" class="path">
-      <input type="file" onchange="uploadTo(this,'c_plate_stress_path')">
+      <button class="sub" onclick="pickFile('c_plate_stress_path')">ファイルの選択</button>
       <label class="inline">用途
         <select id="c_plate_use">
           <option value="plywood" selected>木合板検定のみ</option>
@@ -618,7 +618,7 @@
     </div>
     <div class="frow"><span class="flabel">wall_stress (任意)</span>
       <input type="text" id="c_wall_stress_path" class="path">
-      <input type="file" onchange="uploadTo(this,'c_wall_stress_path')">
+      <button class="sub" onclick="pickFile('c_wall_stress_path')">ファイルの選択</button>
       <span class="hint">RC板壁の応力 (2行1組)。mgtに WALL 要素と
         *REBAR-WALL が必要 (未検証経路)</span>
     </div>
@@ -707,21 +707,21 @@
       </div>
       <div class="row" style="margin-left:1.5em">pc_stress (任意):
         <input type="text" id="c_pc_stress_path" class="path">
-        <input type="file" onchange="uploadTo(this,'c_pc_stress_path')">
+        <button class="sub" onclick="pickFile('c_pc_stress_path')">ファイルの選択</button>
         <span class="hint">プレストレス不静定応力 8列
           [要素番号,位置,N,Fy,Fz,Mx,My,Mz]×長期ケースと同行数。
           長期応力へ ×有効率 で事前加算されます</span>
       </div>
       <div class="row" style="margin-left:1.5em">pc_cable:
         <input type="text" id="c_pc_cable_path" class="path">
-        <input type="file" onchange="uploadTo(this,'c_pc_cable_path')">
+        <button class="sub" onclick="pickFile('c_pc_cable_path')">ファイルの選択</button>
         <span class="hint">3列 [断面番号, 鋼種(1-6), 総本数]。鋼種:
           1=SWPR7A-12.4 2=SWPR7B-12.7 3=SWPR7B-15.2
           4=SWPR19-17.8 5=SWPR19-19.3 6=SWPR19-21.8</span>
       </div>
       <div class="row" style="margin-left:1.5em">PC_slab (任意):
         <input type="text" id="c_pc_slab_path" class="path">
-        <input type="file" onchange="uploadTo(this,'c_pc_slab_path')">
+        <button class="sub" onclick="pickFile('c_pc_slab_path')">ファイルの選択</button>
         <span class="hint">合成スラブ 4列 [断面番号, t, tbm, tbn (mm)]。
           ケーブル偏心はmgtの *PRESTRESS から自動取得します</span>
       </div>
