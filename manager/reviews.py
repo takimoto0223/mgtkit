@@ -22,6 +22,11 @@ from .submit import workrepo_dir
 
 log = logging.getLogger(__name__)
 
+# 分岐点 (fork_sha) の求め方の版。求め方を変えたら上げる
+# (保存済みスナップショットの古い値を使い回さないための目印)。
+# 'first-parent' = 提出のいちばん古いコミットの親
+FORK_KIND = 'first-parent'
+
 
 class ReviewError(Exception):
     """承認処理の中断。str() はユーザー向けの平易な日本語メッセージ."""
@@ -319,11 +324,13 @@ def fork_memo(snapshot):
 
     分岐点はブランチが更新されない限り変わらないため
     「番号:headSHA」をキーにする (更新されたら取り直しになる)。
+    求め方を変えたとき (FORK_KIND) の古い値は使わない。
     """
     memo = {}
     for p in ((snapshot or {}).get('pending') or []) \
             + ((snapshot or {}).get('merged') or []):
-        if p.get('fork_sha') and p.get('head_sha'):
+        if (p.get('fork_sha') and p.get('head_sha')
+                and p.get('fork_kind') == FORK_KIND):
             memo['%s:%s' % (p.get('number'), p['head_sha'])] = \
                 p['fork_sha']
     return memo
@@ -333,21 +340,20 @@ def _attach_fork_points(items, config, known=None):
     """提出 (承認待ち + 取り込み済み) に分岐点コミット (fork_sha) を付ける.
 
     履歴図の「どの版から作られたか」は日付では取り違えるため
-    (公開後に古い版の内容が提出されることが普通にある)、git の
-    merge-base を事実として使う。既知のものは known で省略し、
-    新しいものだけ並列に問い合わせる。失敗した提出は付けない
-    (図は日時からの推定にフォールバックする)。
+    (公開後に古い版の内容が提出されることが普通にある)、git の事実を
+    使う。事実は「提出のいちばん古いコミットの親」= 提出者が手元に
+    持っていた版のコミット。既知のものは known で省略し、新しいものだけ
+    並列に問い合わせる。失敗した提出は付けない (図は日時からの推定に
+    フォールバックする)。
     """
     known = known or {}
     slug = paths.repo_slug(config)
-    base = ((config or {}).get('base_branch')
-            if isinstance(config, dict) else None) or 'main'
 
     def fetch(p):
         def run():
             try:
-                p['fork_sha'] = ghcli.merge_base_sha(slug, base,
-                                                     p['head_sha'])
+                p['fork_sha'] = ghcli.fork_point_sha(slug, p['number'])
+                p['fork_kind'] = FORK_KIND
             except ghcli.GhError:
                 log.info('分岐点の取得に失敗 (#%s)。日時から推定します',
                          p.get('number'), exc_info=True)
@@ -355,13 +361,14 @@ def _attach_fork_points(items, config, known=None):
 
     threads = []
     for p in items:
-        if not p.get('head_sha'):
-            continue
-        key = '%s:%s' % (p.get('number'), p['head_sha'])
-        if key in known:
+        head = p.get('head_sha')
+        key = '%s:%s' % (p.get('number'), head) if head else None
+        if key and key in known:
             p['fork_sha'] = known[key]
+            p['fork_kind'] = FORK_KIND
             continue
-        threads.append(fetch(p))
+        if p.get('number'):
+            threads.append(fetch(p))
     for t in threads:
         t.start()
     for t in threads:

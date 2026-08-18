@@ -81,6 +81,34 @@ class TestBuildTimeline:
         tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 15))
         assert tl['chips'][0]['base_tag'] == 'v1.0'
 
+    def test_base_is_never_a_later_version(self):
+        # 同じ日に複数の版が出ても、自分が公開された版より後の版を
+        # 基点にはしない (前後が入れ替わって線が逆走するのを防ぐ)
+        rel = [_rel('v1.2', '2026-08-14'), _rel('v1.1', '2026-08-14'),
+               _rel('v1.0', '2026-08-14')]
+        mg = [_merged(8, 'a', '2026-08-14', '2026-08-14'),
+              _merged(9, 'b', '2026-08-14', '2026-08-14')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 14))
+        by_num = {c['number']: c for c in tl['chips']}
+        assert by_num[8]['target_tag'] == 'v1.1'
+        assert by_num[8]['base_tag'] == 'v1.0'
+        assert by_num[9]['target_tag'] == 'v1.2'
+        assert by_num[9]['base_tag'] in ('v1.0', 'v1.1')
+
+    def test_fork_sha_after_target_is_ignored(self):
+        # 分岐点が自分の公開版より後の版を指す (取り違えた記録) 場合は
+        # 事実として採用しない
+        rel = [dict(_rel('v1.2', '2026-08-18'), tag_sha='sha-v12'),
+               dict(_rel('v1.1', '2026-08-14'), tag_sha='sha-v11'),
+               dict(_rel('v1.0', '2026-08-06'), tag_sha='sha-v10')]
+        mg = [dict(_merged(31, 'a', '2026-08-07', '2026-08-14'),
+                   fork_sha='sha-v12'),
+              _merged(83, 'b', '2026-08-14', '2026-08-18')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 18))
+        c = {x['number']: x for x in tl['chips']}[31]
+        assert c['target_tag'] == 'v1.1'
+        assert c['base_tag'] == 'v1.0'
+
     def test_same_day_timestamps_pick_older_base(self):
         # v1.1 の公開 (09:00) と同じ日でも、それより前 (08:00) に
         # 作られた提出のベースは v1.0 (実データでの取り違えの再現)

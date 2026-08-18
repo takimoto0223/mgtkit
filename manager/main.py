@@ -495,6 +495,11 @@ def main(page: ft.Page):
         アプリが起動中 (Windows ではフォルダが使用中で置き換え不可) の
         ときは作業を邪魔しないため取り込まず、次回「起動」時に取り込む
         予約だけする。戻り値: 取り込んだら True。
+
+        このとき「アプリを使用中です」とは書かない (管理者指示 2026-08)。
+        ブラウザの画面を閉じてもアプリ本体はしばらく動いたままなので、
+        本人は使っていないつもりなのに使用中と言われて戸惑う。言えるのは
+        「更新版を開くには、もう一度「起動」を押す」という次の一手だけ。
         """
         if _update_state['installing'] or latest is None:
             return False
@@ -502,10 +507,9 @@ def main(page: ft.Page):
             _update_state['pending'] = latest
             t1_preparing_tag.visible = False  # 公開待ちは終わった
             set_badge(launch_badge, 1)        # 取り込みが済むまでは残す
-            t1_notice.value = ('新しい版 %s があります。いまはアプリを使用中'
-                               'のため更新していません。アプリを閉じてから'
-                               '「起動」を押すと更新されます。'
-                               % latest['tag'])
+            t1_notice.value = ('新しい版 %s があります。更新版を'
+                               '使うときは、もう一度「起動」を押して'
+                               'ください。' % latest['tag'])
             page.update()
             return False
         _update_state['installing'] = True
@@ -610,9 +614,10 @@ def main(page: ft.Page):
                 modal=True,
                 title=ft.Text('%s に更新して開き直しますか?'
                               % pending['tag']),
-                content=ft.Text('更新するには、いま開いているアプリを'
-                                'いったん終了する必要があります。入力中の'
-                                '内容があれば保存してから「更新して開く」を'
+                content=ft.Text('前に開いたアプリがまだ動いています。'
+                                '更新するにはいったん終了する必要が'
+                                'あります。ブラウザに入力中の内容が'
+                                'あれば保存してから「更新して開く」を'
                                 '押してください。', size=13, width=440),
                 actions=[
                     ft.TextButton('あとにする (このまま開く)',

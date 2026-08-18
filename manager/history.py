@@ -12,8 +12,9 @@
   「公開日以前で最も新しい取り込み」を新しい順に貪欲に対応付ける
   (マネージャーの運用では取り込み → 数分でリリースなので日付で安定する)。
   対応が付かない最古の版は「初回配布」扱い
-- 帯の基点 (どの版から作ったか) は「提出日以前で最も新しい正式版」。
-  自分が公開された版と同じになった場合はその 1 つ前の版に倒す
+- 帯の基点 (どの版から作ったか) は、提出の分岐点コミット (fork_sha) が
+  指すリリースタグ。分からないときだけ「提出日以前で最も新しい正式版」に
+  倒す (自分が公開された版と同じになった場合はその 1 つ前)
 """
 import datetime
 import re
@@ -133,33 +134,35 @@ def build_timeline(releases, merged, pending, today=None):
                       'pending': True, 'lane': -1})
 
     # 基点 (どの版から作られたか):
-    # 1) 分岐点コミット (fork_sha) がリリースタグの commit と一致すれば
-    #    それが事実 (公開後に古い版から提出されるのは普通にあるため、
-    #    日時からの推定では取り違える)
+    # 1) 分岐点コミット (fork_sha = 提出のいちばん古いコミットの親) が
+    #    リリースタグの commit と一致すれば、それが事実。手元の版が
+    #    古いまま提出されるのは普通にあるので (新しい版の公開直後に
+    #    提出されると特に紛らわしい)、日時からの推定では取り違える
     # 2) 分からなければ「提出日時以前で最も新しい正式版」で推定
     #    (時刻まで比較。自分の公開版と同じなら 1 つ前)
     dates = {s['tag']: s['date'] for s in stables}
+    order = {s['tag']: i for i, s in enumerate(stables)}
     sha_to_tag = {s['release'].get('tag_sha'): s['tag'] for s in stables
                   if s['release'].get('tag_sha')}
     for c in chips:
+        # 自分が公開された版より後の版を基点にはできない (同じ日に
+        # 複数の版が出たときに前後が入れ替わるのを防ぐ)
+        limit = order.get(c['target_tag'], len(stables))
+        candidates = stables[:limit]
         fork = c.get('fork_sha')
-        if fork and fork in sha_to_tag \
-                and sha_to_tag[fork] != c['target_tag']:
+        if fork and order.get(sha_to_tag.get(fork), len(stables)) < limit:
             c['base_tag'] = sha_to_tag[fork]
             continue
         base = None
         created = c.get('created_full') or c['start'].isoformat()
-        for s in stables:
+        for s in candidates:
             pub = _when(s['release'], 'published_at') \
                 or s['date'].isoformat()
             n = min(len(pub), len(created))
-            if pub[:n] <= created[:n] and s['tag'] != c['target_tag']:
+            if pub[:n] <= created[:n]:
                 base = s['tag']
-        if base is None and stables:
-            for s in stables:
-                if s['tag'] != c['target_tag']:
-                    base = s['tag']
-                    break
+        if base is None and candidates:
+            base = candidates[0]['tag']
         c['base_tag'] = base
 
     chips.sort(key=lambda c: (c['start'], c['number'] or 0))

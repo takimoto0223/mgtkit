@@ -3,7 +3,9 @@
 
 モデルは manager/history.py。見た目の原本は
 manager/docs/mockups/history_flow.html (座標・角度・色はモックに従う):
-- 横軸 = 時間 (42px/日)。初回配布より左には何も描かない
+- 横軸 = 時間 (42px/日)。初回配布より左には何も描かない。ただし帯の
+  「名前 #番号」が箱に収まらない間隔になるところは、収まるまで右へ
+  広げる (等縮尺よりも読めることを優先する = 管理者指示)
 - グレーの本線 = 正式版の列。白丸 = 版、大きい紺丸 + 橙リング = 現行版
 - 人ごとの色の帯 = 提出された更新 (左端 = 提出日)。点線 = 確認中
 - 本線から S カーブで降りる線 + 矢先 = その版から派生
@@ -32,6 +34,11 @@ CHIP_H = 30
 LANE_STEP = 57          # 2 段目以降の下レーンの間隔
 FIG_H = 330             # 下レーンが 1 段のときの図の高さ
 RIGHT_PAD = 114
+CHIP_PAD = 24           # 帯の中で「名前 #番号」の左右に取る余白の合計
+DERIV_LEAD = 55         # 基点ノード → 帯の左端 (S カーブ + 矢先の分)
+MERGE_LEAD = 46         # 帯の右端 → 合流ノード (合流カーブの分)
+CHIP_SLACK = 12         # 帯の左右に残す最低限の水平線 (詰まって見えない)
+MIN_NODE_GAP = 68       # 隣り合う正式版ノードの最小間隔 (版名が並ぶ幅)
 
 
 def _lane_geom(lane):
@@ -43,12 +50,27 @@ def _lane_geom(lane):
     return top, top + CHIP_H / 2
 
 
+# 半角文字 1 字ぶんの幅の見積もり (太字の実測より少し広めに取る。
+# 見積もりが足りないと文字が箱からはみ出すため、外す側を安全側に)
+ASCII_EM = 0.6
+
+
 def _est_w(text, size=11.5):
     """canvas に測定 API が無いための概算幅 (和文=全角、他=半角)."""
     w = 0.0
     for ch in text or '':
-        w += size if ord(ch) > 0x2500 else size * 0.55
+        w += size if ord(ch) > 0x2500 else size * ASCII_EM
     return w
+
+
+def _chip_label(c):
+    """帯に入れる文字 (帯の幅はこれが収まることを保証する)."""
+    return '%s #%s' % (c['author'], c['number'])
+
+
+def _chip_min_w(c):
+    """帯の幅。「名前 #番号」+ 左右の余白 (どの帯も同じ作り)."""
+    return _est_w(_chip_label(c)) + CHIP_PAD
 
 
 def _stroke(color, width=3, dash=None):
@@ -163,7 +185,7 @@ def _chip(c, chip_left, chip_right, color, today_x):
     top, line_y = _lane_geom(lane)
     w = chip_right - chip_left
     dash = [5, 4] if c['pending'] else None
-    label = '%s #%s' % (c['author'], c['number'])
+    label = _chip_label(c)
     label_w = _est_w(label)
     fits_label = label_w + 14 <= w
     # 文字が入らない帯は塗りを濃くして空箱に見えないようにする
@@ -176,9 +198,11 @@ def _chip(c, chip_left, chip_right, color, today_x):
     hit = [chip_left, top, w, CHIP_H]
     pill_inside = c['pending'] and w >= label_w + 130
     if fits_label:
+        # 幅は概算 (canvas に測定 API が無い) なので、実際の文字が
+        # 見積もりより広くても箱から出ないよう max_w で止める
         shapes.append(_text((chip_left + chip_right) / 2, ty, label,
                             11.5, color, weight=ft.FontWeight.BOLD,
-                            center=True))
+                            center=True, max_w=w - 10))
     elif lane in (-1, 1):
         # 幅が狭い帯: ラベルを外に出す (1 段目は帯の上、深いレーンは下)
         shapes.append(_text(chip_right, top - 18, label, 11.5, color,
@@ -203,6 +227,66 @@ def _chip(c, chip_left, chip_right, color, today_x):
     return shapes, hit
 
 
+def _node_positions(stables, chips):
+    """正式版ノードの x 座標 {tag: x}.
+
+    基本は日付に比例 (PX_PER_DAY)。ただし正式版の間隔が短いと、その間に
+    入る帯が「名前 #番号」を書けない幅になり、文字が箱の外へ出てしまう。
+    そこで帯が収まらない区間だけ右へ広げる (以降のノードも同じ分だけ
+    ずらすので、他の区間の日数の比は保たれる)。きょう線の手前を可変に
+    しているのと同じ考え方 = 図は等縮尺よりも読めることを優先する。
+    """
+    t0 = stables[0]['date']
+
+    def ideal(s):
+        return X0 + (s['date'] - t0).days * PX_PER_DAY
+
+    # (基点タグ, 公開タグ) → その区間に必要な最小の幅
+    need = {}
+    for c in chips:
+        if c['pending'] or not c['base_tag'] or not c['target_tag']:
+            continue
+        w = (DERIV_LEAD + _chip_min_w(c) + CHIP_SLACK + MERGE_LEAD)
+        key = (c['base_tag'], c['target_tag'])
+        need[key] = max(need.get(key, 0), w)
+
+    node_x = {}
+    shift = 0.0
+    prev = None
+    for s in stables:
+        want = ideal(s) + shift
+        if prev is not None:
+            want = max(want, node_x[prev] + MIN_NODE_GAP)
+        for (base, target), w in need.items():
+            if target == s['tag'] and base in node_x:
+                want = max(want, node_x[base] + w)
+        shift = want - ideal(s)
+        node_x[s['tag']] = want
+        prev = s['tag']
+    return node_x
+
+
+def _date_scale(stables, node_x):
+    """日付 → x の関数。正式版ノードを必ず通る折れ線.
+
+    ノードを右へ広げた区間では日付の目盛りも同じだけ伸びるので、
+    週のグリッド線とノードの前後関係が食い違わない。
+    """
+    pts = [(s['date'], node_x[s['tag']]) for s in stables]
+
+    def X(d):
+        if d <= pts[0][0]:
+            return pts[0][1] - (pts[0][0] - d).days * PX_PER_DAY
+        for (d0, x0), (d1, x1) in zip(pts, pts[1:]):
+            if d <= d1:
+                span = (d1 - d0).days
+                return x1 if span <= 0 else \
+                    x0 + (x1 - x0) * ((d - d0).days / span)
+        return pts[-1][1] + (d - pts[-1][0]).days * PX_PER_DAY
+
+    return X
+
+
 def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
                  font_family=None):
     """図全体 (レーン見出し + 横スクロール + ◀▶) を組み立てる.
@@ -219,11 +303,8 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     chips = tl['chips']
     authors = tl['authors']
     t0 = stables[0]['date']
-
-    def X(d):
-        return X0 + (d - t0).days * PX_PER_DAY
-
-    node_x = {s['tag']: X(s['date']) for s in stables}
+    node_x = _node_positions(stables, chips)
+    X = _date_scale(stables, node_x)
 
     # 現行版バッジの置き場所 (枝と重ならない側): 上 → 下 → ノードの右
     def _cur_busy(lane_test):
@@ -245,12 +326,19 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         base_x = node_x.get(c['base_tag'])
         left = max(X(c['start']),
                    (base_x + 30) if base_x is not None else X0)
-        today_x = max(today_x, left + _est_w(
-            '%s #%s' % (c['author'], c['number'])) + 24 + TODAY_GAP)
-    if badge_side == 'right' and current_tag in node_x:
-        today_x = max(today_x, node_x[current_tag] + 118 + TODAY_GAP)
+        today_x = max(today_x, left + _chip_min_w(c) + TODAY_GAP)
+    # きょう線が最新ノード・現行版バッジに重ならないだけの間隔も空ける
+    # (公開したその日は「きょう」と最新版の位置が同じになるため)
+    today_x = max(today_x, node_x[stables[-1]['tag']] + 24)
+    if current_tag in node_x:
+        badge_right = 118 if badge_side == 'right' else 48
+        today_x = max(today_x,
+                      node_x[current_tag] + badge_right + TODAY_GAP)
     width = today_x + RIGHT_PAD
-    upper_bases = {c['base_tag'] for c in chips if c['lane'] == 1}
+    # 上レーンの枝が付くノード (出ていく基点 + 入ってくる合流先)。
+    # ラベルを真上に置くと枝の線や矢先と重なるため、左へ逃がす目印
+    upper_bases = {t for c in chips if c['lane'] >= 1
+                   for t in (c['base_tag'], c['target_tag']) if t}
     depth = max([-c['lane'] for c in chips if c['lane'] < 0] or [1])
     # 2 段目以降はラベル外出しの分も含めて下へ広げる
     fig_h = FIG_H + (depth - 1) * (LANE_STEP + 17)
@@ -298,7 +386,7 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
             continue
         # 帯はどれも「名前 #番号 + 同じマージン」のコンパクトな箱。
         # 期間は枝の線の長さが表す
-        min_w = _est_w('%s #%s' % (c['author'], c['number'])) + 24
+        min_w = _chip_min_w(c)
         if c['pending']:
             # 確認中はきょう線側に寄せる (点線がきょうまで続く文法)
             chip_right = today_x - TODAY_GAP
@@ -307,8 +395,8 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         else:
             # 取り込み済みは基点ノードと合流ノードの中央に置き、
             # 両側の水平部分が同じ長さ (変動幅) になるようにする
-            span_l = base_x + 55            # S カーブ + 矢先の分
-            span_r = node_x[c['target_tag']] - 46   # 合流カーブの分
+            span_l = base_x + DERIV_LEAD            # S カーブ + 矢先の分
+            span_r = node_x[c['target_tag']] - MERGE_LEAD  # 合流カーブの分
             if span_r - span_l >= min_w:
                 h = (span_r - span_l - min_w) / 2
                 chip_left = span_l + h
