@@ -2,14 +2,22 @@
 """過去の更新ログの時系列図の描画 (manager/historyview.py) のテスト.
 
 見た目そのものは目で確かめるしかないが、「帯の文字が帯の外へ出ない」
-「きょう線が現行版バッジに重ならない」という約束は座標で検査できる。
-提出者の名前が長くても、正式版の間隔が短くても崩れないことを固定する。
+「線が版の丸に重なる」「要素どうしが重ならない」といった約束は座標で
+検査できる。提出者の名前が長くても、正式版の間隔が短くても崩れないことを
+固定する。
+
+CI はマネージャーの依存 (flet) も入れるのでここは必ず実行される。
+手元に flet を入れていない環境のためにスキップの逃げ道だけ残す。
 """
 import datetime
 
-import flet.canvas as cv
+import pytest
 
-from manager import history, historyview
+pytest.importorskip('flet')
+
+import flet.canvas as cv                                    # noqa: E402
+
+from manager import history, historyview                    # noqa: E402
 
 D = datetime.date
 TODAY = D(2026, 8, 18)
@@ -286,3 +294,63 @@ class TestTodayLine:
                             for e in p.elements))
         today_x = wave.elements[0].x
         assert badge.x + badge.width < today_x
+
+
+class TestDateAxis:
+    """薄い縦線と日付は「版が更新された日」だけに置く (提出 #135)."""
+
+    # 初回配布の翌日にもう 1 版 (日付が隣同士) と、同じ日に 2 版
+    RELEASES = [
+        _rel('v1.7', '2026-08-14'),
+        _rel('v1.6', '2026-08-14'),
+        _rel('v1.5', '2026-08-10'),
+        _rel('v1.4', '2026-07-29'),
+        _rel('v1.3', '2026-07-28'),
+    ]
+
+    def _shapes(self):
+        tl = history.build_timeline(self.RELEASES, [], [], today=TODAY)
+        fig = historyview.build_figure(tl, 'v1.7', TODAY, lambda *a: None)
+        return tl, _canvas(fig).shapes
+
+    def _grid_lines(self, shapes):
+        """日付の薄い縦線 (上端が目盛りの高さのもの)."""
+        return [s for s in shapes
+                if isinstance(s, cv.Line) and s.y1 == historyview.AXIS_Y
+                and s.x1 == s.x2]
+
+    def _date_labels(self, shapes):
+        """目盛りの日付 (図の上端に置いた文字)."""
+        return [s for s in shapes if isinstance(s, cv.Text) and s.y == 21]
+
+    def test_grid_lines_sit_on_the_versions(self):
+        """薄い縦線は「版が更新された日」だけ、しかも版の丸に重なること."""
+        tl, shapes = self._shapes()
+        node_x = {round(s.x) for s in shapes
+                  if isinstance(s, cv.Circle)
+                  and s.y == historyview.RAIL_Y}
+        line_x = sorted(round(s.x1) for s in self._grid_lines(shapes))
+
+        assert line_x, '日付の縦線が 1 本も無い'
+        assert set(line_x) <= node_x          # 版のない日には線を引かない
+        # 同じ日に出た版は線も 1 本 (v1.6 と v1.7 は同じ日)
+        assert len(line_x) == len(set(line_x)) == len(
+            {s['date'] for s in tl['stables']})
+
+    def test_year_is_shown_only_when_it_changes(self):
+        _, shapes = self._shapes()
+        labels = sorted(self._date_labels(shapes), key=lambda s: s.x)
+        values = [s.value for s in labels]
+        assert values[0] == '2026/7/28'                  # 最初は年つき
+        assert values[1:] == ['7/29', '8/10', '8/14']    # 以降は年なし
+
+    def test_every_version_date_gets_a_label(self):
+        """1 日違いで公開された版でも日付が出ること.
+
+        ノードの最小間隔 (MIN_NODE_GAP) が版名 2 つぶんあるので、日付が
+        隣とぶつかることは実質起きない。ぶつかったときに数字を間引く
+        処理は残してあるが、こちらが通常の見え方。
+        """
+        tl, shapes = self._shapes()
+        assert len(self._date_labels(shapes)) == len(
+            {s['date'] for s in tl['stables']})
