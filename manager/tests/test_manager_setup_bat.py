@@ -9,7 +9,10 @@
    PATH に持つため、`where python` は未導入を「導入済み」と誤判定する。
 2. winget の結果を必ず確認すること。素通りすると後段が「コマンドが無い」で
    落ち、原因と無関係な案内が出る。
-3. cmd のパーサの落とし穴 (括弧ブロック内の rem / %errorlevel%) を避けること。
+3. cmd のパーサの落とし穴を避けること。括弧ブロック内の rem / %errorlevel%
+   に加え、**文字コード**もここに含む。UTF-8 + chcp 65001 のバッチは cmd が
+   読み取り位置を見失い、コメントや echo の断片をコマンドとして実行する
+   (実機で発生)。日本語を含むバッチは Shift_JIS + chcp 932 に固定する。
 """
 import os
 import re
@@ -25,7 +28,8 @@ ALL_BATS = [SETUP, MANAGER_LAUNCH, APP_LAUNCH]
 
 
 def read_text(path):
-    with open(path, encoding='utf-8') as f:
+    # 日本語を含むバッチは Shift_JIS 固定 (ASCII のみのファイルも読める)
+    with open(path, encoding='cp932') as f:
         return f.read()
 
 
@@ -51,15 +55,43 @@ def blocks_of(path):
 
 
 @pytest.mark.parametrize('path', ALL_BATS)
-def test_utf8_crlf_without_bom(path):
-    # chcp 65001 を前提に日本語を書いているので UTF-8。BOM があると cmd が
-    # 1 行目 (@echo off) を解釈できず、コマンドが画面に出てしまう
+def test_encoding_matches_declared_codepage(path):
+    # 日本語を含むバッチを UTF-8 + chcp 65001 で置くと、cmd が読み取り位置を
+    # 見失って rem や echo の断片をコマンドとして実行する。日本語を増やす
+    # ほど悪化するので、Shift_JIS + chcp 932 に固定して再発を止める
     with open(path, 'rb') as f:
         raw = f.read()
     assert not raw.startswith(b'\xef\xbb\xbf'), 'BOM 付きにしない'
-    raw.decode('utf-8')
     assert b'\r\n' in raw
     assert b'\n' not in raw.replace(b'\r\n', b'')
+    if all(b < 0x80 for b in raw):
+        return                      # ASCII のみ = コードページに依存しない
+    raw.decode('cp932')             # Shift_JIS として読めること
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode('utf-8')         # UTF-8 で保存し直されていないこと
+    assert raw.split(b'\r\n')[1].startswith(b'chcp 932'), \
+        '日本語を含むバッチは 2 行目で chcp 932 を宣言する'
+
+
+@pytest.mark.parametrize('path', ALL_BATS)
+def test_ascii_only_after_switching_to_utf8(path):
+    # 途中で chcp 65001 に切り替えると、そこから先は UTF-8 として読まれる。
+    # 読み取り位置がずれないよう、以降は ASCII だけにしておく
+    with open(path, 'rb') as f:
+        raw = f.read()
+    # 解説文中の言及ではなく、実際に切り替えている行を探す
+    offset = 0
+    at = -1
+    for raw_line in raw.split(b'\r\n'):
+        if raw_line.strip().startswith(b'chcp 65001'):
+            at = offset
+            break
+        offset += len(raw_line) + 2
+    if at < 0:
+        return
+    assert all(b < 0x80 for b in raw[at:]), \
+        'chcp 65001 より後ろに非 ASCII を置かない'
+
 
 
 @pytest.mark.parametrize('path', ALL_BATS)
