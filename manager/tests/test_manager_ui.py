@@ -91,10 +91,27 @@ def test_ui_updates_from_background_go_through_the_loop(monkeypatch):
     assert marker not in page.dialogs      # 開いて閉じたので残らない
 
 
+class _NoThread:
+    """裏の処理を走らせない (走る時機で結果が変わるのを断つ)."""
+
+    def __init__(self, target=None, daemon=None):
+        pass
+
+    def start(self):
+        pass
+
+
 def test_ui_updates_on_the_page_loop_are_direct(monkeypatch):
     """画面のループ上 (イベントハンドラ) からの更新は載せ替えないこと.
 
     毎回載せ替えると順序が狂い、押した瞬間の反応も 1 拍遅れる。
+
+    裏の処理は走らせない。起動時の確認 (新しい版・参加状態) は裏
+    スレッドで動き、終わったときに画面を更新する。その更新は
+    「ループ上ではない」ので run_task に載る = ここで数えている
+    tasks が 1 増える。いつ終わるかは gh の応答と CI の混み具合しだい
+    なので、走らせたままだと計測の窓に入るかどうかが運になり、
+    負荷の高いときだけ落ちるテストになる (実際に落ちた)。
     """
     import asyncio
     import types
@@ -102,6 +119,8 @@ def test_ui_updates_on_the_page_loop_are_direct(monkeypatch):
     from manager import main as manager_main
     monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
                         lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NoThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
     page = _FakePage()
     manager_main.main(page)
     loop = asyncio.new_event_loop()
