@@ -2,7 +2,31 @@
 
 構造設計の業務効率化ツール。midas gen の mgt ファイルを読み込み、断面算定・応力図・QR 図・DXF/TeX 出力などをブラウザ UI から実行する Flask アプリ。
 
-## 起動
+このリポジトリ (mgtkit フォルダ) には、mgtkit 本体と、バージョン管理・提出・承認を
+画面から行う**アプリマネージャー** (`manager/`) が入っています。
+
+## はじめかた（メンバー向け）
+
+配布された `setup.bat` をダブルクリックするだけで、必要ツール（Git / GitHub CLI / Python）の導入 → mgtkit の取得 → アプリマネージャーの起動まで自動で行われます。
+
+- mgtkit 一式（本体 + アプリマネージャー + 資料）は `C:\Users\(自分)\mgtkit` に
+  取得されます。ここがバージョン管理の置き場所になるため、フォルダを移動・改名
+  しないでください
+- 初回はマネージャーで名前と本人の Claude API キーを登録します（この PC 内にのみ保存）
+- 「起動」ボタンを押すと、最新の安定版を自動で取得してブラウザで開きます
+- 2 回目からは `C:\Users\(自分)\mgtkit\manager\マネージャー起動.bat` をダブルクリックするだけです
+- 画面つきの手順は `manager/readme/アプリマネージャー使い方ガイド.pdf` を参照してください
+
+## アプリの使い方
+
+`readme/mgtkit操作マニュアル_v1.5.pdf` を参照してください。
+
+## アプリマネージャー
+
+機能・使い方・設計記録は `manager/README.md` を参照してください
+（タブ構成、提出・承認の流れ、参加申請、配布方法など）。
+
+## マネージャーを使わず直接起動する場合（非常用・開発用）
 
 `起動.bat` をダブルクリックすると、必要ライブラリの確認・インストールを行ったうえで `app.py` が起動し、ブラウザが開きます。
 
@@ -15,15 +39,12 @@ python app.py
 ### 必要環境
 
 - Python 3
-- flask / numpy / matplotlib / openpyxl / pypdf / ezdxf
+- アプリ本体: flask / numpy / matplotlib / openpyxl / pypdf / ezdxf
+- アプリマネージャー: flet / anthropic（`manager/requirements.txt`）
 
 ```
 pip install flask numpy matplotlib openpyxl pypdf ezdxf
 ```
-
-## 使い方
-
-`readme/mgtkit操作マニュアル_v1.5.pdf` を参照してください。
 
 ## 構成
 
@@ -38,11 +59,17 @@ pip install flask numpy matplotlib openpyxl pypdf ezdxf
 | `secprops.py` / `section.py` | 断面性能 |
 | `data/` | 基準データ（材料・鉄筋・PC 情報など JSON） |
 | `templates/` / `static/` | フロントエンド（index.html / app.js） |
-| `readme/` | 操作マニュアル |
+| `readme/` | mgtkit 本体の操作マニュアル |
+| `tests/` | 本体の回帰テスト（pytest。CI で自動実行） |
+| `manager/` | アプリマネージャー一式（プログラム・テスト・資料・記録・スクリプト） |
+| `config.json` | 共通の運用設定（ポート・承認必要数・提出上限・API 単価など） |
 
 出力は入力 mgt ファイルと同じ階層の `mgtkit_out/` に生成されます（git 管理対象外）。
 
 ## 開発
+
+メンバーの機能追加は、アプリマネージャーの「更新版を提出」経由が基本です（Git 操作不要）。
+Git で直接開発する場合:
 
 ```
 git clone https://github.com/takimoto0223/mgtkit.git
@@ -50,4 +77,6 @@ cd mgtkit
 git switch -c <作業ブランチ名>
 ```
 
-`main` に直接 push せず、ブランチを切って Pull Request でレビューしてからマージしてください。
+- `main` に直接 push せず、ブランチを切って Pull Request でレビューしてからマージしてください
+- checkout したフォルダの名前は `mgtkit` のまま使ってください（パッケージ構造の要件。
+  変更するとアプリ・テストが動きません）

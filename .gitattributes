@@ -1,0 +1,2 @@
+# Windows バッチは常に CRLF のまま扱う (clone でも git archive でも変換しない)
+*.bat -text

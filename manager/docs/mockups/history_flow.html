@@ -1,0 +1,255 @@
+<!-- 過去の更新ログ v7: 60° エルボー派生 (角丸カーブ) + 上下レーン + トーン統一 (実装なし)
+     実装メモ: ホバーカードはスクロール領域内に描くと一緒に流れるため、
+     実装時はビューポート座標のオーバーレイに描くこと。
+     派生線は 60° の直線で降り、最後の縦 24px を三次ベジェで水平へ滑らかに
+     つなぐ (矢先の根元 = 曲線の終点)。水平の余白が足りない場合も同じ形で
+     矢先の根元に収める。
+     文字が入らない幅の狭い帯 (提出直後) はラベル・ピルを帯の外に出し、
+     塗りを少し濃くして空箱に見えないようにする (ガント図の短いバーの流儀)。
+     ◀▶ のスクロールボタンは端に達したらグレーアウトすること -->
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: rgba(30,41,59,.45);
+         font-family: "Yu Gothic UI", "Meiryo", "IPAPGothic", sans-serif; }
+  .dialog { width: 700px; margin: 14px auto; background: #f1f2f6; border-radius: 14px;
+            padding: 18px 22px 12px; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+  .dtitle { font-size: 19px; font-weight: bold; color: #1f2937; margin: 0 0 10px; }
+  .figure { display: flex; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; }
+  .lanehead { width: 86px; flex: none; border-right: 1px solid #e5e7eb; position: relative;
+              background: #fbfcfd; border-radius: 8px 0 0 8px; }
+  .lh { position: absolute; left: 0; right: 8px; text-align: right; font-size: 11.5px;
+        font-weight: bold; color: #475569; }
+  .viewwrap { position: relative; flex: 1; min-width: 0; }
+  .scrollbox { overflow-x: scroll; scrollbar-color: #94a3b8 #f1f5f9; scrollbar-width: thin; }
+  .scrollbox::-webkit-scrollbar { height: 10px; }
+  .scrollbox::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 5px; }
+  .scrollbox::-webkit-scrollbar-track { background: #f1f5f9; }
+  .fade { position: absolute; top: 0; bottom: 10px; width: 26px; pointer-events: none; z-index: 2; }
+  .fade.l { left: 0; background: linear-gradient(90deg, #ffffff, rgba(255,255,255,0)); }
+  .fade.r { right: 0; background: linear-gradient(270deg, #ffffff, rgba(255,255,255,0)); }
+  .snav { position: absolute; top: 104px; width: 28px; height: 28px; border-radius: 14px;
+          background: rgba(255,255,255,.92); border: 1px solid #cbd5e1; color: #475569;
+          font-size: 13px; text-align: center; line-height: 26px; z-index: 3;
+          box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+  .caption { font-size: 11px; color: #4b5563; margin: 5px 2px 10px; }
+  .sect { font-size: 11.5px; font-weight: bold; color: #4b5563; margin: 10px 2px 5px; }
+  .row { display: flex; align-items: center; background: #ffffff; border: 1px solid #e5e7eb;
+         border-radius: 8px; padding: 7px 10px; margin-bottom: 6px; font-size: 12.5px; gap: 8px; }
+  .row.cur { background: #fefce8; border-left: 4px solid #facc15; }
+  .row.link { outline: 2px solid #2b4a6f; }
+  .row.wait { background: #fafafa; }
+  .who { width: 11px; height: 11px; border-radius: 6px; flex: none; }
+  .name { width: 34px; color: #374151; flex: none; }
+  .ver { font-weight: bold; color: #2b4a6f; width: 40px; flex: none; }
+  .num { color: #475569; width: 34px; flex: none; }
+  .desc { flex: 1; color: #374151; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dates { font-size: 11px; color: #475569; white-space: nowrap; flex: none; }
+  .pill-cur { background: #fef08a; color: #713f12; font-size: 10.5px; font-weight: bold;
+              border-radius: 8px; padding: 2px 7px; flex: none; }
+  .pill-wait { background: #fef3c7; color: #92400e; font-size: 10.5px; font-weight: bold;
+               border-radius: 8px; padding: 2px 7px; flex: none; }
+  .dl { display: inline-flex; align-items: center; gap: 5px; color: #2b4a6f;
+        border: 1.5px solid #2b4a6f; border-radius: 15px; padding: 4px 11px;
+        font-size: 12px; white-space: nowrap; flex: none; }
+  .dl.off { color: #9ca3af; border-color: #d7dbe0; }
+  .close { text-align: right; color: #2b4a6f; font-size: 14px; font-weight: bold; padding: 6px 6px 0; }
+</style>
+
+<svg width="0" height="0"><defs>
+  <g id="dlicon">
+    <path d="M6.5 0 v7 M3.2 4 l3.3 3.3 L9.8 4" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1 10.5 h11" stroke-width="1.8" stroke-linecap="round"/>
+  </g>
+</defs></svg>
+
+<div class="dialog">
+  <p class="dtitle">過去の更新ログ</p>
+
+  <div class="figure">
+    <div class="lanehead">
+      <div class="lh" style="top:24px; color:#64748b; font-weight:normal;">時期</div>
+      <div class="lh" style="top:72px; color:#64748b;">提出された<br>更新</div>
+      <div class="lh" style="top:143px;">正式版</div>
+      <div class="lh" style="top:203px; color:#64748b;">提出された<br>更新</div>
+    </div>
+    <div class="viewwrap">
+      <div class="fade l"></div><div class="fade r"></div>
+      <div class="snav" style="left:6px;">◀</div><div class="snav" style="right:6px;">▶</div>
+      <div class="scrollbox" id="sc">
+        <svg width="1120" height="336" viewBox="0 0 1120 336">
+          <!-- 週グリッド (初回配布より左には何も描かない) -->
+          <g stroke="#eef2f7" stroke-width="1">
+            <line x1="208" y1="40" x2="208" y2="246"/>
+            <line x1="460" y1="40" x2="460" y2="246"/>
+            <line x1="754" y1="40" x2="754" y2="246"/>
+            <line x1="1048" y1="40" x2="1048" y2="246"/>
+          </g>
+          <g font-size="10.5" fill="#475569" text-anchor="middle">
+            <text x="208" y="32">2026/7/28</text>
+            <text x="460" y="32">2026/8/3</text>
+            <text x="754" y="32">2026/8/10</text>
+            <text x="1048" y="32">2026/8/17</text>
+          </g>
+          <line x1="208" y1="40" x2="1110" y2="40" stroke="#e5e7eb" stroke-width="1"/>
+
+          <!-- きょう線 -->
+          <line x1="1006" y1="46" x2="1006" y2="246" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <text x="1006" y="58" font-size="11" fill="#475569" text-anchor="middle" font-weight="bold">きょう 8/16</text>
+
+          <!-- レール (正式版)。初回配布の点から始まる -->
+          <line x1="208" y1="150" x2="1006" y2="150" stroke="#94a3b8" stroke-width="3.5" stroke-linecap="round"/>
+
+          <!-- 取り出し: 基点ノードから 60° で降りて水平に提出日へ。矢先は帯に刺さる -->
+          <g stroke-width="3" fill="none">
+            <path d="M208,150 L228.8,186 C232.8,192.9 233,210 241,210" stroke="#b45309"/>
+            <path d="M418,150 L438.8,186 C442.8,192.9 443,210 451,210 L493,210" stroke="#b45309"/>
+            <path d="M754,150 L774.8,186 C778.8,192.9 779,210 787,210" stroke="#0f766e"/>
+            <path d="M754,150 L778.3,108 C781.3,102.8 781,80 787,80" stroke="#be185d"/>
+            <path d="M922,150 L942.8,186 C946.8,192.9 947,210 955,210" stroke="#6d28d9"/>
+          </g>
+          <g>
+            <path d="M250,210 L241,204.8 L241,215.2 z" fill="#b45309"/>
+            <path d="M502,210 L493,204.8 L493,215.2 z" fill="#b45309"/>
+            <path d="M796,210 L787,204.8 L787,215.2 z" fill="#0f766e"/>
+            <path d="M796,80 L787,74.8 L787,85.2 z" fill="#be185d"/>
+            <path d="M964,210 L955,204.8 L955,215.2 z" fill="#6d28d9"/>
+          </g>
+          <!-- 合流の斜め矢印 (60° 統一・ノード手前まで + 塗りつぶしの矢先) -->
+          <g stroke-width="3" fill="none">
+            <path d="M383,210 L408,167.3" stroke="#b45309"/>
+            <path d="M719,210 L744,167.3" stroke="#b45309"/>
+            <path d="M887,210 L907.7,174.6" stroke="#0f766e"/>
+          </g>
+          <g>
+            <path d="M412.5,159.5 L411,169.1 L405,165.6 z" fill="#b45309"/>
+            <path d="M748.5,159.5 L747,169.1 L741,165.6 z" fill="#b45309"/>
+            <path d="M912.2,166.8 L910.7,176.4 L904.7,172.9 z" fill="#0f766e"/>
+          </g>
+
+          <!-- 更新チップ (帯): 左端 = 提出日。斜め矢印が本線に届いた点 = 公開 -->
+          <!-- 下レーン -->
+          <g>
+            <rect x="250" y="195" rx="8" width="133" height="30" fill="#b4530914" stroke="#b45309" stroke-width="1.5"/>
+            <text x="262" y="214" font-size="11.5" fill="#7c3d06"><tspan font-weight="bold">田村 #27</tspan> 横補剛の検討</text>
+          </g>
+          <!-- 田村 #31 (マウスオーバー中の例) -->
+          <g>
+            <rect x="502" y="195" rx="8" width="217" height="30" fill="#b4530922" stroke="#b45309" stroke-width="3"
+                  filter="drop-shadow(0 2px 5px rgba(180,83,9,.35))"/>
+            <text x="514" y="214" font-size="11.5" fill="#7c3d06"><tspan font-weight="bold">田村 #31</tspan> 集成材の断面性能に対応</text>
+          </g>
+          <g>
+            <rect x="796" y="195" rx="8" width="91" height="30" fill="#0f766e14" stroke="#0f766e" stroke-width="1.5"/>
+            <text x="841" y="214" font-size="11.5" fill="#0f5f57" text-anchor="middle" font-weight="bold">佐藤 #35</text>
+            <text x="798" y="240" font-size="10.5" fill="#0f5f57">検定比の丸め処理を修正</text>
+          </g>
+          <!-- 冨里 #40 (確認中・きょうまで) -->
+          <g>
+            <rect x="964" y="195" rx="8" width="39" height="30" fill="#6d28d933" stroke="#6d28d9"
+                  stroke-width="1.5" stroke-dasharray="5 4"/>
+            <text x="1003" y="190" font-size="11.5" fill="#5b21b6" text-anchor="end" font-weight="bold">冨里 #40</text>
+            <rect x="953" y="231" rx="8" width="50" height="16" fill="#fef3c7"/>
+            <text x="978" y="243" font-size="10.5" fill="#92400e" text-anchor="middle" font-weight="bold">確認中</text>
+            <text x="1003" y="257" font-size="10.5" fill="#5b21b6" text-anchor="end">一時フォルダの利用を廃止</text>
+          </g>
+          <!-- 上レーン: 同じ v1.5 からの 2 人目 (高橋) は上に分ける -->
+          <g>
+            <rect x="796" y="65" rx="8" width="207" height="30" fill="#be185d14" stroke="#be185d"
+                  stroke-width="1.5" stroke-dasharray="5 4"/>
+            <text x="808" y="84" font-size="11.5" fill="#9d174d"><tspan font-weight="bold">高橋 #38</tspan> 横補剛の追加検討</text>
+            <rect x="948" y="71" rx="8" width="50" height="17" fill="#fef3c7"/>
+            <text x="973" y="84" font-size="10.5" fill="#92400e" text-anchor="middle" font-weight="bold">確認中</text>
+          </g>
+
+          <!-- 駅ノード (最後に描く) -->
+          <g>
+            <circle cx="208" cy="150" r="9" fill="#ffffff" stroke="#2b4a6f" stroke-width="3"/>
+            <circle cx="418" cy="150" r="9" fill="#ffffff" stroke="#2b4a6f" stroke-width="3"/>
+            <circle cx="754" cy="150" r="9" fill="#ffffff" stroke="#2b4a6f" stroke-width="3"/>
+            <circle cx="922" cy="150" r="14" fill="#2b4a6f" stroke="#f59e0b" stroke-width="6"/>
+          </g>
+          <g font-size="12.5" fill="#2b4a6f" text-anchor="middle" font-weight="bold">
+            <text x="208" y="132">v1.3 初回配布</text>
+            <text x="418" y="132">v1.4</text>
+            <text x="746" y="132" text-anchor="end">v1.5</text>
+          </g>
+          <rect x="874" y="108" rx="7" width="96" height="24" fill="#fef08a" stroke="#a16207" stroke-width="1"/>
+          <text x="922" y="125" font-size="12.5" fill="#713f12" text-anchor="middle" font-weight="bold">v1.6 現行版</text>
+
+          <!-- マウスカーソル (ホバー例: 田村 #31) -->
+          <g id="hoverdemo">
+          <path d="M610,212 l0,17 l4,-4 l3,7 l4,-2 l-3,-7 l6,0 z" fill="#1f2937" stroke="#ffffff" stroke-width="1.2"/>
+          <!-- ホバーカード: 帯に無い情報だけ (基点・公開日・保存) -->
+          <line x1="610" y1="229" x2="622" y2="262" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="3 3"/>
+          <g>
+            <rect x="560" y="262" rx="9" width="332" height="56" fill="#ffffff" stroke="#b45309" stroke-width="1.5"
+                  filter="drop-shadow(0 3px 8px rgba(0,0,0,.16))"/>
+            <text x="576" y="285" font-size="11.5" fill="#374151">v1.4 を基に作成 → 2026/8/10 に v1.5 として公開</text>
+            <g transform="translate(576,292)">
+              <rect x="0" y="0" rx="12" width="98" height="22" fill="#ffffff" stroke="#2b4a6f" stroke-width="1.5"/>
+              <use href="#dlicon" transform="translate(10,5)" stroke="#2b4a6f" fill="none"/>
+              <text x="58" y="15" font-size="11" fill="#2b4a6f" text-anchor="middle">ZIP を保存</text>
+            </g>
+          </g>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </div>
+  <p class="caption"><b>読み方:</b> 正式版から斜めの線が刺さる帯 = その版を基に提出された更新 (左端 = 提出した日) · 帯から本線へ上がる矢印が届いた点 = 正式版として公開 · 点線の帯 = まだ確認中 (きょうの線まで) · 同じ版から複数の提出は上下に分かれます</p>
+  <p class="caption"><b>操作:</b> ◀▶ 横にスクロール · 帯にマウスを乗せると詳細 · 押すと下の一覧の行へ移動</p>
+
+  <div class="sect">公開済み (新しい順)</div>
+  <div class="row cur">
+    <span class="who" style="background:#0f766e"></span><span class="name">佐藤</span>
+    <span class="ver">v1.6</span><span class="num">#35</span>
+    <span class="desc">検定比の丸め処理を修正・二丁溝形鋼 (2C)・二丁山形鋼 (2L) 断面に対応</span>
+    <span class="pill-cur">現行版</span>
+    <span class="dates">2026/8/11 → 8/14 公開</span>
+    <span class="dl"><svg width="13" height="12"><use href="#dlicon" stroke="#2b4a6f" fill="none"/></svg>ZIP を保存</span>
+  </div>
+  <div class="row link">
+    <span class="who" style="background:#b45309"></span><span class="name">田村</span>
+    <span class="ver">v1.5</span><span class="num">#31</span>
+    <span class="desc">集成材の断面性能に対応・起動時の安定性を改善</span>
+    <span class="dates">2026/8/4 → 8/10 公開</span>
+    <span class="dl"><svg width="13" height="12"><use href="#dlicon" stroke="#2b4a6f" fill="none"/></svg>ZIP を保存</span>
+  </div>
+  <div class="row">
+    <span class="who" style="background:#b45309"></span><span class="name">田村</span>
+    <span class="ver">v1.4</span><span class="num">#27</span>
+    <span class="desc">保有耐力横補剛の検討を追加</span>
+    <span class="dates">2026/7/29 → 8/2 公開</span>
+    <span class="dl"><svg width="13" height="12"><use href="#dlicon" stroke="#2b4a6f" fill="none"/></svg>ZIP を保存</span>
+  </div>
+  <div class="row">
+    <span class="who" style="background:#94a3b8"></span><span class="name">—</span>
+    <span class="ver">v1.3</span><span class="num">—</span>
+    <span class="desc">初回配布</span>
+    <span class="dates">2026/7/28 公開</span>
+    <span class="dl"><svg width="13" height="12"><use href="#dlicon" stroke="#2b4a6f" fill="none"/></svg>ZIP を保存</span>
+  </div>
+
+  <div class="sect">確認と承認の途中 (まだ配れません)</div>
+  <div class="row wait">
+    <span class="who" style="background:#be185d"></span><span class="name">高橋</span>
+    <span class="ver">—</span><span class="num">#38</span>
+    <span class="desc">保有耐力横補剛の追加検討</span>
+    <span class="pill-wait">確認中</span>
+    <span class="dates">2026/8/11 提出</span>
+    <span class="dl off"><svg width="13" height="12"><use href="#dlicon" stroke="#9ca3af" fill="none"/></svg>ZIP を保存</span>
+  </div>
+  <div class="row wait">
+    <span class="who" style="background:#6d28d9"></span><span class="name">冨里</span>
+    <span class="ver">—</span><span class="num">#40</span>
+    <span class="desc">一時フォルダの利用を廃止</span>
+    <span class="pill-wait">確認中</span>
+    <span class="dates">2026/8/15 提出</span>
+    <span class="dl off"><svg width="13" height="12"><use href="#dlicon" stroke="#9ca3af" fill="none"/></svg>ZIP を保存</span>
+  </div>
+  <div class="close">閉じる</div>
+</div>
+<script>
+  const sc = document.getElementById('sc');
+  sc.scrollLeft = 480;  // #31 チップ全体と現行版・きょう線が収まる位置
+</script>

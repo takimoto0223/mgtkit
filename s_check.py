@@ -34,7 +34,7 @@ import numpy as np
 from .util import find_index
 from .alst import ALST_S
 from .secprops import (
-    BH, BBOX, BBOX_H, BP, BC, BCC, BCT, BL, BSB, BSR, BHwCP,
+    BH, BBOX, BBOX_H, BP, BC, BC2, BCC, BCT, BL, BL2, BSB, BSR, BHwCP,
 )
 
 
@@ -1803,6 +1803,82 @@ def TC_analysis(sectionsize, length, stress, timecase, SN, Lminus):
 
 
 # ---------------------------------------------------------------------------
+# TC2_analysis (mgtkit独自拡張。MATLAB原典なし)
+# ---------------------------------------------------------------------------
+
+@_matlabenv
+def TC2_analysis(sectionsize, length, stress, timecase, SN, Lminus):
+    """二丁溝形鋼(背中合わせ2C)の引張力に対する断面算定.
+
+    TC_analysis(単材C)とロジックは同一で、断面性能のみ secprops.BC2 を
+    用いる (Lminus: 断面欠損幅mm。ボルトは2枚のウェブを貫通する前提で
+    単材の2倍を控除する)。
+    """
+    sectionsize = np.asarray(sectionsize, dtype=float).ravel()
+    length = np.asarray(length, dtype=float).ravel()
+    stress = np.atleast_2d(np.asarray(stress, dtype=float))
+    SN = np.asarray(SN, dtype=float).ravel()
+
+    # 鋼材断面性能
+    a = BC2(sectionsize, 1)
+    ixs = BC2(sectionsize, 4)
+    iys = BC2(sectionsize, 5)
+
+    # 断面力取り込み（単位をN/mm2系にする．）
+    Fx1 = stress[:, 0] * 10 ** 3
+    Fx2 = stress[:, 1] * 10 ** 3
+
+    # 長短期設定
+    if timecase >= 10:
+        timecase = 2
+    elif timecase == 1:
+        timecase = 1
+    else:
+        _timecase_stop()
+
+    t = max(sectionsize[2], sectionsize[3])
+    ALstressS = ALST_S([SN[1], t])
+    F = ALstressS[2, 0]
+    a = a - 2 * (Lminus / 10 * sectionsize[2] / 10)
+
+    # 長期許容応力度計算
+    if SN[0] == 1:
+        ft = ALstressS[0, 0]
+    elif SN[0] == 2:
+        F = SN[1]
+        ft = F / 1.5
+
+    # 圧縮
+    lamdax = length[0] * 100 / ixs
+    lamday = length[1] * 100 / iys
+    lamdadfc = max(lamdax, lamday)
+    Lamda = 1500 / math.sqrt(F / 1.5)
+
+    if lamdadfc > Lamda:
+        fc = 18 / 65 / (lamdadfc / Lamda) ** 2 * F
+    else:
+        fc = ((1 - 0.4 * (lamdadfc / Lamda) ** 2) / (1.5 + 2 / 3 * (lamdadfc / Lamda) ** 2)) * F
+
+    if timecase == 2:
+        ft = F
+        fc = 1.5 * fc
+
+    # 応力度の計算ならびに検定値の計算
+    sigma_cx1 = Fx1 / (a * 100)
+    sigma_cx2 = Fx2 / (a * 100)
+
+    if np.all(sigma_cx1 >= 0) and np.all(sigma_cx2 >= 0):
+        ratio_cx1 = np.abs(sigma_cx1) / ft
+        ratio_cx2 = np.abs(sigma_cx2) / ft
+    else:
+        ratio_cx1 = np.abs(sigma_cx1) / fc
+        ratio_cx2 = np.abs(sigma_cx2) / fc
+
+    ratio = np.column_stack([ratio_cx1, ratio_cx2])
+    return ratio
+
+
+# ---------------------------------------------------------------------------
 # TL_analysis.m
 # ---------------------------------------------------------------------------
 
@@ -1839,6 +1915,82 @@ def TL_analysis(sectionsize, length, stress, timecase, SN, Lminus):
     ALstressS = ALST_S([SN[1], t])
     F = ALstressS[2, 0]
     a = a - (Lminus / 10 * sectionsize[2] / 10)
+
+    # 長期許容応力度計算
+    if SN[0] == 1:
+        ft = ALstressS[0, 0]
+    elif SN[0] == 2:
+        F = SN[1]
+        ft = F / 1.5
+
+    # 圧縮
+    lamdax = length[0] * 100 / ixs
+    lamday = length[1] * 100 / iys
+    lamdadfc = max(lamdax, lamday)
+    Lamda = 1500 / math.sqrt(F / 1.5)
+
+    if lamdadfc > Lamda:
+        fc = 18 / 65 / (lamdadfc / Lamda) ** 2 * F
+    else:
+        fc = ((1 - 0.4 * (lamdadfc / Lamda) ** 2) / (1.5 + 2 / 3 * (lamdadfc / Lamda) ** 2)) * F
+
+    if timecase == 2:
+        ft = F
+        fc = 1.5 * fc
+
+    # 応力度の計算ならびに検定値の計算
+    sigma_cx1 = Fx1 / (a * 100)
+    sigma_cx2 = Fx2 / (a * 100)
+
+    if np.all(sigma_cx1 >= 0) and np.all(sigma_cx2 >= 0):
+        ratio_cx1 = np.abs(sigma_cx1) / ft
+        ratio_cx2 = np.abs(sigma_cx2) / ft
+    else:
+        ratio_cx1 = np.abs(sigma_cx1) / fc
+        ratio_cx2 = np.abs(sigma_cx2) / fc
+
+    ratio = np.column_stack([ratio_cx1, ratio_cx2])
+    return ratio
+
+
+# ---------------------------------------------------------------------------
+# TL2_analysis (mgtkit独自拡張。MATLAB原典なし)
+# ---------------------------------------------------------------------------
+
+@_matlabenv
+def TL2_analysis(sectionsize, length, stress, timecase, SN, Lminus):
+    """二丁山形鋼(背中合わせ2L・等辺のみ)の引張力に対する断面算定.
+
+    TL_analysis(単材L)とロジックは同一で、断面性能のみ secprops.BL2 を
+    用いる (Lminus: 断面欠損幅mm。ボルトは2枚の脚を貫通する前提で単材の
+    2倍を控除する)。
+    """
+    sectionsize = np.asarray(sectionsize, dtype=float).ravel()
+    length = np.asarray(length, dtype=float).ravel()
+    stress = np.atleast_2d(np.asarray(stress, dtype=float))
+    SN = np.asarray(SN, dtype=float).ravel()
+
+    # 鋼材断面性能
+    a = BL2(sectionsize, 1)
+    ixs = BL2(sectionsize, 4)
+    iys = BL2(sectionsize, 5)
+
+    # 断面力取り込み（単位をN/mm2系にする．）
+    Fx1 = stress[:, 0] * 10 ** 3
+    Fx2 = stress[:, 1] * 10 ** 3
+
+    # 長短期設定
+    if timecase >= 10:
+        timecase = 2
+    elif timecase == 1:
+        timecase = 1
+    else:
+        _timecase_stop()
+
+    t = max(sectionsize[2], sectionsize[3])
+    ALstressS = ALST_S([SN[1], t])
+    F = ALstressS[2, 0]
+    a = a - 2 * (Lminus / 10 * sectionsize[2] / 10)
 
     # 長期許容応力度計算
     if SN[0] == 1:
@@ -5088,6 +5240,126 @@ def TC_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
 
 # ---------------------------------------------------------------------------
+# TC2_analysis_text (mgtkit独自拡張。MATLAB原典なし)
+# ---------------------------------------------------------------------------
+
+def TC2_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
+                      section_no, Lminus, LOAS_CASE_NAME, section_name):
+    """二丁溝形鋼(背中合わせ2C)の引張・圧縮力に対する断面算定詳細テキスト.
+
+    TC2_analysis と同じく圧縮側は座屈を考慮したfcで検定する
+    (length: 座屈長さ[m] [強軸, 弱軸]。TH_analysis_textと同じ扱い)。
+    """
+    n2s = _num2str
+    sectionsize = np.asarray(sectionsize, dtype=float).ravel()
+    length = np.asarray(length, dtype=float).ravel()
+    stress = np.atleast_2d(np.asarray(stress, dtype=float))
+    SN = np.asarray(SN, dtype=float).ravel()
+
+    # 鋼材断面性能
+    a = BC2(sectionsize, 1)
+    ixs = BC2(sectionsize, 4)
+    iys = BC2(sectionsize, 5)
+
+    text = ['二丁溝形鋼(背中合わせ)の引張・圧縮力に対する断面算定']
+    text.append('　　')
+
+    # 断面力取り込み（単位をN/mm2系にする．）
+    Fx1 = stress[:, 0] * 10 ** 3
+    Fx2 = stress[:, 1] * 10 ** 3
+
+    text.append('断面符号：' + section_name + '断面番号：' + n2s(section_no) + '　要素番号：' + n2s(ele_no))
+    text.append('　　')
+    text.append('二丁溝形鋼：2C-' + n2s(sectionsize[0]) + 'x' + n2s(sectionsize[1]) + 'x'
+                + n2s(sectionsize[2]) + 'x' + n2s(sectionsize[3])
+                + '　(背中合わせ・すきま0を仮定)')
+
+    text.append('断面欠損幅：' + n2s(Lminus) + 'mm　(両ウェブ貫通として2倍控除)')
+    # 長短期設定
+    if timecase >= 10:
+        timecase = 2
+        t_case = LOAS_CASE_NAME
+    elif timecase == 1:
+        timecase = 1
+        t_case = LOAS_CASE_NAME
+    else:
+        print('ERROR:長短期設定ミス')
+        raise RuntimeError('長短期設定ミス')
+
+    # 長期許容応力度計算
+    t = max(sectionsize[2], sectionsize[3])
+    ALstressS = ALST_S([SN[1], t])
+    F = ALstressS[2, 0]
+    a = a - 2 * (Lminus / 10 * sectionsize[2] / 10)
+    if SN[0] == 1:
+        ft = ALstressS[0, 0]
+    elif SN[0] == 2:
+        F = SN[1]
+        ft = F / 1.5
+
+    # 圧縮 (座屈)
+    lamdax = length[0] * 100 / ixs
+    lamday = length[1] * 100 / iys
+    lamdadfc = max(lamdax, lamday)
+    Lamda = 1500 / math.sqrt(F / 1.5)
+
+    if lamdadfc > Lamda:
+        fc = 18 / 65 / (lamdadfc / Lamda) ** 2 * F
+    else:
+        fc = ((1 - 0.4 * (lamdadfc / Lamda) ** 2) / (1.5 + 2 / 3 * (lamdadfc / Lamda) ** 2)) * F
+
+    if timecase == 2:
+        ft = F
+        fc = 1.5 * fc
+
+    text.append('*断面性能')
+    text.append('断面積：' + n2s(a) + 'cm2')
+    text.append('断面二次半径(強)：' + n2s(ixs) + 'cm' + '　断面二次半径(弱)：' + n2s(iys) + 'cm')
+
+    text.append('　　')
+    text.append('*部材支持条件')
+    text.append('座屈長さ(強)：' + n2s(length[0] * 1000, '%15.0f') + 'mm' + '　座屈長さ(弱)：'
+                + n2s(length[1] * 1000, '%15.0f') + 'mm')
+    text.append('細長比(強)：' + n2s(lamdax, '%15.0f') + '　細長比(弱)：' + n2s(lamday, '%15.0f'))
+
+    text.append('　　')
+    text.append('*鋼材情報')
+    text.append('F値：' + n2s(F, '%15.0f') + 'N/mm2' + '　E：20500 N/mm2' + '　限界細長比：'
+                + n2s(Lamda, '%15.0f'))
+
+    # 応力度の計算ならびに検定値の計算
+    sigma_cx1 = Fx1 / (a * 100)
+    sigma_cx2 = Fx2 / (a * 100)
+
+    if np.all(sigma_cx1 >= 0) and np.all(sigma_cx2 >= 0):
+        ratio_cx1 = np.abs(sigma_cx1) / ft
+        ratio_cx2 = np.abs(sigma_cx2) / ft
+    else:
+        ratio_cx1 = np.abs(sigma_cx1) / fc
+        ratio_cx2 = np.abs(sigma_cx2) / fc
+
+    text.append('　　')
+    text.append('　　')
+    text.append('*設計用応力　[' + t_case + ']　i端')
+    text.append('軸力' + n2s(Fx1 / 1000, '%15.1f') + 'kN')
+
+    text.append('　　')
+    text.append('*設計用応力　[' + t_case + ']　j端')
+    text.append('軸力' + n2s(Fx2 / 1000, '%15.1f') + 'kN')
+
+    text.append('　　')
+    text.append('　　')
+    text.append('*許容応力度　[' + t_case + ']')
+    text.append('引張許容応力度：' + n2s(ft, '%15.0f') + 'N/mm2')
+    text.append('圧縮許容応力度：' + n2s(fc, '%15.0f') + 'N/mm2')
+    text.append('　　')
+    text.append('*検定比　[' + t_case + ']　**i端　j端の順に示す**')
+    text.append('軸力検定：' + n2s(ratio_cx1, '%15.2f') + ',　' + n2s(ratio_cx2, '%15.2f'))
+
+    return text
+
+
+# ---------------------------------------------------------------------------
 # TL_analysis_text.m
 # ---------------------------------------------------------------------------
 
@@ -5271,6 +5543,126 @@ def TSB_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     text.append('　　')
     text.append('*検定比　[' + t_case + ']　**i端　j端の順に示す**')
     text.append('引張検定：' + n2s(ratio_cx1, '%15.2f') + ',　' + n2s(ratio_cx2, '%15.2f'))
+
+    return text
+
+
+# ---------------------------------------------------------------------------
+# TL2_analysis_text (mgtkit独自拡張。MATLAB原典なし)
+# ---------------------------------------------------------------------------
+
+def TL2_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
+                      section_no, Lminus, LOAS_CASE_NAME, section_name):
+    """二丁山形鋼(背中合わせ2L・等辺のみ)の引張・圧縮力に対する断面算定詳細テキスト.
+
+    TL2_analysis と同じく圧縮側は座屈を考慮したfcで検定する
+    (length: 座屈長さ[m] [強軸, 弱軸])。
+    """
+    n2s = _num2str
+    sectionsize = np.asarray(sectionsize, dtype=float).ravel()
+    length = np.asarray(length, dtype=float).ravel()
+    stress = np.atleast_2d(np.asarray(stress, dtype=float))
+    SN = np.asarray(SN, dtype=float).ravel()
+
+    # 鋼材断面性能
+    a = BL2(sectionsize, 1)
+    ixs = BL2(sectionsize, 4)
+    iys = BL2(sectionsize, 5)
+
+    text = ['二丁山形鋼(背中合わせ)の引張・圧縮力に対する断面算定']
+    text.append('　　')
+
+    # 断面力取り込み（単位をN/mm2系にする．）
+    Fx1 = stress[:, 0] * 10 ** 3
+    Fx2 = stress[:, 1] * 10 ** 3
+
+    text.append('断面符号：' + section_name + '断面番号：' + n2s(section_no) + '　要素番号：' + n2s(ele_no))
+    text.append('　　')
+    text.append('二丁山形鋼：2L-' + n2s(sectionsize[0]) + 'x' + n2s(sectionsize[1]) + 'x'
+                + n2s(sectionsize[2])
+                + '　(背中合わせ・すきま0を仮定、等辺のみ対応)')
+
+    text.append('断面欠損幅：' + n2s(Lminus) + 'mm　(両脚貫通として2倍控除)')
+    # 長短期設定
+    if timecase >= 10:
+        timecase = 2
+        t_case = LOAS_CASE_NAME
+    elif timecase == 1:
+        timecase = 1
+        t_case = LOAS_CASE_NAME
+    else:
+        print('ERROR:長短期設定ミス')
+        raise RuntimeError('長短期設定ミス')
+
+    # 長期許容応力度計算
+    t = max(sectionsize[2], sectionsize[3])
+    ALstressS = ALST_S([SN[1], t])
+    F = ALstressS[2, 0]
+    a = a - 2 * (Lminus / 10 * sectionsize[2] / 10)
+    if SN[0] == 1:
+        ft = ALstressS[0, 0]
+    elif SN[0] == 2:
+        F = SN[1]
+        ft = F / 1.5
+
+    # 圧縮 (座屈)
+    lamdax = length[0] * 100 / ixs
+    lamday = length[1] * 100 / iys
+    lamdadfc = max(lamdax, lamday)
+    Lamda = 1500 / math.sqrt(F / 1.5)
+
+    if lamdadfc > Lamda:
+        fc = 18 / 65 / (lamdadfc / Lamda) ** 2 * F
+    else:
+        fc = ((1 - 0.4 * (lamdadfc / Lamda) ** 2) / (1.5 + 2 / 3 * (lamdadfc / Lamda) ** 2)) * F
+
+    if timecase == 2:
+        ft = F
+        fc = 1.5 * fc
+
+    text.append('*断面性能')
+    text.append('断面積：' + n2s(a) + 'cm2')
+    text.append('断面二次半径(強)：' + n2s(ixs) + 'cm' + '　断面二次半径(弱)：' + n2s(iys) + 'cm')
+
+    text.append('　　')
+    text.append('*部材支持条件')
+    text.append('座屈長さ(強)：' + n2s(length[0] * 1000, '%15.0f') + 'mm' + '　座屈長さ(弱)：'
+                + n2s(length[1] * 1000, '%15.0f') + 'mm')
+    text.append('細長比(強)：' + n2s(lamdax, '%15.0f') + '　細長比(弱)：' + n2s(lamday, '%15.0f'))
+
+    text.append('　　')
+    text.append('*鋼材情報')
+    text.append('F値：' + n2s(F, '%15.0f') + 'N/mm2' + '　E：20500 N/mm2' + '　限界細長比：'
+                + n2s(Lamda, '%15.0f'))
+
+    # 応力度の計算ならびに検定値の計算
+    sigma_cx1 = Fx1 / (a * 100)
+    sigma_cx2 = Fx2 / (a * 100)
+
+    if np.all(sigma_cx1 >= 0) and np.all(sigma_cx2 >= 0):
+        ratio_cx1 = np.abs(sigma_cx1) / ft
+        ratio_cx2 = np.abs(sigma_cx2) / ft
+    else:
+        ratio_cx1 = np.abs(sigma_cx1) / fc
+        ratio_cx2 = np.abs(sigma_cx2) / fc
+
+    text.append('　　')
+    text.append('　　')
+    text.append('*設計用応力　[' + t_case + ']　i端')
+    text.append('軸力' + n2s(Fx1 / 1000, '%15.1f') + 'kN')
+
+    text.append('　　')
+    text.append('*設計用応力　[' + t_case + ']　j端')
+    text.append('軸力' + n2s(Fx2 / 1000, '%15.1f') + 'kN')
+
+    text.append('　　')
+    text.append('　　')
+    text.append('*許容応力度　[' + t_case + ']')
+    text.append('引張許容応力度：' + n2s(ft, '%15.0f') + 'N/mm2')
+    text.append('圧縮許容応力度：' + n2s(fc, '%15.0f') + 'N/mm2')
+    text.append('　　')
+    text.append('*検定比　[' + t_case + ']　**i端　j端の順に示す**')
+    text.append('軸力検定：' + n2s(ratio_cx1, '%15.2f') + ',　' + n2s(ratio_cx2, '%15.2f'))
 
     return text
 
