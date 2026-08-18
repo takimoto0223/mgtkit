@@ -439,6 +439,8 @@ def fallback_pr_body(update_text, limitations, base_version, summary):
     機械抽出するため、手書きの提出でも節の構成を自動生成と揃える。
     更新内容が空欄なら「## 更新内容」の節を作らない (リリースノートも
     空欄になる。管理者の指示 2026-08)。
+    基点の機械可読な記録は finalize_submission が本文の先頭へ付けるため、
+    ここの「(基点: %s)」は人が読むための表示 (versions.base_marker 参照)。
     """
     parts = _user_sections_text(update_text, limitations)
     parts += ['## 変更ファイルの説明', '',
@@ -535,6 +537,11 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         if not body:
             body = fallback_pr_body(commit_message, limitations,
                                     prep['base_version'], summary)
+        # 提出の基点 (提出者が取得した版) を機械可読で残す。過去の更新ログの
+        # 図はこれを読む。自動生成した本文には版名が入る保証がないため、
+        # 本文の作り方によらず必ず先頭に付ける
+        body = '%s\n%s' % (versions.base_marker(prep['base_version'],
+                                                prep['base_commit']), body)
         if notes:
             body += '\n\n' + notes
         title = message.splitlines()[0][:70]

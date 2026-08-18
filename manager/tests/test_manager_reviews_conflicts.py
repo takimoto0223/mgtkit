@@ -345,6 +345,8 @@ _GRAPHQL_SNAPSHOT = {
                  'headRefOid': 'headsha29',
                  'createdAt': '2026-08-01T09:00:00Z',
                  'mergedAt': '2026-08-04T10:00:00Z',
+                 'body': '<!-- mgtkit-base version=v1.3 commit=c13 -->\n'
+                         '## 更新内容\n- 合成梁\n',
                  'author': {'login': 'yamada'}},
                 {'number': 30, 'title': 'マネージャー修正',
                  'headRefName': 'claude/app-manager-y',
@@ -357,7 +359,13 @@ _GRAPHQL_SNAPSHOT = {
                  'isPrerelease': True, 'isDraft': False,
                  'description': '提出 #33 の検証通過版です。',
                  'publishedAt': '2026-08-05T00:00:00Z',
-                 'tagCommit': {'oid': 'tagsha-beta1'},
+                 'tagCommit': {'oid': 'tagsha-beta1',
+                               'associatedPullRequests': {'nodes': [
+                                   {'number': 30,
+                                    'headRefName': 'claude/app-manager-y'},
+                                   {'number': 29,
+                                    'headRefName':
+                                        'feature/yamada-20260801-1'}]}},
                  'releaseAssets': {'nodes': [
                      {'name': 'mgtkit.zip', 'downloadUrl': 'http://x/z'}]}},
                 {'tagName': 'v1.0', 'name': 'v1.0', 'isPrerelease': False,
@@ -382,8 +390,8 @@ class TestFetchSnapshot:
                 return _json.dumps(_GRAPHQL_SNAPSHOT)
             if args[0] == 'api' and 'collaborators' in args[1]:
                 return '["yamada", "fujitaka"]'
-            if args[0] == 'api' and 'compare' in args[1]:
-                return 'forksha-33\n'
+            if args[0] == 'api' and '/commits?' in args[1]:
+                return 'forksha-%s\n' % args[1].split('/')[4]
             raise AssertionError('unexpected gh call: %r' % args)
 
         monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)
@@ -393,10 +401,12 @@ class TestFetchSnapshot:
         assert [c[:2] for c in calls[:2]] == [
             ['api', 'graphql'],
             ['api', 'repos/o/r/collaborators?per_page=100']]
+        # 分岐点は「提出のいちばん古いコミットの親」= 本線を取り込む
+        # マージが積まれても動かない値 (compare の merge-base は動く)
         assert sorted(c[1] for c in calls[2:]) == [
-            'repos/o/r/compare/main...headsha21?per_page=1',
-            'repos/o/r/compare/main...headsha29?per_page=1',
-            'repos/o/r/compare/main...headsha33?per_page=1']
+            'repos/o/r/pulls/21/commits?per_page=1',
+            'repos/o/r/pulls/29/commits?per_page=1',
+            'repos/o/r/pulls/33/commits?per_page=1']
         # 提出の検索クエリも同じ GraphQL 1 回で渡している (往復を増やさない)
         assert 'submissions=repo:o/r is:pr is:merged head:feature/' \
             in calls[0]
@@ -423,6 +433,9 @@ class TestFetchSnapshot:
              'published_at': '2026-08-05',
              'published_at_full': '2026-08-05T00:00:00Z',
              'tag_sha': 'tagsha-beta1',
+             # タグのコミットに紐づく「提出」の番号 (管理者 PR #30 は
+             # 提出ではないので数えず、feature/ の #29 を採る)
+             'pr_number': 29,
              'assets': [{'name': 'mgtkit.zip', 'url': 'http://x/z'}]}]
         # 済み提出は feature/ ブランチのみ・図に必要な要約だけ。
         # 直近の取り込み (#29) と検索で拾った古い提出 (#21) の両方が入り、
@@ -433,13 +446,17 @@ class TestFetchSnapshot:
              'created_at_full': '2026-08-01T09:00:00Z',
              'merged_at': '2026-08-04',
              'merged_at_full': '2026-08-04T10:00:00Z',
-             'head_sha': 'headsha29', 'fork_sha': 'forksha-33'},
+             'head_sha': 'headsha29',
+             'base_version': 'v1.3', 'base_commit': 'c13',
+             'fork_sha': 'forksha-29', 'fork_kind': 'first-parent'},
             {'number': 21, 'title': '木材の断面性能を追加',
              'author': 'fujitaka', 'created_at': '2026-07-20',
              'created_at_full': '2026-07-20T09:00:00Z',
              'merged_at': '2026-07-25',
              'merged_at_full': '2026-07-25T10:00:00Z',
-             'head_sha': 'headsha21', 'fork_sha': 'forksha-33'}]
+             'head_sha': 'headsha21',
+             'base_version': '', 'base_commit': '',
+             'fork_sha': 'forksha-21', 'fork_kind': 'first-parent'}]
         # 承認待ちにも提出日が入る (図の帯の左端に使う)
         assert 'created_at' in pr
         # 分岐点コミットが付く (履歴図の基点の事実)
@@ -455,7 +472,7 @@ class TestFetchSnapshot:
                 return _json.dumps(_GRAPHQL_SNAPSHOT)
             if args[0] == 'api' and 'collaborators' in args[1]:
                 return '["yamada", "fujitaka"]'
-            if args[0] == 'api' and 'compare' in args[1]:
+            if args[0] == 'api' and '/commits' in args[1]:
                 raise AssertionError('既知の分岐点を取り直している')
             raise AssertionError('unexpected gh call: %r' % args)
 
@@ -492,6 +509,8 @@ class TestFetchSnapshot:
                 return '[]'
             if args[0] == 'api' and 'matching-refs' in args[1]:
                 return '[]'
+            if args[0] == 'api' and '/commits' in args[1]:
+                return 'forksha-33\n'
             raise AssertionError('unexpected gh call: %r' % args)
 
         monkeypatch.setattr(reviews.ghcli, 'run_gh', fake)

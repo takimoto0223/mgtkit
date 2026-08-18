@@ -15,12 +15,17 @@ import re
 import threading
 import time
 
-from . import feedback, ghcli, paths, submit
+from . import feedback, ghcli, paths, submit, versions
 from .autofix import AUTOFIX_PREFIX, _summarize_checks
 from .gitcli import ensure_work_repo, run_git
 from .submit import user_sections, workrepo_dir
 
 log = logging.getLogger(__name__)
+
+# 分岐点 (fork_sha) の求め方の版。求め方を変えたら上げる
+# (保存済みスナップショットの古い値を使い回さないための目印)。
+# 'first-parent' = 提出のいちばん古いコミットの親
+FORK_KIND = 'first-parent'
 
 
 class ReviewError(Exception):
@@ -205,6 +210,7 @@ def _build_pending(prs, config):
             continue
         summary = approval_summary(pr.get('reviews'), members)
         since = rejected_since(summary, n_req)
+        base = versions.base_from_body(pr.get('body')) or {}
         result.append({
             'number': pr['number'],
             'title': pr['title'],
@@ -216,6 +222,9 @@ def _build_pending(prs, config):
             'head_sha': pr.get('headRefOid') or '',
             # 提出時の説明文 (差分表示が使う。クリック時の往復をなくす)
             'body': pr.get('body') or '',
+            # 提出時に記録された基点 (提出者が取得した版。図が読む)
+            'base_version': base.get('version', ''),
+            'base_commit': base.get('commit', ''),
             'approved': summary['approved'],
             'rejected': summary['rejected'],
             'rejected_final': len(summary['rejected']) >= n_req,
@@ -239,7 +248,7 @@ query($owner: String!, $name: String!, $submissions: String!) {
   submissions: search(query: $submissions, type: ISSUE, first: 40) {
     nodes {
       ... on PullRequest {
-        number title headRefName headRefOid createdAt mergedAt
+        number title headRefName headRefOid createdAt mergedAt body
         author { login }
       }
     }
@@ -269,14 +278,19 @@ query($owner: String!, $name: String!, $submissions: String!) {
     merged: pullRequests(states: MERGED, first: 40,
                          orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number title headRefName headRefOid createdAt mergedAt
+        number title headRefName headRefOid createdAt mergedAt body
         author { login }
       }
     }
     releases(first: 30, orderBy: {field: CREATED_AT, direction: DESC}) {
       nodes {
         tagName name isPrerelease isDraft description publishedAt
-        tagCommit { oid }
+        tagCommit {
+          oid
+          associatedPullRequests(first: 5) {
+            nodes { number headRefName }
+          }
+        }
         releaseAssets(first: 10) { nodes { name downloadUrl } }
       }
     }
@@ -319,11 +333,13 @@ def fork_memo(snapshot):
 
     分岐点はブランチが更新されない限り変わらないため
     「番号:headSHA」をキーにする (更新されたら取り直しになる)。
+    求め方を変えたとき (FORK_KIND) の古い値は使わない。
     """
     memo = {}
     for p in ((snapshot or {}).get('pending') or []) \
             + ((snapshot or {}).get('merged') or []):
-        if p.get('fork_sha') and p.get('head_sha'):
+        if (p.get('fork_sha') and p.get('head_sha')
+                and p.get('fork_kind') == FORK_KIND):
             memo['%s:%s' % (p.get('number'), p['head_sha'])] = \
                 p['fork_sha']
     return memo
@@ -333,21 +349,20 @@ def _attach_fork_points(items, config, known=None):
     """提出 (承認待ち + 取り込み済み) に分岐点コミット (fork_sha) を付ける.
 
     履歴図の「どの版から作られたか」は日付では取り違えるため
-    (公開後に古い版の内容が提出されることが普通にある)、git の
-    merge-base を事実として使う。既知のものは known で省略し、
-    新しいものだけ並列に問い合わせる。失敗した提出は付けない
-    (図は日時からの推定にフォールバックする)。
+    (公開後に古い版の内容が提出されることが普通にある)、git の事実を
+    使う。事実は「提出のいちばん古いコミットの親」= 提出者が手元に
+    持っていた版のコミット。既知のものは known で省略し、新しいものだけ
+    並列に問い合わせる。失敗した提出は付けない (図は日時からの推定に
+    フォールバックする)。
     """
     known = known or {}
     slug = paths.repo_slug(config)
-    base = ((config or {}).get('base_branch')
-            if isinstance(config, dict) else None) or 'main'
 
     def fetch(p):
         def run():
             try:
-                p['fork_sha'] = ghcli.merge_base_sha(slug, base,
-                                                     p['head_sha'])
+                p['fork_sha'] = ghcli.fork_point_sha(slug, p['number'])
+                p['fork_kind'] = FORK_KIND
             except ghcli.GhError:
                 log.info('分岐点の取得に失敗 (#%s)。日時から推定します',
                          p.get('number'), exc_info=True)
@@ -355,13 +370,14 @@ def _attach_fork_points(items, config, known=None):
 
     threads = []
     for p in items:
-        if not p.get('head_sha'):
-            continue
-        key = '%s:%s' % (p.get('number'), p['head_sha'])
-        if key in known:
+        head = p.get('head_sha')
+        key = '%s:%s' % (p.get('number'), head) if head else None
+        if key and key in known:
             p['fork_sha'] = known[key]
+            p['fork_kind'] = FORK_KIND
             continue
-        threads.append(fetch(p))
+        if p.get('number'):
+            threads.append(fetch(p))
     for t in threads:
         t.start()
     for t in threads:
@@ -415,9 +431,26 @@ def _pr_from_graphql(node):
     }
 
 
+def _submission_pr_of_commit(commit):
+    """コミットに紐づく提出 (feature/ の PR) の番号。無ければ 0.
+
+    正式版のタグはその版になった提出の取り込みコミットを指すので、
+    ここから「どの提出がどの版になったか」が事実として引ける。
+    管理者自身の PR (claude/* など) は提出ではないので数えない
+    (初回配布の版がそれで埋まってしまうため)。
+    """
+    nodes = ((commit or {}).get('associatedPullRequests') or {}) \
+        .get('nodes') or []
+    for pr in nodes:
+        if _is_submission(pr):
+            return pr.get('number') or 0
+    return 0
+
+
 def _release_from_graphql(node):
     """GraphQL の Release ノードを ghcli.fetch_releases と同じ形に変換."""
     assets = (node.get('releaseAssets') or {}).get('nodes') or []
+    commit = node.get('tagCommit') or {}
     return {
         'tag': node.get('tagName') or '',
         'name': node.get('name') or node.get('tagName') or '',
@@ -425,7 +458,8 @@ def _release_from_graphql(node):
         'notes': node.get('description') or '',
         'published_at': (node.get('publishedAt') or '')[:10],
         'published_at_full': node.get('publishedAt') or '',
-        'tag_sha': (node.get('tagCommit') or {}).get('oid') or '',
+        'tag_sha': commit.get('oid') or '',
+        'pr_number': _submission_pr_of_commit(commit),
         'assets': [{'name': a.get('name'), 'url': a.get('downloadUrl')}
                    for a in assets],
     }
@@ -434,15 +468,18 @@ def _release_from_graphql(node):
 def _merged_from_prs(prs):
     """PR dict (gh --json / GraphQL 変換済み) から済み提出の要約を作る.
 
-    過去の更新ログの図 (誰がいつ提出し、いつ正式版になったか) 用。
-    マネージャー経由の提出 (feature/ ブランチ) のみを対象とする。
-    複数の取得経路をつないで渡せるよう、同じ番号は先に来た方を残す。
+    過去の更新ログの図 (誰がいつ提出し、どの版を基に作り、いつ正式版に
+    なったか) 用。マネージャー経由の提出 (feature/ ブランチ) のみを
+    対象とする。複数の取得経路をつないで渡せるよう、同じ番号は先に来た方を
+    残す。本文そのものは持ち回らず、基点の記録だけ抜き出して持つ
+    (保存しておくスナップショットを太らせないため)。
     """
     out, seen = [], set()
     for pr in prs:
         if not _is_submission(pr) or pr['number'] in seen:
             continue
         seen.add(pr['number'])
+        base = versions.base_from_body(pr.get('body')) or {}
         out.append({
             'number': pr['number'],
             'title': pr.get('title') or '',
@@ -452,6 +489,8 @@ def _merged_from_prs(prs):
             'merged_at': (pr.get('mergedAt') or '')[:10],
             'merged_at_full': pr.get('mergedAt') or '',
             'head_sha': pr.get('headRefOid') or '',
+            'base_version': base.get('version', ''),
+            'base_commit': base.get('commit', ''),
         })
     return out
 
@@ -465,7 +504,7 @@ def list_merged(config=None):
     """
     slug = paths.repo_slug(config)
     fields = ('number,title,author,headRefName,headRefOid,'
-              'createdAt,mergedAt')
+              'createdAt,mergedAt,body')
 
     def fetch(extra):
         out = ghcli.run_gh(['pr', 'list', '--repo', slug,

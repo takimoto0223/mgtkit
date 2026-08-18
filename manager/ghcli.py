@@ -111,16 +111,20 @@ def tag_shas(repo):
     return shas
 
 
-def merge_base_sha(repo, base, head):
-    """base ブランチと head (SHA/ブランチ) の分岐点コミット SHA.
+def fork_point_sha(repo, number):
+    """提出 (PR) が分かれた元のコミット SHA = いちばん古いコミットの親.
 
     履歴図で「どの版から作られた提出か」を推定ではなく事実で出すために
-    使う。per_page=1 で応答を小さくする (compare はコミット一覧付き)。
+    使う。compare API の merge_base は「いまの本線との分岐点」なので、
+    提出後に本線を取り込むマージが積まれると元の基点から動いてしまう
+    (公開前のブランチ自動最新化で必ず起きる)。提出のいちばん古い
+    コミットの親は後から動かないため、こちらを事実として使う。
+
+    per_page=1 で応答を小さくする (提出のコミットは古い順に並ぶ)。
     """
     out = run_gh(['api',
-                  'repos/%s/compare/%s...%s?per_page=1'
-                  % (repo, base, head),
-                  '--jq', '.merge_base_commit.sha'])
+                  'repos/%s/pulls/%s/commits?per_page=1' % (repo, number),
+                  '--jq', '.[0].parents[0].sha // ""'])
     return out.strip()
 
 
