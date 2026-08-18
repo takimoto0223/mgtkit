@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""ガイド撮影用の偽 gh。実マネージャー UI に架空データ (偽名) を供給する."""
+import json
+import sys
+
+ARGS = sys.argv[1:]
+A = ' '.join(ARGS)
+
+C_V10 = 'a1b2c3' + '0' * 34
+C_V11 = 'b2c3d4' + '0' * 34
+H_21 = 'c3d4e5' + '0' * 34
+H_22 = 'd4e5f6' + '0' * 34
+
+V11_NOTES = """# mgtkit v1.1 リリースノート
+
+## 更新内容
+
+### 組立断面「二丁溝形鋼(2C)」「二丁山形鋼(2L)」に対応
+
+- 単材を背中合わせに 2 枚組み合わせた組立断面 (2C・2L) を、mgt ファイルの読み込みから断面性能の算定、断面算定 (検定)、計算書出力まで一貫して扱えるようになりました。
+- 断面欠損 (ボルト孔) は、ボルトが 2 枚のウェブ (脚) を貫通するものとして単材の 2 倍を控除します。
+
+## ご利用にあたっての制限事項
+
+- 二丁山形鋼(2L)は等辺山形鋼 (H = B) のみの対応です。不等辺山形鋼を指定した場合はエラーとなり処理を停止します。
+- 二丁山形鋼(2L)の断面係数 Zx・Zy は未対応です (曲げを伴う検定にはご利用いただけません)。"""
+
+RELEASES = [
+    {'tag_name': 'v1.2-beta.2', 'name': 'v1.2-beta.2', 'prerelease': True,
+     'draft': False,
+     'body': '提出 #21 (CSV出力機能の追加) の検証通過版です。'
+             'マネージャーのβ版タブから試用できます。',
+     'published_at': '2026-08-15T02:10:00Z',
+     'assets': [{'name': 'mgtkit-v1.2-beta.2.zip', 'url': 'x'}]},
+    {'tag_name': 'v1.2-beta.1', 'name': 'v1.2-beta.1', 'prerelease': True,
+     'draft': False,
+     'body': '提出 #22 (検定比図の凡例改善) の検証通過版です。'
+             'マネージャーのβ版タブから試用できます。',
+     'published_at': '2026-08-15T01:05:00Z',
+     'assets': [{'name': 'mgtkit-v1.2-beta.1.zip', 'url': 'x'}]},
+    {'tag_name': 'v1.1', 'name': 'v1.1', 'prerelease': False, 'draft': False,
+     'body': V11_NOTES, 'published_at': '2026-08-14T07:18:04Z',
+     'assets': [{'name': 'mgtkit-v1.1.zip', 'url': 'x'}]},
+    {'tag_name': 'v1.0', 'name': 'v1.0', 'prerelease': False, 'draft': False,
+     'body': 'v1.0 リリース。\n\n初回配布版です。',
+     'published_at': '2026-08-01T09:00:00Z',
+     'assets': [{'name': 'mgtkit-v1.0.zip', 'url': 'x'}]},
+]
+
+CHECKS_OK = [
+    {'name': 'test', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+    {'name': 'safety', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+]
+
+PR21 = {
+    'number': 21, 'title': 'CSV出力機能の追加',
+    'url': 'https://example.invalid/pull/21',
+    'author': {'login': 'sato-jiro'},
+    'headRefName': 'feature/sato-jiro-20260815-1', 'headRefOid': H_21,
+    'createdAt': '2026-08-15T01:40:00Z',
+    'reviews': [
+        {'author': {'login': 'suzuki-ichiro'}, 'state': 'APPROVED',
+         'body': '', 'submittedAt': '2026-08-15T03:00:00Z'},
+    ],
+    'statusCheckRollup': CHECKS_OK, 'mergeable': 'MERGEABLE',
+    'comments': [
+        {'author': {'login': 'tanaka-hanako'},
+         'body': 'β版 v1.2-beta.2 のフィードバック (田中花子):\n\n'
+                 '検定結果の CSV がそのまま社内様式に貼れて便利でした。'
+                 '出力の桁数も選べるとさらに嬉しいです。',
+         'createdAt': '2026-08-15T02:50:00Z',
+         'url': 'https://example.invalid/pull/21#c1'},
+        {'author': {'login': 'suzuki-ichiro'},
+         'body': 'β版 v1.2-beta.2 のフィードバック (鈴木一郎):\n\n'
+                 '手持ちの物件 3 件で出力を確認しました。問題ありません。',
+         'createdAt': '2026-08-15T02:55:00Z',
+         'url': 'https://example.invalid/pull/21#c2'},
+    ],
+    'body': '## 更新内容\n\n- 検定結果を CSV で出力できるようにしました。\n\n'
+            '## ご利用にあたっての制限事項\n\n- なし\n',
+}
+
+PR22 = {
+    'number': 22, 'title': '検定比図の凡例改善',
+    'url': 'https://example.invalid/pull/22',
+    'author': {'login': 'suzuki-ichiro'},
+    'headRefName': 'feature/suzuki-ichiro-20260815-1', 'headRefOid': H_22,
+    'createdAt': '2026-08-15T00:50:00Z',
+    'reviews': [], 'statusCheckRollup': CHECKS_OK, 'mergeable': 'MERGEABLE',
+    'comments': [],
+    'body': '## 更新内容\n\n- 検定比図の凡例を大きくしました。\n\n'
+            '## ご利用にあたっての制限事項\n\n- なし\n',
+}
+
+MERGED = [
+    {'number': 18, 'title': '二丁溝形鋼(2C)・二丁山形鋼(2L)断面の対応を追加',
+     'author': {'login': 'sato-jiro'},
+     'headRefName': 'feature/sato-jiro-20260807-1',
+     'createdAt': '2026-08-07T10:31:00Z', 'mergedAt': '2026-08-14T07:17:33Z'},
+    {'number': 15, 'title': '計算書の文章出力の改善',
+     'author': {'login': 'tanaka-hanako'},
+     'headRefName': 'feature/tanaka-hanako-20260804-1',
+     'createdAt': '2026-08-04T09:00:00Z', 'mergedAt': '2026-08-07T08:50:00Z'},
+]
+
+
+def out(s):
+    sys.stdout.write(s)
+    sys.exit(0)
+
+
+def j(obj):
+    out(json.dumps(obj, ensure_ascii=False))
+
+
+if 'graphql' in A:
+    sys.stderr.write('graphql disabled in demo\n')
+    sys.exit(1)
+
+if ARGS[:2] == ['api', 'user']:
+    out('yamada-taro\n')
+
+if ARGS[0] == 'api' and '/releases' in ARGS[1]:
+    j(RELEASES)
+
+if ARGS[0] == 'api' and 'collaborators' in ARGS[1]:
+    out('["yamada-taro","suzuki-ichiro","sato-jiro","tanaka-hanako"]')
+
+if ARGS[0] == 'api' and '/compare/' in ARGS[1]:
+    out(C_V11 if H_21 in ARGS[1] or H_22 in ARGS[1] else C_V10)
+
+if ARGS[0] == 'api' and '/commits/' in ARGS[1]:
+    out(C_V11 if 'v1.1' in ARGS[1] else C_V10)
+
+if ARGS[0] == 'api' and '--jq' in ARGS and '.permissions.push' in A:
+    out('true')
+
+if ARGS[0] == 'api' and '/pulls/' in ARGS[1] and 'reviews' in ARGS[1]:
+    n = 21 if '/pulls/21/' in ARGS[1] else 22
+    j((PR21 if n == 21 else PR22)['reviews'])
+
+if ARGS[0] == 'issue' and ARGS[1] == 'list':
+    out('[]')
+
+if ARGS[0] == 'pr' and ARGS[1] == 'list':
+    if '--state' in ARGS and ARGS[ARGS.index('--state') + 1] == 'merged':
+        j(MERGED)
+    j([PR21, PR22])
+
+if ARGS[0] == 'pr' and ARGS[1] == 'view':
+    n = int(ARGS[2])
+    j(PR21 if n == 21 else PR22)
+
+if ARGS[0] == 'pr' and ARGS[1] == 'diff':
+    out('')
+
+# それ以外の書き込み系は成功したふりだけする (デモでは何も起きない)
+out('')

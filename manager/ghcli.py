@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """gh CLI のサブプロセスラッパー.
 
-方針 (docs/app-manager-spec.md):
+方針 (manager/docs/decisions.md):
 - GitHub 操作は認証済み gh CLI に委ね、トークンをマネージャー内に保存しない
 - 失敗時は stderr をログに残し、ユーザーには平易な日本語メッセージを見せる
 """
@@ -52,8 +52,11 @@ def _friendly_message(stderr):
                 '「gh auth login」を実行してください。')
     if 'could not resolve' in s or 'connect' in s or 'network' in s:
         return 'ネットワークに接続できません。接続環境を確認してください。'
+    if '403' in s or 'forbidden' in s:
+        return ('権限がありません。この操作はリポジトリのオーナー (管理者) '
+                'のみ実行できます。')
     if 'not found' in s or '404' in s:
-        return '対象が見つかりませんでした。リポジトリの設定を確認してください。'
+        return '対象が見つかりませんでした。ユーザー名やリポジトリの設定を確認してください。'
     if 'rate limit' in s:
         return 'GitHub の利用制限に達しました。しばらく待って再試行してください。'
     return ('GitHub との通信でエラーが発生しました。'
@@ -78,10 +81,47 @@ def fetch_releases(repo, limit=30):
             'prerelease': bool(r.get('prerelease')),
             'notes': r.get('body') or '',
             'published_at': (r.get('published_at') or '')[:10],
+            # 同日に複数の出来事があるときの前後関係の判定用 (履歴図)
+            'published_at_full': r.get('published_at') or '',
             'assets': [{'name': a.get('name'), 'url': a.get('url')}
                        for a in (r.get('assets') or [])],
         })
     return releases
+
+
+def tag_shas(repo):
+    """タグ名 → コミット SHA の対応表 (履歴図の分岐点照合用).
+
+    リリースのタグは軽量タグ (コミット直指し) で作られる前提。
+    注釈付きタグ (object.type == 'tag') は対応表に入れない
+    (図は日時からの推定にフォールバックする)。
+    """
+    out = run_gh(['api',
+                  'repos/%s/git/matching-refs/tags?per_page=100' % repo])
+    try:
+        refs = json.loads(out)
+    except ValueError:
+        raise GhError('タグ一覧の応答を解釈できませんでした。')
+    shas = {}
+    for r in refs:
+        obj = r.get('object') or {}
+        if obj.get('type') == 'commit':
+            shas[(r.get('ref') or '')[len('refs/tags/'):]] = \
+                obj.get('sha') or ''
+    return shas
+
+
+def merge_base_sha(repo, base, head):
+    """base ブランチと head (SHA/ブランチ) の分岐点コミット SHA.
+
+    履歴図で「どの版から作られた提出か」を推定ではなく事実で出すために
+    使う。per_page=1 で応答を小さくする (compare はコミット一覧付き)。
+    """
+    out = run_gh(['api',
+                  'repos/%s/compare/%s...%s?per_page=1'
+                  % (repo, base, head),
+                  '--jq', '.merge_base_commit.sha'])
+    return out.strip()
 
 
 def latest_stable(releases):
@@ -94,6 +134,75 @@ def latest_stable(releases):
 
 def prereleases(releases):
     return [r for r in releases if r['prerelease']]
+
+
+JOIN_REQUEST_TITLE = '参加申請'
+
+
+def has_push_access(repo):
+    """自分がこのリポジトリへの push 権限 (collaborator) を持つか."""
+    out = run_gh(['api', 'repos/%s' % repo, '--jq', '.permissions.push'])
+    return out.strip() == 'true'
+
+
+def find_my_join_request(repo):
+    """自分が出した参加申請 Issue (open/closed 問わず) を返す。無ければ None.
+
+    close 済みでも再申請しない (却下された申請の連投を防ぐ)。
+    """
+    out = run_gh(['issue', 'list', '--repo', repo, '--author', '@me',
+                  '--state', 'all', '--search', JOIN_REQUEST_TITLE,
+                  '--json', 'number,title,state'])
+    try:
+        issues = json.loads(out)
+    except ValueError:
+        return None
+    for issue in issues:
+        if (issue.get('title') or '').startswith(JOIN_REQUEST_TITLE):
+            return issue
+    return None
+
+
+def create_join_request(repo, display_name):
+    """参加申請 Issue を作成する (collaborator でない新メンバーの初回起動時).
+
+    オーナーには GitHub から通知メールが届き、「承認」と返信 (コメント) すると
+    .github/workflows/join-request.yml が自動で collaborator 招待を送る。
+    """
+    login = run_gh(['api', 'user', '--jq', '.login']).strip()
+    owner = repo.split('/')[0]
+    title = '%s: %s (@%s)' % (JOIN_REQUEST_TITLE, display_name or login,
+                              login)
+    # オーナーを @メンション する (Watch 設定によらず通知メールを確実に届ける)
+    body = ('mgtkit アプリマネージャーからの参加申請です。\n\n'
+            '- GitHub: @%s\n'
+            '- 名前: %s\n\n'
+            '@%s さんへ: この Issue に「承認」とコメントすると (通知メールへ'
+            'の返信でも可)、自動で collaborator 招待が送られます。'
+            '承認しない場合はコメントせずにクローズしてください。'
+            % (login, display_name or '(未登録)', owner))
+    run_gh(['issue', 'create', '--repo', repo,
+            '--title', title, '--body', body])
+
+
+def accept_repo_invitation(repo):
+    """自分宛の招待のうち repo のものがあれば承諾する.
+
+    メンバーがマネージャーを起動するだけで参加が完了するようにするための
+    仕組み。招待が無ければ何もしない。戻り値: 承諾したら True。
+    """
+    out = run_gh(['api', '/user/repository_invitations'])
+    try:
+        invitations = json.loads(out)
+    except ValueError:
+        return False
+    for inv in invitations:
+        full_name = ((inv.get('repository') or {}).get('full_name') or '')
+        if full_name.lower() == repo.lower():
+            run_gh(['api', '-X', 'PATCH',
+                    '/user/repository_invitations/%s' % inv['id']])
+            return True
+    return False
 
 
 def tag_commit_sha(repo, tag):
