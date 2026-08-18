@@ -40,6 +40,20 @@ class TestPricing:
         assert usage.model_name(
             _config(tmp_path, claude_model='')) == 'claude-opus-5'
 
+    def test_pricing_url(self, tmp_path):
+        # 単価の裏を取れるよう料金表の URL を画面に出す
+        assert usage.pricing_url(_config(tmp_path)) == (
+            'https://platform.claude.com/docs/ja/about-claude/pricing')
+        assert usage.pricing_url(
+            _config(tmp_path, pricing_url='https://example.com/p')) == (
+            'https://example.com/p')
+
+    def test_rates_updated_text(self, tmp_path):
+        # 画面には yyyy/mm/dd で出す
+        assert usage.rates_updated_text(_config(tmp_path)) == '2026/08/18'
+        assert usage.rates_updated_text(
+            _config(tmp_path, rates_updated_at='2026-09-01')) == '2026/09/01'
+
     def test_rates_updated_at(self, tmp_path):
         # 既定は「単価とレートを最後に確認した日」。config で上書きできる
         assert usage.rates_updated_at(_config(tmp_path)) == '2026-08-18'

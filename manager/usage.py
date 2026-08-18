@@ -11,7 +11,8 @@
 - 円表示は manager.usd_jpy_rate での換算。単価とレートを最後に
   確認した日は manager.rates_updated_at に持ち、画面に出す
 - 単価はモデルごとに違うため、どのモデルの単価かも画面に出す
-  (manager.claude_model)
+  (manager.claude_model)。裏を取れるよう料金表の URL も出す
+  (manager.pricing_url)
 """
 import datetime
 import json
@@ -29,6 +30,8 @@ _LOCK = threading.Lock()
 DEFAULT_MODEL = 'claude-opus-5'
 DEFAULT_PRICING = {'input_per_mtok': 5.0, 'output_per_mtok': 25.0}
 DEFAULT_USD_JPY = 159.70
+# 単価の出典 (画面に出す)。config manager.pricing_url で上書き可
+DEFAULT_PRICING_URL = 'https://platform.claude.com/docs/ja/about-claude/pricing'
 # 上の単価と為替レートを最後に確認した日 (config manager.rates_updated_at)
 DEFAULT_RATES_UPDATED_AT = '2026-08-18'
 
@@ -53,6 +56,11 @@ def model_name(config=None):
     return _mgr(config).get('claude_model') or DEFAULT_MODEL
 
 
+def pricing_url(config=None):
+    """単価の出典 (Anthropic の料金表) の URL."""
+    return _mgr(config).get('pricing_url') or DEFAULT_PRICING_URL
+
+
 def usd_jpy_rate(config=None):
     try:
         return float(_mgr(config).get('usd_jpy_rate') or DEFAULT_USD_JPY)
@@ -64,6 +72,11 @@ def rates_updated_at(config=None):
     """単価と為替レートを最後に確認した日 (画面に出す文字列)."""
     v = _mgr(config).get('rates_updated_at')
     return str(v) if v else DEFAULT_RATES_UPDATED_AT
+
+
+def rates_updated_text(config=None):
+    """確認日の表示用 (yyyy/mm/dd)。読めない値はそのまま出す."""
+    return rates_updated_at(config).replace('-', '/')
 
 
 def cost_usd(in_tok, out_tok, cache_create=0, cache_read=0, config=None):

@@ -251,8 +251,9 @@ def main(page: ft.Page):
         s = usage.summary(config)
         rate = usage.usd_jpy_rate(config)
         p = usage.pricing(config)
-        updated = usage.rates_updated_at(config)
+        updated = usage.rates_updated_text(config)
         model = usage.model_name(config)
+        price_url = usage.pricing_url(config)
 
         def usd(v):
             return '$%.2f' % v if (v >= 0.005 or v == 0) else '$%.3f' % v
@@ -312,16 +313,16 @@ def main(page: ft.Page):
                            s['total_calls'], format(s['total_in'], ','),
                            format(s['total_out'], ',')),
                         size=13, weight=ft.FontWeight.BOLD),
-                ft.Text('※ %s  入力 %s / 出力 %s per 100万トークン '
-                        '(Anthropic 公式料金表)'
+                ft.Text('※ %s  入力 %s/出力 %s per 100万トークン'
                         % (model, unit(p['input_per_mtok']),
                            unit(p['output_per_mtok'])),
                         size=11, color='#6b7280'),
-                ft.Text('　 為替レート: $1 = ¥%.2f ・ '
-                        '単価と為替レートの確認日: %s' % (rate, updated),
+                ft.Text('　 (%s)' % price_url, size=11, color='#6b7280'),
+                ft.Text('　 為替レート: $1 = ¥%.2f　　　　確認日: %s'
+                        % (rate, updated),
                         size=11, color='#6b7280'),
-                ft.Text('円の額はこのレートでの換算です。正確な請求額は '
-                        'Claude Console で確認してください。'
+                ft.Container(height=4),
+                ft.Text('正確な請求額は Claude Console で確認してください。'
                         '他の PC や他のアプリでの利用は含みません。',
                         size=11, color='#6b7280'),
             ], tight=True, width=620),
