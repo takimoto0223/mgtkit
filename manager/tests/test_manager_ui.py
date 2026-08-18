@@ -117,3 +117,90 @@ def test_ui_updates_on_the_page_loop_are_direct(monkeypatch):
         loop.close()
     assert len(page.tasks) == tasks        # 載せ替えていない
     assert page.updates == updates + 1     # その場で実行された
+
+
+def _walk_texts(control, out):
+    """コントロール木の中の Text の文字列を集める (タブの中身の判別用)."""
+    value = getattr(control, 'value', None)
+    if isinstance(value, str):
+        out.append(value)
+    for name in ('content', 'label'):
+        child = getattr(control, name, None)
+        if isinstance(child, str):
+            out.append(child)
+        elif child is not None:
+            _walk_texts(child, out)
+    for name in ('controls', 'tabs', 'actions'):
+        children = getattr(control, name, None) or []
+        for child in children:
+            _walk_texts(child, out)
+    return out
+
+
+def _tab_names(tab_bar):
+    names = []
+    for tab in tab_bar.tabs:
+        label = tab.label
+        names.append(label if isinstance(label, str)
+                     else _walk_texts(label, [])[0])
+    return names
+
+
+def test_tabs_are_ordered_by_how_often_they_are_used(monkeypatch):
+    """タブの並びは 起動 / β版の確認と承認 / 更新版を提出.
+
+    提出は確認・承認より頻度が低いという管理者の判断で右端に置く。
+    名前の並びと中身の並びは別々の list なので、片方だけ入れ替えて
+    「名前と中身が食い違う」事故が起きないよう両方を固定する。
+    """
+    from manager import main as manager_main
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    page = _FakePage()
+    manager_main.main(page)
+
+    column = page.added[1].content
+    tab_bar, tab_view = column.controls[0], column.controls[1]
+    assert _tab_names(tab_bar) == ['起動', 'β版の確認と承認', '更新版を提出']
+
+    # 中身も同じ並びであること (各タブにしかない文言で見分ける)
+    panels = [' '.join(_walk_texts(c, [])) for c in tab_view.controls]
+    assert '過去の更新ログ' in panels[0]
+    assert 'β版は安定版とは別フォルダ' in panels[1]
+    assert '提出済みの検証状況' in panels[2]
+
+
+def test_opening_the_review_tab_refreshes_the_list(monkeypatch):
+    """β版の確認と承認タブを開いたら承認待ち一覧を取り直すこと.
+
+    並びを変えると on_tab_change の番号がずれ、「タブを開いても
+    更新されない」に化ける (手動の更新ボタンは置いていない)。
+    """
+    import types
+
+    from manager import main as manager_main
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    page = _FakePage()
+    manager_main.main(page)
+
+    # 裏スレッドはその場で最後まで走らせる (取得が呼ばれたか見るため)
+    class _NowThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    called = []
+
+    def _fetch(config, on_progress=None, known_forks=None):
+        called.append(True)
+        raise manager_main.reviews.ReviewError('テストでは取得しない')
+
+    monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot', _fetch)
+
+    page.added[1].on_change(types.SimpleNamespace(
+        control=types.SimpleNamespace(selected_index=1)))
+    assert called, '承認待ち一覧の取得が呼ばれていない'
