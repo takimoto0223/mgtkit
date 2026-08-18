@@ -331,7 +331,7 @@ def main(page: ft.Page):
             ], spacing=10),
         )
 
-    # ---------------- タブ1: 起動 ----------------
+    # ---------------- 起動タブ (変数は t1_) ----------------
 
     t1_version = ft.Text('', size=16, weight=ft.FontWeight.BOLD)
     t1_meta = ft.Text('', size=12, color='#555555')   # 恒久情報 (配布日)
@@ -1108,7 +1108,7 @@ def main(page: ft.Page):
         t1_notes_box,
     ], spacing=12, scroll=ft.ScrollMode.AUTO))
 
-    # ---------------- タブ2: 更新版を提出 ----------------
+    # ------------- 更新版を提出タブ (画面では右端 / 変数は t4_) -------------
     # (旧・更新タブは廃止: 新しい正式版は自動で取り込み、起動タブの
     #  黄色いタグと「過去の更新ログ」で知らせる)
 
@@ -1531,7 +1531,7 @@ def main(page: ft.Page):
         t4_fix_status,
     ], spacing=16, scroll=ft.ScrollMode.AUTO))
 
-    # ------------- タブ4: β版の確認と承認 (β版の試用 + 承認を 1 画面に) -------------
+    # --- β版の確認と承認タブ (β版の試用 + 承認を 1 画面に / 変数は t5_) ---
 
     # spacing は演出の基点の積み上げ (_rocket_base) に使うため定数で結合
     t5_list = ft.Column([], spacing=_CARD_GAP)
@@ -2871,7 +2871,7 @@ def main(page: ft.Page):
         idx = getattr(e.control, 'selected_index', None)
         if idx == 0:
             check_update_notice(reschedule=False)
-        elif idx == 2:
+        elif idx == 1:
             on_refresh_reviews(None)
 
     page.add(
@@ -2882,13 +2882,13 @@ def main(page: ft.Page):
             content=ft.Column([
                 ft.TabBar(tabs=[
                     ft.Tab(label=launch_label),
-                    ft.Tab(label='更新版を提出'),
                     ft.Tab(label=review_label),
+                    ft.Tab(label='更新版を提出'),
                 ]),
                 ft.TabBarView(expand=True, controls=[
                     tab_launch,
-                    tab_submit,
                     tab_beta_review,
+                    tab_submit,
                 ]),
             ], spacing=0, expand=True),
         ),
