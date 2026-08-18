@@ -25,11 +25,20 @@ class TestPricing:
         assert p['output_per_mtok'] == 15.0
 
     def test_usd_jpy_rate(self, tmp_path):
-        assert usage.usd_jpy_rate(_config(tmp_path)) == 150.0
+        assert usage.usd_jpy_rate(_config(tmp_path)) == 159.70
         assert usage.usd_jpy_rate(
             _config(tmp_path, usd_jpy_rate=145)) == 145.0
         assert usage.usd_jpy_rate(
-            _config(tmp_path, usd_jpy_rate='abc')) == 150.0
+            _config(tmp_path, usd_jpy_rate='abc')) == 159.70
+
+    def test_rates_updated_at(self, tmp_path):
+        # 既定は「単価とレートを最後に確認した日」。config で上書きできる
+        assert usage.rates_updated_at(_config(tmp_path)) == '2026-08-18'
+        assert usage.rates_updated_at(
+            _config(tmp_path, rates_updated_at='2026-09-01')) == '2026-09-01'
+        # 空なら既定に戻す (未設定のまま画面に空欄を出さない)
+        assert usage.rates_updated_at(
+            _config(tmp_path, rates_updated_at='')) == '2026-08-18'
 
     def test_cost_usd(self, tmp_path):
         cfg = _config(tmp_path)

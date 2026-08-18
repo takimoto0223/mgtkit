@@ -8,6 +8,8 @@
   「目安」。正確な請求額は Claude Console で確認する
 - 単価は記録時点のもので日別に確定額 (usd) として保存するため、
   後から単価設定を変えても過去の記録は変わらない
+- 円表示は manager.usd_jpy_rate での換算。単価とレートを最後に
+  確認した日は manager.rates_updated_at に持ち、画面に出す
 """
 import datetime
 import json
@@ -23,7 +25,9 @@ _LOCK = threading.Lock()
 
 # claude-opus-5 の既定単価 ($/MTok)。config manager.api_pricing で上書き可
 DEFAULT_PRICING = {'input_per_mtok': 5.0, 'output_per_mtok': 25.0}
-DEFAULT_USD_JPY = 150.0
+DEFAULT_USD_JPY = 159.70
+# 上の単価と為替レートを最後に確認した日 (config manager.rates_updated_at)
+DEFAULT_RATES_UPDATED_AT = '2026-08-18'
 
 
 def usage_path(config=None):
@@ -46,6 +50,12 @@ def usd_jpy_rate(config=None):
         return float(_mgr(config).get('usd_jpy_rate') or DEFAULT_USD_JPY)
     except (TypeError, ValueError):
         return DEFAULT_USD_JPY
+
+
+def rates_updated_at(config=None):
+    """単価と為替レートを最後に確認した日 (画面に出す文字列)."""
+    v = _mgr(config).get('rates_updated_at')
+    return str(v) if v else DEFAULT_RATES_UPDATED_AT
 
 
 def cost_usd(in_tok, out_tok, cache_create=0, cache_read=0, config=None):
