@@ -4,6 +4,7 @@
 モデルは manager/history.py。見た目の原本は
 manager/docs/mockups/history_flow.html (座標・角度・色はモックに従う):
 - 横軸 = 時間 (42px/日)。初回配布より左には何も描かない
+- 薄い縦線と日付は版が更新された日だけ (線は版の丸に重なる)
 - グレーの本線 = 正式版の列。白丸 = 版、大きい紺丸 + 橙リング = 現行版
 - 人ごとの色の帯 = 提出された更新 (左端 = 提出日)。点線 = 確認中
 - 本線から S カーブで降りる線 + 矢先 = その版から派生
@@ -11,7 +12,6 @@ manager/docs/mockups/history_flow.html (座標・角度・色はモックに従�
 - 本線は枝より太い (主従の強弱)
 - 文字が入らない幅の帯はラベルを外に出し、塗りを少し濃くする
 """
-import datetime
 import math
 
 import flet as ft
@@ -259,16 +259,21 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     shapes = []
     overlays = []
 
-    # 週ごとのグリッドと日付 (初回配布の日から 7 日刻み)。きょう線の
-    # 手前のマージンは可変 (等縮尺でない) ためグリッドは最新版まで
-    d = t0
-    while d <= stables[-1]['date'] and X(d) <= width - 40:
+    # 縦線と日付は「版が更新された日」だけ (線は必ずその版に重なる)。
+    # 7 日刻みの等間隔グリッドは、線がどの版の日か分からず読めなかった
+    # (管理者指示)。同じ日に複数の版が出たら線も日付も 1 本にまとめる
+    label_right = None      # 直前に描いた日付の右端 (重なりの間引き用)
+    labeled_year = None     # 直前に描いた日付の年 (年は変わった時だけ)
+    for d in sorted({s['date'] for s in stables}):
         x = X(d)
         shapes.append(cv.Line(x, AXIS_Y, x, grid_bottom,
                               paint=_stroke(GRID, 1)))
-        shapes.append(_text(x, 21, history.fmt_date(d, with_year=True),
-                            10.5, AXIS, center=True))
-        d += datetime.timedelta(days=7)
+        label = history.fmt_date(d, with_year=(d.year != labeled_year))
+        half = _est_w(label, 10.5) / 2
+        if label_right is not None and x - half < label_right + 6:
+            continue        # 隣とぶつかる日付は線だけにする (数字の重なり防止)
+        shapes.append(_text(x, 21, label, 10.5, AXIS, center=True))
+        label_right, labeled_year = x + half, d.year
     shapes.append(cv.Line(X0, AXIS_Y, width - 10, AXIS_Y,
                           paint=_stroke('#e5e7eb', 1)))
 
