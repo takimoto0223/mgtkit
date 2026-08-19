@@ -77,60 +77,13 @@
 
 <div class="head">
   <span class="mark"><span class="logo">mgtkit</span><span class="t">アプリマネージャー</span></span>
-  <h1>フォルダ構成の見直し (案)</h1>
+  <h1>変更するにあたってのお願い事</h1>
   <span class="pg">2 / 2</span>
 </div>
 
-<div class="rule">
-  <span class="h">覚えていただきたいのは、これだけです</span>
-  <code>mgtkit_appmanager\stable\mgtkit</code> が、いま動いているアプリです。<br>
-  改造するときは、<b>デスクトップなど <code>mgtkit_appmanager</code> の外</b>に貼り付けてから直してください。<br>
-  <span class="muted">例) <code>stable\mgtkit</code> を右クリック → コピー → デスクトップに貼り付け →
-  できた <code>mgtkit</code> フォルダの中で作業 → そのフォルダを ZIP にして「更新版を提出」タブから提出。</span>
-</div>
-
-<h2>何がどう変わるか</h2>
-
-<table class="mv">
-  <tr><th class="c">なにが</th><th class="p">いま</th><th class="p">これから</th><th>なぜ</th></tr>
-  <tr>
-    <td class="c"><span class="t2">2 △ 正式版のアプリ</span></td>
-    <td><code>AppData\Local\mgtkit\stable\mgtkit</code></td>
-    <td><code>mgtkit_appmanager\stable\mgtkit</code></td>
-    <td>改造するときのコピー元。<b>用があるので手前に出す</b></td>
-  </tr>
-  <tr>
-    <td class="c"><span class="t3">3 × 道具</span></td>
-    <td><code>C:\Users\(自分)\mgtkit</code></td>
-    <td><code>mgtkit_appmanager\.manager\mgtkit</code></td>
-    <td>直接なおすと更新が止まる。<b>そもそも見せない</b></td>
-  </tr>
-  <tr>
-    <td class="c"><span class="t4">4 × 置き場</span></td>
-    <td><code>AppData\Local\mgtkit\</code> の各所</td>
-    <td><code>mgtkit_appmanager\.manager\</code> の下</td>
-    <td>開いてもできることがない。<b>まとめて隠す</b><br>
-        <span class="muted">(β版が自動で片付く動きは今までどおり)</span></td>
-  </tr>
-  <tr>
-    <td class="c"><span class="t1">1 ◎ 入口</span></td>
-    <td>複製の中の <code>manager\マネージャー起動.bat</code><br>
-        非常用は複製の中の <code>起動.bat</code></td>
-    <td>フォルダ直下とデスクトップの<b>ショートカット</b></td>
-    <td>隠したフォルダの中まで開きに行かなくて済む</td>
-  </tr>
-</table>
-
-<h2>まちがって直してしまったときは</h2>
-
-<div class="card">
-  <b>鍵はかけません。</b>かけても外せてしまいますし、鍵の掛け外しに失敗すると<b>更新そのものが止まります</b>。
-  かわりに、<code>stable\mgtkit</code> に手が入っていたら、更新の前に
-  <code>mgtkit_appmanager\stash\日時\</code> へ<b>退避してからお知らせ</b>します
-  (複製ではすでにこの仕組みが動いています)。<br>
-  <span class="muted">ただし<b>退避は保険であって、直してよいという意味ではありません</b>。
-  <code>stable\mgtkit</code> は更新のたびに丸ごと入れ替わる場所なので、作業を続ける場所には向きません。</span>
-</div>
+<p>1 枚目の図のとおりフォルダ構成を整理したいと考えています。
+ふだんの操作 (起動・更新・β版の確認・提出) は変わりませんが、
+切り替えのときに<b>一度だけ</b>作業をお願いすることになります。</p>
 
 <h2>切り替えでお願いすること (見込み)</h2>
 
