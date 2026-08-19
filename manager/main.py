@@ -2909,7 +2909,29 @@ def main(page: ft.Page):
         # 追い越されて捨てられた取得結果では先読みしない
         if data is not None:
             _prefetch_diffs(data['pending'])
+            _prune_old_betas(data)
         return data
+
+    def _prune_old_betas(data):
+        """一覧に無いβ版の置き場を片付ける (裏で静かに、失敗しても続ける).
+
+        正式版になった版・取り下げられた版は GitHub 側でもβ版が削除
+        されるため、手元にだけ残っても「β版を試す」から起動できない。
+        放っておくと試すたびに増え続けるので、取得のたびに掃除する。
+        起動中のβ版があるときは触らない (使用中のフォルダを中途半端に
+        消さないため。次の取得で片付く)。
+        """
+        try:
+            if launcher.port_in_use(paths.beta_port(config)):
+                return
+            keep = [b['tag'] for b in
+                    ghcli.prereleases(data.get('releases') or [])]
+            removed = updater.prune_betas(keep, config)
+        except Exception:
+            log.exception('古いβ版の片付けに失敗しました')
+            return
+        if removed:
+            log.info('古いβ版を片付けました: %s', ', '.join(removed))
 
     def on_refresh_reviews(_):
         """一覧の再描画。手元にある前回の取得結果を即座に表示し、

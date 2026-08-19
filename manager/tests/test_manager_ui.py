@@ -373,3 +373,72 @@ def test_closing_the_update_notice_leaves_the_launch_button_usable(
     assert len(page.dialogs) == before + 1
     _dialog_button(page.dialogs[-1], 'アプリを開く').on_click(None)
     assert launched
+
+
+def _open_review_tab(page):
+    """β版の確認と承認タブを開く (最新の取得が走る)."""
+    import types
+    page.added[1].on_change(types.SimpleNamespace(
+        control=types.SimpleNamespace(selected_index=1)))
+
+
+def _page_with_a_review_snapshot(monkeypatch, releases):
+    """一覧の取得が成功する画面を作る。戻り値: (page, pruned, manager_main).
+
+    pruned には片付けに渡された「残すβ版」の一覧が入る。
+    """
+    from manager import main as manager_main
+
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NoThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+    page = _FakePage()
+    manager_main.main(page)
+
+    snap = {'pending': [], 'releases': releases, 'me': 'yamada-taro',
+            'merged': []}
+    monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviews, 'fork_memo', lambda *a, **k: {})
+    monkeypatch.setattr(manager_main.reviewcache, 'put',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviewcache, 'load_from_disk',
+                        lambda *a, **k: None)
+
+    pruned = []
+    monkeypatch.setattr(manager_main.updater, 'prune_betas',
+                        lambda keep, config=None: pruned.append(list(keep)))
+    # 取得はその場で最後まで走らせる (片付けが呼ばれたか見るため)
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    return page, pruned, manager_main
+
+
+_BETA = {'tag': 'v1.2-beta.2', 'prerelease': True, 'notes': '',
+         'published_at': '2026-08-18', 'assets': []}
+_STABLE = {'tag': 'v1.1', 'prerelease': False, 'notes': '',
+           'published_at': '2026-08-14', 'assets': []}
+
+
+def test_fetching_the_list_tidies_up_old_betas(monkeypatch):
+    """一覧を取り直すたびに、一覧に無いβ版の置き場を片付けること.
+
+    β版は試すたびに増える。正式版になった版は GitHub 側でも消えるため、
+    手元に残っても起動できないゴミになる。
+    """
+    page, pruned, main = _page_with_a_review_snapshot(
+        monkeypatch, [_BETA, _STABLE])
+    monkeypatch.setattr(main.launcher, 'port_in_use', lambda *a, **k: False)
+
+    _open_review_tab(page)
+    # 残すのは「いま一覧にあるβ版」だけ (正式版は対象外)
+    assert pruned == [['v1.2-beta.2']]
+
+
+def test_no_tidying_while_a_beta_is_running(monkeypatch):
+    """β版を起動しているあいだは片付けない (使用中のフォルダを消さない)."""
+    page, pruned, main = _page_with_a_review_snapshot(monkeypatch, [_BETA])
+    monkeypatch.setattr(main.launcher, 'port_in_use', lambda *a, **k: True)
+
+    _open_review_tab(page)
+    assert pruned == []
