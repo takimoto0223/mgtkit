@@ -11,7 +11,7 @@ import zipfile
 
 import pytest
 
-from manager import claude_helper, submit
+from manager import claude_helper, reviews, submit, versions
 from manager.gitcli import run_git
 
 
@@ -324,6 +324,42 @@ class TestFullFlow:
         # 開発用ファイルは基点のまま維持される
         assert 'tests/test_x.py' in tree
 
+    def test_pr_body_records_the_base_version(self, repo_env, tmp_path,
+                                              gh_mock):
+        """提出時に「提出者が取得した版」を PR 本文へ機械可読で残す.
+
+        過去の更新ログの図はこれを読む (git や日時からの推定ではなく)。
+        """
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        submit.finalize_submission(prep, [], 'msg', {})
+
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        body = create[create.index('--body') + 1]
+        base = versions.base_from_body(body)
+        assert base == {'version': 'v1.0',
+                        'commit': repo_env['base_sha']}
+        # 印は本文の先頭 (リリースノートの節の抽出を邪魔しない)
+        assert body.startswith('<!-- mgtkit-base ')
+        assert '## 更新内容' in body
+
+    def test_resubmission_keeps_the_base_record(self, repo_env, tmp_path,
+                                                gh_mock):
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        first = submit.finalize_submission(prep, [], 'msg', {})
+        z2 = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v3")\n'}),
+            name='again.zip')
+        prep2 = submit.prepare_submission(z2, {}, repo_env['workrepo'])
+        submit.finalize_submission(prep2, [], 'msg2', {},
+                                   existing_branch=first['branch'])
+        edit = [c for c in gh_mock if c[:2] == ['pr', 'edit']][-1]
+        body = edit[edit.index('--body') + 1]
+        assert versions.base_from_body(body)['version'] == 'v1.0'
+
     def test_sequence_number_increments(self, repo_env, tmp_path, gh_mock):
         today = datetime.date.today().strftime('%Y%m%d')
         for expected_seq in (1, 2):
@@ -382,6 +418,86 @@ class TestFullFlow:
         create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
         body = create[create.index('--body') + 1]
         assert '## 更新内容' not in body  # 空欄のまま提出
+
+    def test_reviewed_text_goes_into_pr(self, repo_env, tmp_path, gh_mock,
+                                        monkeypatch):
+        # 自動作成の結果を提出者が手直しすると、その文章が PR 本文に入る
+        monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
+                            lambda *a, **k: _AI_BODY)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        seen = []
+
+        def review(update, limits):
+            seen.append((update, limits))
+            return ('- 手で直した更新内容', '- 手で直した制限事項')
+
+        submit.finalize_submission(prep, [], 'msg', {}, use_ai=True,
+                                   on_review=review)
+        assert seen == [('- 二丁山形鋼の断面算定に対応', '- 等辺のみ対応')]
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        body = create[create.index('--body') + 1]
+        assert '- 手で直した更新内容' in body
+        assert '- 二丁山形鋼の断面算定に対応' not in body
+
+    def test_review_cancel_leaves_nothing_pushed(self, repo_env, tmp_path,
+                                                 gh_mock, monkeypatch):
+        # 確認画面で取り消したら、ブランチも PR も残らない
+        monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
+                            lambda *a, **k: _AI_BODY)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        with pytest.raises(submit.SubmitCancelled):
+            submit.finalize_submission(prep, [], 'msg', {}, use_ai=True,
+                                       on_review=lambda u, li: None)
+        heads = run_git(['ls-remote', '--heads', repo_env['origin']])
+        assert 'feature/' not in heads
+        assert not any(c[:2] == ['pr', 'create'] for c in gh_mock)
+
+
+_AI_BODY = '''## 更新内容
+
+- 二丁山形鋼の断面算定に対応
+
+## ご利用にあたっての制限事項
+
+- 等辺のみ対応
+
+## 影響範囲
+
+s_check.py を変更
+
+## 変更ファイルの説明
+
+- s_check.py — 断面算定の追加
+'''
+
+
+class TestReviewAiText:
+    """自動作成した本文を、提出者が確認・修正してから送れること."""
+
+    def test_user_sections_extracted(self):
+        update, limits = submit.user_sections(_AI_BODY)
+        assert update == '- 二丁山形鋼の断面算定に対応'
+        assert limits == '- 等辺のみ対応'
+
+    def test_body_with_user_sections_keeps_reviewer_sections(self):
+        body = submit.body_with_user_sections(
+            _AI_BODY, '- 二丁山形鋼(2L)に対応しました', '- 不等辺は未対応')
+        assert '## 更新内容\n\n- 二丁山形鋼(2L)に対応しました' in body
+        assert ('## ご利用にあたっての制限事項\n\n- 不等辺は未対応'
+                in body)
+        # 手直しした 2 節だけが入れ替わり、レビュー用の節は順序ごと残る
+        assert body.index('## 影響範囲') < body.index('## 変更ファイルの説明')
+        assert 's_check.py — 断面算定の追加' in body
+        assert '- 二丁山形鋼の断面算定に対応' not in body
+        # 手直しした内容がそのままリリースノートへ転載できること
+        notes = reviews.release_notes_from_pr(body, 'v1.2')
+        assert '- 二丁山形鋼(2L)に対応しました' in notes
+        assert '- 不等辺は未対応' in notes
+        assert '影響範囲' not in notes
 
 
 class TestClaudeHelperFallback:

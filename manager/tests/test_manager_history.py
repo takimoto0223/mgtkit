@@ -2,7 +2,7 @@
 """過去の更新ログの時系列図モデル (manager/history.py) のテスト."""
 import datetime
 
-from manager import history
+from manager import history, versions
 
 D = datetime.date
 
@@ -51,6 +51,55 @@ class TestBuildTimeline:
         assert stables[0]['pr'] is None
         assert [s['pr']['number'] for s in stables[1:]] == [27, 31, 35]
 
+    def test_tag_commit_pairing_is_used_when_present(self):
+        """タグのコミットに紐づく提出があれば、日時ではなくそれで対応付ける."""
+        rel = [dict(_rel('v1.2', '2026-08-18'), pr_number=83),
+               dict(_rel('v1.1', '2026-08-14'), pr_number=31)]
+        mg = [_merged(31, 'fujitaka', '2026-08-07', '2026-08-14'),
+              _merged(83, 'tomiriri', '2026-08-14', '2026-08-18')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 18))
+        by_tag = {s['tag']: s for s in tl['stables']}
+        assert by_tag['v1.1']['pr']['number'] == 31
+        assert by_tag['v1.2']['pr']['number'] == 83
+
+    def test_release_without_submission_does_not_shift_the_rest(self):
+        """提出を伴わない版 (管理者が手で出した版) が混ざっても、
+        他の版の提出者がずれない.
+
+        日時の貪欲マッチだけだと 1 件のずれが後続すべてに波及し、
+        全部の版が別人の名前になる (実機で起きうる並び)。
+        """
+        rel = [dict(_rel('v1.3', '2026-08-20')),            # 手で出した版
+               dict(_rel('v1.2', '2026-08-18'), pr_number=83),
+               dict(_rel('v1.1', '2026-08-14'), pr_number=31),
+               dict(_rel('v1.0', '2026-08-06'))]            # 初回配布
+        mg = [_merged(31, 'fujitaka', '2026-08-07', '2026-08-14'),
+              _merged(83, 'tomiriri', '2026-08-14', '2026-08-18')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 21))
+        got = {s['tag']: (s['pr'] or {}).get('number')
+               for s in tl['stables']}
+        assert got == {'v1.0': None, 'v1.1': 31, 'v1.2': 83, 'v1.3': None}
+
+    def test_falls_back_to_dates_without_tag_pairing(self):
+        # 古い取得経路 (pr_number が無い) では従来どおり日時で対応付ける
+        rel = [_rel('v1.2', '2026-08-18'), _rel('v1.1', '2026-08-14')]
+        mg = [_merged(31, 'fujitaka', '2026-08-07', '2026-08-14'),
+              _merged(83, 'tomiriri', '2026-08-14', '2026-08-18')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 18))
+        by_tag = {s['tag']: s for s in tl['stables']}
+        assert by_tag['v1.1']['pr']['number'] == 31
+        assert by_tag['v1.2']['pr']['number'] == 83
+
+    def test_same_submission_is_not_used_for_two_versions(self):
+        # 事実で確定した提出は、日時の埋め合わせの候補から外す
+        rel = [dict(_rel('v1.2', '2026-08-18'), pr_number=83),
+               dict(_rel('v1.1', '2026-08-17'))]
+        mg = [_merged(83, 'tomiriri', '2026-08-14', '2026-08-16')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 18))
+        got = {s['tag']: (s['pr'] or {}).get('number')
+               for s in tl['stables']}
+        assert got == {'v1.1': None, 'v1.2': 83}
+
     def test_chip_base_and_target(self):
         tl = history.build_timeline(RELEASES, MERGED, PENDING, today=TODAY)
         by_num = {c['number']: c for c in tl['chips']}
@@ -64,6 +113,104 @@ class TestBuildTimeline:
         assert by_num[38]['pending'] and by_num[38]['base_tag'] == 'v1.5'
         assert by_num[38]['end'] is None and by_num[38]['target_tag'] is None
         assert by_num[40]['base_tag'] == 'v1.6'
+
+    def test_recorded_base_beats_everything(self):
+        """提出時に記録された版 (取得した版) が最優先.
+
+        日時からも分岐点からも v1.1 に見えるが、提出は v1.0 を取得して
+        作られている、という実データの再現。
+        """
+        rel = [dict(_rel('v1.1', '2026-08-14'),
+                    published_at_full='2026-08-14T07:18:00Z',
+                    tag_sha='sha-v11'),
+               dict(_rel('v1.0', '2026-08-06'),
+                    published_at_full='2026-08-06T01:02:00Z',
+                    tag_sha='sha-v10')]
+        pend = [{'number': 83, 'title': 'x', 'author': 'tomiriri',
+                 'created_at': '2026-08-14',
+                 'created_at_full': '2026-08-14T07:26:55Z',
+                 'fork_sha': 'sha-v11',        # 推定はどちらも v1.1 を指す
+                 'base_version': 'v1.0', 'base_commit': 'sha-v10'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 18))
+        c = tl['chips'][0]
+        assert c['base_tag'] == 'v1.0'
+        assert c['base_source'] == 'recorded'
+        assert history.base_label(c) == 'v1.0'
+
+    def test_recorded_commit_used_when_version_unknown(self):
+        # 版名がタグ一覧に無い (削除された等) ときは記録のコミットで照合
+        rel = [dict(_rel('v1.1', '2026-08-14'), tag_sha='sha-v11'),
+               dict(_rel('v1.0', '2026-08-06'), tag_sha='sha-v10')]
+        pend = [{'number': 83, 'title': 'x', 'author': 'a',
+                 'created_at': '2026-08-14',
+                 'base_version': 'v0.9', 'base_commit': 'sha-v10'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 18))
+        c = tl['chips'][0]
+        assert c['base_tag'] == 'v1.0'
+        assert c['base_source'] == 'recorded'
+        # 表示は記録どおりの版名 (β版から作った提出もそのまま出す)
+        assert history.base_label(c) == 'v0.9'
+
+    def test_beta_base_is_shown_as_recorded(self):
+        """β版を基に作った提出は、β版の版名をそのまま出す.
+
+        β版は正式版の列に居ないので図の線は近い正式版から引くが、
+        「どの版を基に作ったか」の文字は記録どおりにする (記録がある
+        のに推定した版名を見せる方が誤解を招くため)。
+        """
+        rel = [dict(_rel('v1.1', '2026-08-14'), tag_sha='sha-v11'),
+               dict(_rel('v1.2-beta.1', '2026-08-16', prerelease=True),
+                    tag_sha='sha-b1'),
+               dict(_rel('v1.0', '2026-08-06'), tag_sha='sha-v10')]
+        pend = [{'number': 90, 'title': 'x', 'author': 'a',
+                 'created_at': '2026-08-17',
+                 'base_version': 'v1.2-beta.1', 'base_commit': 'sha-b1'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 18))
+        c = tl['chips'][0]
+        # 線は正式版から引く (β版はグレーの本線に居ない)
+        assert c['base_tag'] == 'v1.1'
+        # 文字は記録どおり。推定扱いの「(推定)」は付けない
+        assert history.base_label(c) == 'v1.2-beta.1'
+
+    def test_record_without_version_still_resolves_by_commit(self):
+        # version.json の版名が空でも、記録のコミットが残っていれば
+        # そこから版を突き止める (印は version=? で書かれる)
+        body = versions.base_marker('', 'sha-v10')
+        assert versions.base_from_body(body) == {'version': '',
+                                                 'commit': 'sha-v10'}
+        rel = [dict(_rel('v1.1', '2026-08-14'), tag_sha='sha-v11'),
+               dict(_rel('v1.0', '2026-08-06'), tag_sha='sha-v10')]
+        base = versions.base_from_body(body)
+        pend = [{'number': 91, 'title': 'x', 'author': 'a',
+                 'created_at': '2026-08-16',
+                 'base_version': base['version'],
+                 'base_commit': base['commit']}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 18))
+        c = tl['chips'][0]
+        assert c['base_tag'] == 'v1.0'
+        assert c['base_source'] == 'recorded'
+        assert history.base_label(c) == 'v1.0'
+
+    def test_estimated_base_is_marked_as_such(self):
+        # 記録も分岐点も無い古い提出は推定。事実と区別できる表示にする
+        rel = [_rel('v1.1', '2026-08-14'), _rel('v1.0', '2026-08-06')]
+        pend = [{'number': 83, 'title': 'x', 'author': 'a',
+                 'created_at': '2026-08-10'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 18))
+        c = tl['chips'][0]
+        assert c['base_source'] == 'estimate'
+        assert history.base_label(c) == 'v1.0 (推定)'
+
+    def test_fork_base_is_not_marked_as_estimate(self):
+        # 分岐点コミットは git の事実なので「(推定)」は付けない
+        rel = [dict(_rel('v1.1', '2026-08-14'), tag_sha='sha-v11'),
+               dict(_rel('v1.0', '2026-08-06'), tag_sha='sha-v10')]
+        pend = [{'number': 83, 'title': 'x', 'author': 'a',
+                 'created_at': '2026-08-16', 'fork_sha': 'sha-v10'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 18))
+        c = tl['chips'][0]
+        assert c['base_source'] == 'fork'
+        assert history.base_label(c) == 'v1.0'
 
     def test_fork_sha_beats_timestamp_estimate(self):
         # 公開の後に古い版の内容が提出されたケース: 日時推定では v1.1
@@ -80,6 +227,34 @@ class TestBuildTimeline:
                  'fork_sha': 'sha-v10'}]
         tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 15))
         assert tl['chips'][0]['base_tag'] == 'v1.0'
+
+    def test_base_is_never_a_later_version(self):
+        # 同じ日に複数の版が出ても、自分が公開された版より後の版を
+        # 基点にはしない (前後が入れ替わって線が逆走するのを防ぐ)
+        rel = [_rel('v1.2', '2026-08-14'), _rel('v1.1', '2026-08-14'),
+               _rel('v1.0', '2026-08-14')]
+        mg = [_merged(8, 'a', '2026-08-14', '2026-08-14'),
+              _merged(9, 'b', '2026-08-14', '2026-08-14')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 14))
+        by_num = {c['number']: c for c in tl['chips']}
+        assert by_num[8]['target_tag'] == 'v1.1'
+        assert by_num[8]['base_tag'] == 'v1.0'
+        assert by_num[9]['target_tag'] == 'v1.2'
+        assert by_num[9]['base_tag'] in ('v1.0', 'v1.1')
+
+    def test_fork_sha_after_target_is_ignored(self):
+        # 分岐点が自分の公開版より後の版を指す (取り違えた記録) 場合は
+        # 事実として採用しない
+        rel = [dict(_rel('v1.2', '2026-08-18'), tag_sha='sha-v12'),
+               dict(_rel('v1.1', '2026-08-14'), tag_sha='sha-v11'),
+               dict(_rel('v1.0', '2026-08-06'), tag_sha='sha-v10')]
+        mg = [dict(_merged(31, 'a', '2026-08-07', '2026-08-14'),
+                   fork_sha='sha-v12'),
+              _merged(83, 'b', '2026-08-14', '2026-08-18')]
+        tl = history.build_timeline(rel, mg, [], today=D(2026, 8, 18))
+        c = {x['number']: x for x in tl['chips']}[31]
+        assert c['target_tag'] == 'v1.1'
+        assert c['base_tag'] == 'v1.0'
 
     def test_same_day_timestamps_pick_older_base(self):
         # v1.1 の公開 (09:00) と同じ日でも、それより前 (08:00) に

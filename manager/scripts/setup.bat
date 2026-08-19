@@ -1,91 +1,194 @@
 @echo off
-chcp 65001 >nul
+chcp 932 >nul
 rem ============================================================
-rem  mgtkit ã‚»ãƒƒãƒˆã‚¢ãƒƒãƒ— (ãƒ¡ãƒ³ãƒãƒ¼é…å¸ƒç”¨)
-rem  ã“ã®ãƒ•ã‚¡ã‚¤ãƒ«ã ã‘ã‚’æ–°ã—ã„ãƒ¡ãƒ³ãƒãƒ¼ã«æ¸¡ã—ã¦ãƒ€ãƒ–ãƒ«ã‚¯ãƒªãƒƒã‚¯ã—ã¦ã‚‚ã‚‰ã†ã€‚
-rem  1. winget ã§ Git / GitHub CLI / Python ã‚’å°å…¥ (æœªå°å…¥ã®ã‚‚ã®ã®ã¿)
-rem  2. GitHub ã¸ãƒ­ã‚°ã‚¤ãƒ³ (ãƒ–ãƒ©ã‚¦ã‚¶ãŒé–‹ãã¾ã™)
-rem  3. mgtkit ã‚’å–å¾— (%USERPROFILE%\mgtkit)
-rem  4. ã‚¢ãƒ—ãƒªãƒãƒãƒ¼ã‚¸ãƒ£ãƒ¼ã‚’èµ·å‹•
+rem  mgtkit ƒZƒbƒgƒAƒbƒv (ƒƒ“ƒo[”z•z—p)
+rem  ‚±‚Ìƒtƒ@ƒCƒ‹‚¾‚¯‚ğV‚µ‚¢ƒƒ“ƒo[‚É“n‚µ‚Äƒ_ƒuƒ‹ƒNƒŠƒbƒN‚µ‚Ä‚à‚ç‚¤B
+rem
+rem  y•¶šƒR[ƒh‚Í Shift_JIS ŒÅ’è + chcp 932z
+rem  UTF-8 + chcp 65001 ‚¾‚Æ cmd ‚ªƒoƒbƒ`‚Ì“Ç‚İæ‚èˆÊ’u‚ğŒ©¸‚¢A
+rem  ƒRƒƒ“ƒg‚â echo ‚Ì’f•Ğ‚ğƒRƒ}ƒ“ƒh‚Æ‚µ‚ÄÀs‚µ‚Ä‚µ‚Ü‚¤
+rem  (À‹@‚ÅŠm”FÏ‚İBmanager/docs/decisions.md)B•ÒW‚Í•K‚¸
+rem  Shift_JIS ‚Å•Û‘¶‚·‚éB“ú–{Œê‚ğ‘‚â‚·‚Ù‚ÇÇó‚ªo‚â‚·‚¢B
+rem
+rem  y“±“ü”»’è‚Í where ‚Å‚Í‚È‚­Às‚Ås‚¤z
+rem  Windows ‚ÍŠù’è‚ÅƒXƒgƒA—U“±ƒXƒ^ƒu python.exe ‚ğ PATH ‚É‚¿A
+rem  where ‚Å‚Í–¢“±“ü‚ğu“±“üÏ‚İv‚ÆŒë”»’è‚·‚é‚½‚ßB
 rem ============================================================
 setlocal
-title mgtkit ã‚»ãƒƒãƒˆã‚¢ãƒƒãƒ—
+title mgtkit ƒZƒbƒgƒAƒbƒv
 set "REPO=takimoto0223/mgtkit"
 set "DEST=%USERPROFILE%\mgtkit"
 
-echo === mgtkit ã‚»ãƒƒãƒˆã‚¢ãƒƒãƒ—ã‚’é–‹å§‹ã—ã¾ã™ ===
+echo === mgtkit ƒZƒbƒgƒAƒbƒv‚ğŠJn‚µ‚Ü‚· ===
 echo.
 
 where winget >nul 2>nul
 if errorlevel 1 (
-    echo winget ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“ã€‚Windows 10/11 ã®ã€Œã‚¢ãƒ—ãƒª ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ©ãƒ¼ã€ã‚’
-    echo Microsoft Store ã‹ã‚‰å°å…¥ã—ã¦ã‹ã‚‰ã€ã‚‚ã†ä¸€åº¦å®Ÿè¡Œã—ã¦ãã ã•ã„ã€‚
+    echo winget ‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñBWindows 10/11 ‚ÌuƒAƒvƒŠ ƒCƒ“ƒXƒg[ƒ‰[v‚ğ
+    echo Microsoft Store ‚©‚ç“±“ü‚µ‚Ä‚©‚çA‚à‚¤ˆê“xÀs‚µ‚Ä‚­‚¾‚³‚¢B
     pause
     exit /b 1
 )
 
-where git >nul 2>nul
-if errorlevel 1 (
-    echo [1/4] Git ã‚’ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã—ã¦ã„ã¾ã™...
-    winget install --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements
-) else (
-    echo [1/4] Git: å°å…¥æ¸ˆã¿
+rem ‘O‰ñ‚Ì“±“ü‚ª PATH ‚É–¢”½‰f‚Ì‚±‚Æ‚ª‚ ‚é‚Ì‚ÅA”»’è‚Ì‘O‚É•â‚¤
+call :add_tool_paths
+
+rem ---------------- [1/4] Git ----------------
+git --version >nul 2>nul
+if not errorlevel 1 (
+    echo [1/4] Git: “±“üÏ‚İ
+    goto :git_done
 )
-
-where gh >nul 2>nul
-if errorlevel 1 (
-    echo [2/4] GitHub CLI ã‚’ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã—ã¦ã„ã¾ã™...
-    winget install --id GitHub.cli -e --silent --accept-package-agreements --accept-source-agreements
-) else (
-    echo [2/4] GitHub CLI: å°å…¥æ¸ˆã¿
+echo [1/4] Git ‚ğƒCƒ“ƒXƒg[ƒ‹‚µ‚Ä‚¢‚Ü‚·...
+winget install --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements
+set "RC=%errorlevel%"
+call :add_tool_paths
+git --version >nul 2>nul
+if not errorlevel 1 (
+    echo [1/4] Git: “±“ü‚µ‚Ü‚µ‚½
+    goto :git_done
 )
+set "TOOL=Git"
+set "TOOL_URL=https://git-scm.com/"
+if not "%RC%"=="0" goto :install_failed
+goto :need_restart
+:git_done
 
-where python >nul 2>nul
-if errorlevel 1 (
-    where py >nul 2>nul
-    if errorlevel 1 (
-        echo [3/4] Python ã‚’ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã—ã¦ã„ã¾ã™...
-        winget install --id Python.Python.3.11 -e --silent --accept-package-agreements --accept-source-agreements
-    ) else (
-        echo [3/4] Python: å°å…¥æ¸ˆã¿
-    )
-) else (
-    echo [3/4] Python: å°å…¥æ¸ˆã¿
+rem ---------------- [2/4] GitHub CLI ----------------
+gh --version >nul 2>nul
+if not errorlevel 1 (
+    echo [2/4] GitHub CLI: “±“üÏ‚İ
+    goto :gh_done
 )
+echo [2/4] GitHub CLI ‚ğƒCƒ“ƒXƒg[ƒ‹‚µ‚Ä‚¢‚Ü‚·...
+winget install --id GitHub.cli -e --silent --accept-package-agreements --accept-source-agreements
+set "RC=%errorlevel%"
+call :add_tool_paths
+gh --version >nul 2>nul
+if not errorlevel 1 (
+    echo [2/4] GitHub CLI: “±“ü‚µ‚Ü‚µ‚½
+    goto :gh_done
+)
+set "TOOL=GitHub CLI"
+set "TOOL_URL=https://cli.github.com/"
+if not "%RC%"=="0" goto :install_failed
+goto :need_restart
+:gh_done
 
-rem ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ç›´å¾Œã¯ PATH ãŒåæ˜ ã•ã‚Œã¦ã„ãªã„ãŸã‚ã€æ–°ã—ã„ç’°å¢ƒã§ç¶šè¡Œã™ã‚‹
-set "PATH=%ProgramFiles%\Git\cmd;%ProgramFiles%\GitHub CLI;%LocalAppData%\Programs\Python\Python311;%PATH%"
+rem ---------------- [3/4] Python ----------------
+call :find_python
+if not errorlevel 1 (
+    echo [3/4] Python: “±“üÏ‚İ
+    goto :python_done
+)
+echo [3/4] Python ‚ğƒCƒ“ƒXƒg[ƒ‹‚µ‚Ä‚¢‚Ü‚·...
+winget install --id Python.Python.3.11 -e --silent --accept-package-agreements --accept-source-agreements
+set "RC=%errorlevel%"
+call :add_tool_paths
+call :find_python
+if not errorlevel 1 (
+    echo [3/4] Python: “±“ü‚µ‚Ü‚µ‚½
+    goto :python_done
+)
+set "TOOL=Python"
+set "TOOL_URL=https://www.python.org/downloads/"
+if not "%RC%"=="0" goto :install_failed
+goto :need_restart
+:python_done
 
+rem ---------------- [4/4] GitHub ƒƒOƒCƒ“ ----------------
 echo.
-echo [4/4] GitHub ã¸ãƒ­ã‚°ã‚¤ãƒ³ã—ã¾ã™ (ãƒ–ãƒ©ã‚¦ã‚¶ãŒé–‹ã„ãŸã‚‰æŒ‡ç¤ºã«å¾“ã£ã¦ãã ã•ã„)
+echo [4/4] GitHub ‚ÖƒƒOƒCƒ“‚µ‚Ü‚· (ƒuƒ‰ƒEƒU‚ªŠJ‚¢‚½‚çw¦‚É]‚Á‚Ä‚­‚¾‚³‚¢)
 gh auth status >nul 2>nul
 if errorlevel 1 (
     gh auth login --hostname github.com --git-protocol https --web
     if errorlevel 1 (
-        echo ãƒ­ã‚°ã‚¤ãƒ³ã§ãã¾ã›ã‚“ã§ã—ãŸã€‚ã‚‚ã†ä¸€åº¦å®Ÿè¡Œã—ã¦ãã ã•ã„ã€‚
+        echo ƒƒOƒCƒ“‚Å‚«‚Ü‚¹‚ñ‚Å‚µ‚½B‚à‚¤ˆê“xÀs‚µ‚Ä‚­‚¾‚³‚¢B
         pause
         exit /b 1
     )
 ) else (
-    echo GitHub: ãƒ­ã‚°ã‚¤ãƒ³æ¸ˆã¿
+    echo GitHub: ƒƒOƒCƒ“Ï‚İ
 )
 gh auth setup-git >nul 2>nul
 
+rem ---------------- mgtkit ‚Ìæ“¾ ----------------
+rem --ff-only ‚É‚µ‚È‚¢‚ÆA—š—ğ‚ª•ª‚©‚ê‚½‚Æ‚«‚Éƒ}[ƒW‚ÌƒƒbƒZ[ƒW“ü—Í‚ª
+rem n‚Ü‚Á‚Äƒoƒbƒ`‚ª–³Œ¾‚Å~‚Ü‚é
 echo.
-if exist "%DEST%\.git" (
-    echo mgtkit ã¯å–å¾—æ¸ˆã¿ã§ã™ã€‚æœ€æ–°ã«ã—ã¦ã„ã¾ã™...
-    git -C "%DEST%" pull
-) else (
-    echo mgtkit ã‚’å–å¾—ã—ã¦ã„ã¾ã™...
-    git clone "https://github.com/%REPO%.git" "%DEST%"
-    if errorlevel 1 (
-        echo å–å¾—ã«å¤±æ•—ã—ã¾ã—ãŸã€‚ãƒªãƒã‚¸ãƒˆãƒªã¸ã®ã‚¢ã‚¯ã‚»ã‚¹æ¨©ã‚’ç®¡ç†è€…ã«ç¢ºèªã—ã¦ãã ã•ã„ã€‚
-        pause
-        exit /b 1
-    )
-)
+if not exist "%DEST%\.git" goto :do_clone
+echo mgtkit ‚Íæ“¾Ï‚İ‚Å‚·BÅV‚É‚µ‚Ä‚¢‚Ü‚·...
+git -C "%DEST%" pull --ff-only
+if errorlevel 1 goto :pull_failed
+goto :fetch_done
+
+:do_clone
+echo mgtkit ‚ğæ“¾‚µ‚Ä‚¢‚Ü‚·...
+git clone "https://github.com/%REPO%.git" "%DEST%"
+if errorlevel 1 goto :clone_failed
+goto :fetch_done
+
+:pull_failed
+echo.
+echo ¦ èŒ³‚Ì mgtkit ‚ğÅV‚É‚Å‚«‚Ü‚¹‚ñ‚Å‚µ‚½B
+echo    ƒŠƒ|ƒWƒgƒŠ“à‚Ìƒtƒ@ƒCƒ‹‚ğ’¼Ú•ÒW‚µ‚½ê‡‚È‚Ç‚É‹N‚±‚è‚Ü‚·B
+echo    ‚±‚Ì‚Ü‚ÜƒAƒvƒŠƒ}ƒl[ƒWƒƒ[‚ğ‹N“®‚µ‚Ü‚·Bƒ}ƒl[ƒWƒƒ[‚ª’¼Ú•ÒW‚ğ
+echo    ‘Ş”ğ‚µ‚Ä‚©‚çXV‚µ’¼‚·‚Ì‚ÅA‘½‚­‚Ìê‡‚Í‚±‚ê‚Å‰ğÁ‚µ‚Ü‚·B
+echo    ‚»‚ê‚Å‚àŒÃ‚¢‚Ü‚Ü‚Ìê‡‚ÍŠÇ—Ò‚É˜A—‚µ‚Ä‚­‚¾‚³‚¢B
+:fetch_done
 
 echo.
-echo === ã‚»ãƒƒãƒˆã‚¢ãƒƒãƒ—å®Œäº†ã€‚ãƒãƒãƒ¼ã‚¸ãƒ£ãƒ¼ã‚’èµ·å‹•ã—ã¾ã™ ===
-call "%DEST%\manager\ãƒãƒãƒ¼ã‚¸ãƒ£ãƒ¼èµ·å‹•.bat"
+echo === ƒZƒbƒgƒAƒbƒvŠ®—¹Bƒ}ƒl[ƒWƒƒ[‚ğ‹N“®‚µ‚Ü‚· ===
+call "%DEST%\manager\ƒ}ƒl[ƒWƒƒ[‹N“®.bat"
 endlocal
+exit /b 0
+
+rem ============ ‚±‚±‚©‚ç‰º‚Í¸”s‚ÌˆÄ“à‚ÆƒTƒuƒ‹[ƒ`ƒ“ ============
+
+:clone_failed
+echo.
+echo mgtkit ‚ğæ“¾‚Å‚«‚Ü‚¹‚ñ‚Å‚µ‚½BŸ‚ğŠm”F‚µ‚Ä‚­‚¾‚³‚¢B
+echo   - ƒCƒ“ƒ^[ƒlƒbƒg‚ÉÚ‘±‚Å‚«‚Ä‚¢‚é‚©
+echo   - Ğ“àƒlƒbƒgƒ[ƒN‚âƒvƒƒLƒV‚ª github.com ‚ğÕ‚Á‚Ä‚¢‚È‚¢‚©
+echo ‚»‚ê‚Å‚à¸”s‚·‚éê‡‚ÍAŠÇ—Ò‚É˜A—‚µ‚Ä‚­‚¾‚³‚¢B
+pause
+exit /b 1
+
+:install_failed
+echo.
+echo %TOOL% ‚ğ©“®‚Å“±“ü‚Å‚«‚Ü‚¹‚ñ‚Å‚µ‚½Bl‚¦‚ç‚ê‚éŒ´ˆö:
+echo   - “±“ü‚ÉŠÇ—Ò‚Ì‹–‰Â [UAC] ‚ª•K—v‚ÅA‹–‰Â‚³‚ê‚È‚©‚Á‚½
+echo   - Ğ“àƒlƒbƒgƒ[ƒN‚ª winget ‚Ì”z•zŒ³‚ğÕ‚Á‚Ä‚¢‚é
+echo %TOOL_URL% ‚©‚çè“®‚Å“±“ü‚µ‚Ä‚©‚çA‚à‚¤ˆê“xÀs‚µ‚Ä‚­‚¾‚³‚¢B
+pause
+exit /b 1
+
+:need_restart
+echo.
+echo %TOOL% ‚Ì“±“ü‚ÍI‚í‚è‚Ü‚µ‚½‚ªA‚±‚Ì‰æ–Ê‚Å‚Í‚Ü‚¾g‚¦‚Ü‚¹‚ñB
+echo ‚±‚ÌƒEƒBƒ“ƒhƒE‚ğ•Â‚¶‚ÄAsetup.bat ‚ğ‚à‚¤ˆê“xÀs‚µ‚Ä‚­‚¾‚³‚¢B
+pause
+exit /b 1
+
+:find_python
+rem ÀÛ‚É“®‚­ Python ‚ğ’T‚µ‚Ä PY ‚É“ü‚ê‚éB–³‚¯‚ê‚Î errorlevel 1B
+rem ƒXƒ^ƒu‚ÍÀs‚·‚é‚Æ¸”s‚·‚é‚Ì‚ÅA“®‚©‚µ‚Ä‚İ‚ê‚Îæ‚èˆá‚¦‚È‚¢
+set "PY="
+py -3 --version >nul 2>nul && set "PY=py -3"
+if defined PY exit /b 0
+python -c "import sys" >nul 2>nul && set "PY=python"
+if defined PY exit /b 0
+exit /b 1
+
+:add_tool_paths
+rem winget ’¼Œã‚Í PATH ‚ª–¢”½‰fB“±“üæ‚ğb’è“I‚É‘«‚·BŠÇ—ÒŒ ŒÀ‚Ì
+rem —L–³‚Å machine / user ‚Ç‚¿‚ç‚É‚à“ü‚è‚¤‚é‚Ì‚Å—¼•ûŒ©‚éB1 s‚¸‚Â
+rem •À‚×‚é‚Ì‚ÍAfor ‚¾‚Æ PATH ‚ªƒ‹[ƒvŠJn‘O‚Ì’l‚ÅŒÅ’è‚³‚ê‚é‚½‚ß
+if exist "%ProgramFiles%\Git\cmd\git.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
+if exist "%LocalAppData%\Programs\Git\cmd\git.exe" set "PATH=%LocalAppData%\Programs\Git\cmd;%PATH%"
+if exist "%ProgramFiles%\GitHub CLI\gh.exe" set "PATH=%ProgramFiles%\GitHub CLI;%PATH%"
+if exist "%LocalAppData%\Programs\GitHub CLI\gh.exe" set "PATH=%LocalAppData%\Programs\GitHub CLI;%PATH%"
+if exist "%ProgramFiles%\Python311\python.exe" set "PATH=%ProgramFiles%\Python311;%ProgramFiles%\Python311\Scripts;%PATH%"
+if exist "%LocalAppData%\Programs\Python\Python311\python.exe" set "PATH=%LocalAppData%\Programs\Python\Python311;%LocalAppData%\Programs\Python\Python311\Scripts;%PATH%"
+if exist "%LocalAppData%\Programs\Python\Launcher\py.exe" set "PATH=%LocalAppData%\Programs\Python\Launcher;%PATH%"
+exit /b 0

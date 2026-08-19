@@ -1,0 +1,380 @@
+<!-- 提出タブの入力欄をやめ、説明の作り方をダイアログで選ばせる案 (実装なし・見た目合意用)
+     管理者指示 2026-08: タブには提出ボタンだけを置き、ZIP を選んだ後の確認ダイアログで
+     「Claude で自動作成 (推奨)」/「自分で入力する (無料)」の二択にする。
+     「自分で入力する」を選ぶと同じダイアログの中に更新内容・制限事項の枠が生える。
+     空欄のまま提出するのはブロックする。
+
+     寸法は実物合わせ: ウィンドウ既定 760x640 (main.py の _fit_window_to_notes の下限)、
+     ダイアログの content 幅 560、ft.Radio の行高 40 (Material のタップ領域)、
+     ft.Dropdown 56、multiline TextField は min_lines x 21 + 32。
+     枠のグレーの帯 = そのウィンドウで実際に見える範囲。はみ出す分はスクロールになる。
+
+     実装メモ:
+       - 入力欄 t4_commit_msg / t4_limits は「作り直さず」タブからダイアログの content へ移す
+         (オブジェクトを使い回せば、キャンセルやラジオの往復で書きかけが消えない)
+       - ラジオの切り替えは記入カードの visible の出し入れだけにする (中身を作り直さない)
+       - use_ai は「両方空欄のとき」ではなくラジオの選択そのもので決める
+       - 「提出する」は常に押せる。空欄で押されたら記入欄へスクロール + フォーカス +
+         赤枠 + 欄の下にエラー文 (無効ボタンにしない。押して無反応のボタンを作らない)
+       - キー未登録の PC は自動作成を選べない (灰色) = 手入力のみ
+       - 制限事項は空欄可 (PR 本文では「- なし」になり、リリースノートからは節ごと消える) -->
+<meta charset="utf-8">
+<title>提出時の説明の作り方 (モック)</title>
+<style>
+  body { margin: 0; padding: 18px; background: #e8eaee;
+         font-family: "Yu Gothic UI", "Meiryo", "IPAPGothic", sans-serif; }
+  .panel { width: 800px; margin: 0 0 26px; }
+  .plabel { font-size: 13px; font-weight: bold; color: #1f2937; margin: 0 0 3px; }
+  .pnote { font-size: 11.5px; color: #4b5563; margin: 0 0 8px; line-height: 1.55; }
+  .pnote b { color: #b3261e; }
+
+  /* 実寸のウィンドウ枠 (760x640 = 既定サイズ)。中に入りきるかを見るための枠 */
+  .win { width: 760px; background: #ffffff; border-radius: 10px; overflow: hidden;
+         box-shadow: 0 6px 20px rgba(0,0,0,.16); position: relative; }
+  .win.h640 { height: 640px; }
+  .winbar { height: 30px; background: #f3f4f6; border-bottom: 1px solid #e5e7eb;
+            display: flex; align-items: center; padding: 0 12px; font-size: 11px;
+            color: #6b7280; }
+  .tabbar { display: flex; border-bottom: 1px solid #e5e7eb; padding: 0 10px; }
+  .tab { font-size: 13px; color: #6b7280; padding: 12px 16px 10px; }
+  .tab.on { color: #2b4a6f; font-weight: bold; box-shadow: inset 0 -2.5px 0 #2b4a6f; }
+  .tabbody { padding: 24px; }
+  .lead { font-size: 13px; color: #555555; line-height: 1.65; margin: 0 0 12px; }
+  .lead.sm { font-size: 12px; }
+
+  /* ダイアログ (content 560px + 左右 24px) */
+  .scrim { position: absolute; inset: 30px 0 0; background: rgba(30,41,59,.45);
+           display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .scrim.free { position: static; padding: 24px 0; }
+  .dialog { width: 608px; box-sizing: border-box; background: #f1f2f6; border-radius: 14px;
+            padding: 20px 24px 8px; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+  .dtitle { font-size: 19px; font-weight: bold; color: #1f2937; margin: 0 0 12px; }
+  .dtext { font-size: 13.5px; color: #1f2937; margin: 0 0 5px; line-height: 1.55; }
+  .dsub { font-size: 12px; color: #4b5563; margin: 0 0 12px; line-height: 1.55; }
+  .dactions { display: flex; justify-content: flex-end; align-items: center;
+              gap: 12px; padding: 12px 0 4px; }
+  .clip { border: 2px dashed #b3261e; }
+  .cliptag { position: absolute; right: 8px; bottom: 6px; background: #b3261e;
+             color: #fff; font-size: 11px; font-weight: bold; border-radius: 4px;
+             padding: 2px 8px; }
+
+  /* カード */
+  .card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px;
+          padding: 12px 14px; margin: 0 0 12px; }
+  .chead { font-size: 13px; font-weight: bold; color: #1f2937; margin: 0 0 2px; }
+  .cfoot { font-size: 12px; color: #4b5563; line-height: 1.5; margin: 0 0 4px; }
+  .opt { display: flex; align-items: center; gap: 10px; height: 40px; }
+  .radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #6b7280;
+           flex: none; box-sizing: border-box; }
+  .radio.on { border-color: #2b4a6f; border-width: 6px; }
+  .radio.dim { border-color: #8b9099; }
+  .olabel { font-size: 13.5px; color: #1f2937; }
+  .olabel .fee { color: #4b5563; font-size: 12.5px; }
+  .olabel.dim { color: #6b7280; }
+  .odim { font-size: 12px; color: #6b7280; margin: -6px 0 4px 28px; line-height: 1.45; }
+
+  /* 記入欄 (選択肢の下に入れ子で出す) */
+  .reveal { margin: 2px 0 0 28px; padding: 2px 0 0; }
+  .fhead { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; }
+  .fname { font-size: 13px; font-weight: bold; color: #374151; }
+  .fnote { font-size: 11.5px; color: #6b7280; }
+  .box { background: #ffffff; border: 1px solid #6b7280; border-radius: 5px;
+         padding: 8px 11px; font-size: 13px; color: #111827; line-height: 1.62;
+         white-space: pre-line; box-sizing: border-box; }
+  .box.h3 { height: 95px; }
+  .box.h2 { height: 74px; }
+  .box.hint { color: #6b7280; }
+  .box.focus { border-color: #2b4a6f; border-width: 2px; padding: 7px 10px; }
+  .box.bad { border-color: #b3261e; border-width: 2px; padding: 7px 10px; }
+  .caret { display: inline-block; width: 1.5px; height: 15px; background: #2b4a6f;
+           vertical-align: -3px; }
+  .ferr { font-size: 12px; color: #b3261e; margin: 4px 0 10px; line-height: 1.45; }
+  .fgap { height: 10px; }
+
+  /* 部品 */
+  .btn { display: inline-flex; align-items: center; gap: 7px; background: #2b4a6f;
+         color: #ffffff; border-radius: 20px; padding: 10px 20px; font-size: 14px;
+         font-weight: bold; }
+  .btn.flat { background: none; color: #2b4a6f; padding: 10px 8px; }
+  .sel { border: 1px solid #6b7280; border-radius: 5px; background: #ffffff;
+         padding: 0 12px; height: 56px; font-size: 13.5px; color: #111827;
+         margin: 0 0 12px; display: flex; align-items: center;
+         justify-content: space-between; box-sizing: border-box; }
+  .sel .cap { color: #6b7280; font-size: 11.5px; display: block; }
+  .arrow { color: #6b7280; }
+  .chk { display: flex; align-items: center; gap: 10px; height: 34px; font-size: 13px;
+         color: #1f2937; }
+  .chkbox { width: 17px; height: 17px; border: 2px solid #6b7280; border-radius: 3px;
+            flex: none; }
+  .warn { font-size: 13px; color: #b45309; margin: 4px 0; }
+  .scrollbar { position: absolute; right: 3px; width: 6px; border-radius: 3px;
+               background: #9ca3af; }
+</style>
+
+<!-- ============ 1. 提出タブ ============ -->
+<div class="panel">
+  <p class="plabel">1. 「更新版を提出」タブ — 入力欄をなくし、ボタンだけにする</p>
+  <p class="pnote">記入は ZIP を選んだ後のダイアログへ移す。タブは説明と提出ボタンだけ。</p>
+  <div class="win h640">
+    <div class="winbar">mgtkit アプリマネージャー</div>
+    <div class="tabbar">
+      <div class="tab">起動</div>
+      <div class="tab">β版の確認と承認</div>
+      <div class="tab on">更新版を提出</div>
+      <div class="tab">設定</div>
+    </div>
+    <div class="tabbody">
+      <p class="lead">作業した mgtkit のフォルダを ZIP にして提出すると、自動で検証されます。
+        エラーなく本体に組み込める状態になるとβ版として発行され、メンバーの確認と承認を経て
+        正式版になります。マネージャーで取得した版を基に作業してください。</p>
+      <p class="lead sm">フォルダは丸ごと ZIP にして構いません。取得した版から変更したファイルだけが提出され、
+        個人設定 (API キーなど)・計算結果 (mgtkit_out)・PDF や実行ファイル (.bat など)
+        コード以外のファイルは自動で除外されます。</p>
+      <p class="lead sm">更新内容の書き方は、ZIP を選んだあとに選べます。</p>
+      <div style="margin-top:16px"><span class="btn">⬆ ZIP を選んで提出</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 2. 既定 (自動作成) ============ -->
+<div class="panel">
+  <p class="plabel">2. ZIP を選んだ直後 — 既定は「Claude で自動作成する」</p>
+  <p class="pnote">自動作成のままなら記入欄は出ないので、これまでと同じ手数で提出できる。既定ウィンドウ (760×640) に余裕をもって収まる。</p>
+  <div class="win h640">
+    <div class="winbar">mgtkit アプリマネージャー</div>
+    <div class="tabbar"><div class="tab">起動</div><div class="tab">β版の確認と承認</div>
+      <div class="tab on">更新版を提出</div><div class="tab">設定</div></div>
+    <div class="scrim">
+      <div class="dialog">
+        <p class="dtitle">提出内容の確認</p>
+        <p class="dtext">追加 1 件 / 変更 3 件のファイルを提出します。</p>
+        <p class="dsub">個人設定や計算結果は自動で除外済みです。</p>
+        <div class="card">
+          <p class="chead">更新内容は誰が書きますか?</p>
+          <p class="cfoot">ここで書かれた内容は、正式版になったときの「更新内容」としてそのまま全員に表示されます。</p>
+          <div class="opt"><div class="radio on"></div>
+            <div class="olabel">Claude で自動作成する (推奨)<span class="fee">　ご自身の API キーで 1 回数十円</span></div></div>
+          <div class="opt"><div class="radio"></div>
+            <div class="olabel">自分で入力する<span class="fee">　無料</span></div></div>
+        </div>
+        <div class="dactions">
+          <span class="btn flat">キャンセル</span>
+          <span class="btn">提出する</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3. 手入力を選んだ直後 ============ -->
+<div class="panel">
+  <p class="plabel">3. 「自分で入力する」を選んだ直後 — 選択肢の下に記入欄が生える</p>
+  <p class="pnote">選んだ行のすぐ下に入れ子で出すので、押した場所で変化が見える (画面の外で増えない)。既定ウィンドウにぎりぎり収まる高さ。</p>
+  <div class="win h640">
+    <div class="winbar">mgtkit アプリマネージャー</div>
+    <div class="tabbar"><div class="tab">起動</div><div class="tab">β版の確認と承認</div>
+      <div class="tab on">更新版を提出</div><div class="tab">設定</div></div>
+    <div class="scrim">
+      <div class="dialog">
+        <p class="dtitle">提出内容の確認</p>
+        <p class="dtext">追加 1 件 / 変更 3 件のファイルを提出します。</p>
+        <p class="dsub">個人設定や計算結果は自動で除外済みです。</p>
+        <div class="card">
+          <p class="chead">更新内容は誰が書きますか?</p>
+          <p class="cfoot">ここで書かれた内容は、正式版になったときの「更新内容」としてそのまま全員に表示されます。</p>
+          <div class="opt"><div class="radio"></div>
+            <div class="olabel">Claude で自動作成する (推奨)<span class="fee">　ご自身の API キーで 1 回数十円</span></div></div>
+          <div class="opt"><div class="radio on"></div>
+            <div class="olabel">自分で入力する<span class="fee">　無料</span></div></div>
+          <div class="reveal">
+            <div class="fhead"><span class="fname">更新内容</span></div>
+            <div class="box h3 focus hint">例:
+・二丁溝形鋼(2C)の断面算定に対応
+・計算書の文章出力を改善</div>
+            <div class="fgap"></div>
+            <div class="fhead"><span class="fname">ご利用にあたっての制限事項</span>
+              <span class="fnote">無ければ空欄のままで構いません</span></div>
+            <div class="box h2 hint">例:
+・二丁山形鋼は等辺のみ対応です (不等辺はエラーで停止します)</div>
+          </div>
+        </div>
+        <div class="dactions">
+          <span class="btn flat">キャンセル</span>
+          <span class="btn">提出する</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 4. 空欄のまま提出しようとした ============ -->
+<div class="panel">
+  <p class="plabel">4. 空欄のまま「提出する」を押した — 提出せずに、その場で理由を出す</p>
+  <p class="pnote">ボタンは灰色にせず常に押せるようにし、押した瞬間に欄を赤枠にして理由を欄の下へ出す (押しても何も起きないボタンを作らない)。欄が画面外なら自動でそこまで送る。</p>
+  <div class="win h640">
+    <div class="winbar">mgtkit アプリマネージャー</div>
+    <div class="tabbar"><div class="tab">起動</div><div class="tab">β版の確認と承認</div>
+      <div class="tab on">更新版を提出</div><div class="tab">設定</div></div>
+    <div class="scrim">
+      <div class="dialog">
+        <p class="dtitle">提出内容の確認</p>
+        <p class="dtext">追加 1 件 / 変更 3 件のファイルを提出します。</p>
+        <p class="dsub">個人設定や計算結果は自動で除外済みです。</p>
+        <div class="card">
+          <p class="chead">更新内容は誰が書きますか?</p>
+          <p class="cfoot">ここで書かれた内容は、正式版になったときの「更新内容」としてそのまま全員に表示されます。</p>
+          <div class="opt"><div class="radio"></div>
+            <div class="olabel">Claude で自動作成する (推奨)<span class="fee">　ご自身の API キーで 1 回数十円</span></div></div>
+          <div class="opt"><div class="radio on"></div>
+            <div class="olabel">自分で入力する<span class="fee">　無料</span></div></div>
+          <div class="reveal">
+            <div class="fhead"><span class="fname">更新内容</span></div>
+            <div class="box h3 bad hint">例:
+・二丁溝形鋼(2C)の断面算定に対応
+・計算書の文章出力を改善</div>
+            <p class="ferr">更新内容を入力してください (空欄だと正式版の更新内容も空欄になります)。</p>
+            <div class="fhead"><span class="fname">ご利用にあたっての制限事項</span>
+              <span class="fnote">無ければ空欄のままで構いません</span></div>
+            <div class="box h2 hint">例:
+・二丁山形鋼は等辺のみ対応です (不等辺はエラーで停止します)</div>
+          </div>
+        </div>
+        <div class="dactions">
+          <span class="btn flat">キャンセル</span>
+          <span class="btn">提出する</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 5. 記入済み ============ -->
+<div class="panel">
+  <p class="plabel">5. 記入して提出できる状態</p>
+  <p class="pnote">文字が入った瞬間に赤枠と赤字が消える (通信なし・その場で切り替え)。</p>
+  <div class="win h640">
+    <div class="winbar">mgtkit アプリマネージャー</div>
+    <div class="tabbar"><div class="tab">起動</div><div class="tab">β版の確認と承認</div>
+      <div class="tab on">更新版を提出</div><div class="tab">設定</div></div>
+    <div class="scrim">
+      <div class="dialog">
+        <p class="dtitle">提出内容の確認</p>
+        <p class="dtext">追加 1 件 / 変更 3 件のファイルを提出します。</p>
+        <p class="dsub">個人設定や計算結果は自動で除外済みです。</p>
+        <div class="card">
+          <p class="chead">更新内容は誰が書きますか?</p>
+          <p class="cfoot">ここで書かれた内容は、正式版になったときの「更新内容」としてそのまま全員に表示されます。</p>
+          <div class="opt"><div class="radio"></div>
+            <div class="olabel">Claude で自動作成する (推奨)<span class="fee">　ご自身の API キーで 1 回数十円</span></div></div>
+          <div class="opt"><div class="radio on"></div>
+            <div class="olabel">自分で入力する<span class="fee">　無料</span></div></div>
+          <div class="reveal">
+            <div class="fhead"><span class="fname">更新内容</span></div>
+            <div class="box h3 focus">・二丁山形鋼(2L)の断面算定に対応しました
+・柱脚の検定比一覧に軸力の欄を追加しました<span class="caret"></span></div>
+            <div class="fgap"></div>
+            <div class="fhead"><span class="fname">ご利用にあたっての制限事項</span>
+              <span class="fnote">無ければ空欄のままで構いません</span></div>
+            <div class="box h2">・二丁山形鋼は等辺のみ対応です (不等辺はエラーで停止します)</div>
+          </div>
+        </div>
+        <div class="dactions">
+          <span class="btn flat">キャンセル</span>
+          <span class="btn">提出する</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 6. API キー未登録 ============ -->
+<div class="panel">
+  <p class="plabel">6. API キーを登録していない PC — 自動作成は選べない (手入力のみ)</p>
+  <p class="pnote">選択肢は残したまま灰色にして、なぜ選べないかと行き先を書く。記入欄は最初から開いた状態。空欄提出の道は無くなるので、説明の無い正式版は生まれない。</p>
+  <div class="win h640">
+    <div class="winbar">mgtkit アプリマネージャー</div>
+    <div class="tabbar"><div class="tab">起動</div><div class="tab">β版の確認と承認</div>
+      <div class="tab on">更新版を提出</div><div class="tab">設定</div></div>
+    <div class="scrim">
+      <div class="dialog">
+        <p class="dtitle">提出内容の確認</p>
+        <p class="dtext">追加 1 件 / 変更 3 件のファイルを提出します。</p>
+        <p class="dsub">個人設定や計算結果は自動で除外済みです。</p>
+        <div class="card">
+          <p class="chead">更新内容は誰が書きますか?</p>
+          <p class="cfoot">ここで書かれた内容は、正式版になったときの「更新内容」としてそのまま全員に表示されます。</p>
+          <div class="opt"><div class="radio dim"></div>
+            <div class="olabel dim">Claude で自動作成する</div></div>
+          <p class="odim">この PC では使えません (設定タブで Claude の API キーを登録すると選べます)。</p>
+          <div class="opt"><div class="radio on"></div>
+            <div class="olabel">自分で入力する<span class="fee">　無料</span></div></div>
+          <div class="reveal">
+            <div class="fhead"><span class="fname">更新内容</span></div>
+            <div class="box h3 hint">例:
+・二丁溝形鋼(2C)の断面算定に対応
+・計算書の文章出力を改善</div>
+            <div class="fgap"></div>
+            <div class="fhead"><span class="fname">ご利用にあたっての制限事項</span>
+              <span class="fnote">無ければ空欄のままで構いません</span></div>
+            <div class="box h2 hint">例:
+・二丁山形鋼は等辺のみ対応です (不等辺はエラーで停止します)</div>
+          </div>
+        </div>
+        <div class="dactions">
+          <span class="btn flat">キャンセル</span>
+          <span class="btn">提出する</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 7. 最悪ケース (収まらない) ============ -->
+<div class="panel">
+  <p class="plabel">7. いちばん長くなる場合 — 差し戻し後の再提出 + 削除ファイル + 警告</p>
+  <p class="pnote"><b>この組み合わせだけは既定ウィンドウに収まらず、スクロールになります。</b>
+    赤い破線から下は画面外。ダイアログの中をスクロールすれば全部見えるが、記入欄に届くまで一手かかる。
+    起きるのは「差し戻し後にファイルを消した提出」のときだけ。</p>
+  <div class="win h640">
+    <div class="winbar">mgtkit アプリマネージャー</div>
+    <div class="tabbar"><div class="tab">起動</div><div class="tab">β版の確認と承認</div>
+      <div class="tab on">更新版を提出</div><div class="tab">設定</div></div>
+    <div class="scrim">
+      <div class="dialog clip">
+        <p class="dtitle">提出内容の確認</p>
+        <p class="dtext">追加 1 件 / 変更 3 件のファイルを提出します。</p>
+        <p class="dsub">個人設定や計算結果は自動で除外済みです。</p>
+        <div class="sel"><span><span class="cap">提出先</span>#41 に修正版として積む</span><span class="arrow">▾</span></div>
+        <div class="card">
+          <p class="chead">更新内容は誰が書きますか?</p>
+          <p class="cfoot">ここで書かれた内容は、正式版になったときの「更新内容」としてそのまま全員に表示されます。</p>
+          <div class="opt"><div class="radio"></div>
+            <div class="olabel">Claude で自動作成する (推奨)<span class="fee">　ご自身の API キーで 1 回数十円</span></div></div>
+          <div class="opt"><div class="radio on"></div>
+            <div class="olabel">自分で入力する<span class="fee">　無料</span></div></div>
+          <div class="reveal">
+            <div class="fhead"><span class="fname">更新内容</span></div>
+            <div class="box h3 focus hint">例:
+・二丁溝形鋼(2C)の断面算定に対応
+・計算書の文章出力を改善</div>
+            <div class="fgap"></div>
+            <div class="fhead"><span class="fname">ご利用にあたっての制限事項</span>
+              <span class="fnote">無ければ空欄のままで構いません</span></div>
+            <div class="box h2 hint">例:
+・二丁山形鋼は等辺のみ対応です (不等辺はエラーで停止します)</div>
+          </div>
+        </div>
+        <p class="dtext">基点にあったのに ZIP に無いファイルがあります。意図的に削除したものにチェックを入れてください:</p>
+        <div class="chk"><div class="chkbox"></div>old_section.py</div>
+        <div class="chk"><div class="chkbox"></div>tools/tmp_calc.py</div>
+        <p class="warn">⚠ 外部への通信を行うコードが含まれています</p>
+        <div class="dactions">
+          <span class="btn flat">キャンセル</span>
+          <span class="btn">提出する</span>
+        </div>
+      </div>
+      <div class="scrollbar" style="top:40px;height:300px"></div>
+      <div class="cliptag">ここから下は画面外 (スクロール)</div>
+    </div>
+  </div>
+</div>

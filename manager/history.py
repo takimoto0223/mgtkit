@@ -8,12 +8,17 @@
 - 点線の帯 = まだ確認中 (きょうの線まで)。同じ時期の帯は上下レーンに分ける
 
 データの対応付け:
-- 正式版 (prerelease でない release) と取り込み済みの提出 (merged PR) は
-  「公開日以前で最も新しい取り込み」を新しい順に貪欲に対応付ける
-  (マネージャーの運用では取り込み → 数分でリリースなので日付で安定する)。
-  対応が付かない最古の版は「初回配布」扱い
-- 帯の基点 (どの版から作ったか) は「提出日以前で最も新しい正式版」。
-  自分が公開された版と同じになった場合はその 1 つ前の版に倒す
+- 正式版 (prerelease でない release) と取り込み済みの提出 (merged PR) は、
+  その版のタグが指すコミットに紐づく提出 (release['pr_number']) で
+  対応付ける。これは GitHub 側の事実。引けなかった版だけ
+  「公開日以前で最も新しい取り込み」で新しい順に貪欲に対応付ける
+  (取り込み → 数分でリリースという運用の前提つき)。
+  どちらでも対応が付かない最古の版は「初回配布」扱い
+- 帯の基点 (どの版から作ったか) は、提出時に記録された版
+  (提出者がマネージャーで取得した版。配布 ZIP の version.json 由来で
+  PR 本文に残る)。記録が無い古い提出だけ、分岐点コミット → 提出日時、
+  の順に推定へ倒す。推定した基点は表示でそれと分かるようにする
+  (base_source: 'recorded' / 'fork' / 'estimate')
 """
 import datetime
 import re
@@ -93,14 +98,25 @@ def build_timeline(releases, merged, pending, today=None):
         """
         return item.get(key + '_full') or item.get(key) or ''
 
-    # 新しい順に「公開日時以前で最も新しい取り込み」を対応付ける
-    i = len(feats) - 1
+    # 1) タグのコミットに紐づく提出 (事実)。引けた版はここで確定する
+    by_number = {m['number']: m for m in feats}
+    for s in stables:
+        pr = by_number.get(s['release'].get('pr_number'))
+        if pr is not None:
+            s['pr'] = pr
+    # 2) 残り (提出を伴わない版・古い取得経路) だけ日時で貪欲に対応付ける。
+    #    確定済みの提出は候補から外す (使い回して 1 つずつずれるのを防ぐ)
+    taken = {s['pr']['number'] for s in stables if s['pr']}
+    rest = [m for m in feats if m['number'] not in taken]
+    i = len(rest) - 1
     for s in reversed(stables):
+        if s['pr'] is not None:
+            continue
         pub = _when(s['release'], 'published_at')
-        while i >= 0 and _when(feats[i], 'merged_at')[:len(pub)] > pub:
+        while i >= 0 and _when(rest[i], 'merged_at')[:len(pub)] > pub:
             i -= 1
         if i >= 0:
-            s['pr'] = feats[i]
+            s['pr'] = rest[i]
             i -= 1
 
     chips = []
@@ -115,7 +131,10 @@ def build_timeline(releases, merged, pending, today=None):
                       'start': start, 'end': s['date'],
                       'created_full': _when(pr, 'created_at'),
                       'fork_sha': pr.get('fork_sha') or '',
-                      'base_tag': None, 'target_tag': s['tag'],
+                      'base_version': pr.get('base_version') or '',
+                      'base_commit': pr.get('base_commit') or '',
+                      'base_tag': None, 'base_source': 'estimate',
+                      'target_tag': s['tag'],
                       'pending': False, 'lane': -1})
     for p in pending:
         if p.get('rejected_final'):
@@ -129,43 +148,86 @@ def build_timeline(releases, merged, pending, today=None):
                       'start': start, 'end': None,
                       'created_full': _when(p, 'created_at'),
                       'fork_sha': p.get('fork_sha') or '',
-                      'base_tag': None, 'target_tag': None,
+                      'base_version': p.get('base_version') or '',
+                      'base_commit': p.get('base_commit') or '',
+                      'base_tag': None, 'base_source': 'estimate',
+                      'target_tag': None,
                       'pending': True, 'lane': -1})
 
-    # 基点 (どの版から作られたか):
-    # 1) 分岐点コミット (fork_sha) がリリースタグの commit と一致すれば
-    #    それが事実 (公開後に古い版から提出されるのは普通にあるため、
-    #    日時からの推定では取り違える)
-    # 2) 分からなければ「提出日時以前で最も新しい正式版」で推定
-    #    (時刻まで比較。自分の公開版と同じなら 1 つ前)
+    # 基点 (どの版から作られたか) は次の順で決める:
+    # 1) 提出時に記録された版 (提出者が取得した配布物の version.json を
+    #    提出が写したもの)。これだけが事実で、あとは推定
+    # 2) 記録が無い古い提出は、分岐点コミット (提出のいちばん古い
+    #    コミットの親) がリリースタグと一致すればそれ
+    # 3) それも分からなければ「提出日時以前で最も新しい正式版」で推定
+    #    (時刻まで比較)。新しい版の公開直後に古い版から提出されると
+    #    取り違えるため、あくまで最後の手段
     dates = {s['tag']: s['date'] for s in stables}
+    order = {s['tag']: i for i, s in enumerate(stables)}
     sha_to_tag = {s['release'].get('tag_sha'): s['tag'] for s in stables
                   if s['release'].get('tag_sha')}
+
+    def _usable(tag, limit):
+        # 自分が公開された版より後の版は基点にできない (同じ日に複数の版が
+        # 出たときに前後が入れ替わるのを防ぐ)
+        return bool(tag) and order.get(tag, len(stables)) < limit
+
     for c in chips:
-        fork = c.get('fork_sha')
-        if fork and fork in sha_to_tag \
-                and sha_to_tag[fork] != c['target_tag']:
-            c['base_tag'] = sha_to_tag[fork]
+        limit = order.get(c['target_tag'], len(stables))
+        candidates = stables[:limit]
+        # 1) 提出時の記録 (版名そのもの → 記録されたコミット の順に照合)
+        recorded = c.get('base_version') or ''
+        tag = recorded if _usable(recorded, limit) else ''
+        if not tag:
+            by_sha = sha_to_tag.get(c.get('base_commit') or '')
+            tag = by_sha if _usable(by_sha, limit) else ''
+        if tag:
+            c['base_tag'] = tag
+            c['base_source'] = 'recorded'
             continue
+        # 2) 分岐点コミット
+        by_fork = sha_to_tag.get(c.get('fork_sha') or '')
+        if _usable(by_fork, limit):
+            c['base_tag'] = by_fork
+            c['base_source'] = 'fork'
+            continue
+        # 3) 提出日時からの推定
         base = None
         created = c.get('created_full') or c['start'].isoformat()
-        for s in stables:
+        for s in candidates:
             pub = _when(s['release'], 'published_at') \
                 or s['date'].isoformat()
             n = min(len(pub), len(created))
-            if pub[:n] <= created[:n] and s['tag'] != c['target_tag']:
+            if pub[:n] <= created[:n]:
                 base = s['tag']
-        if base is None and stables:
-            for s in stables:
-                if s['tag'] != c['target_tag']:
-                    base = s['tag']
-                    break
+        if base is None and candidates:
+            base = candidates[0]['tag']
         c['base_tag'] = base
+        c['base_source'] = 'estimate'
 
     chips.sort(key=lambda c: (c['start'], c['number'] or 0))
     _assign_lanes(chips, today, dates)
     authors = sorted({c['author'] for c in chips})
     return {'stables': stables, 'chips': chips, 'authors': authors}
+
+
+def base_label(chip):
+    """帯の基点の表示名 (「どの版を基に作ったか」として画面に出す文字列).
+
+    提出時に記録された版があれば、それがそのまま答え。β版を基に作った
+    提出は β の版名 (v1.3-beta.1 など) になる。β版は正式版の列に居ないので
+    図の線は近い正式版から引くことになるが、**文字は記録どおり**にする
+    (記録があるのに推定した版名を見せる方が誤解を招くため)。
+    記録が無い古い提出だけ、日時からの推定に「(推定)」を添えて区別する。
+    """
+    c = chip or {}
+    recorded = c.get('base_version') or ''
+    if recorded:
+        return recorded
+    tag = c.get('base_tag') or ''
+    if not tag:
+        return '不明'
+    return '%s (推定)' % tag if c.get('base_source') == 'estimate' else tag
 
 
 def _assign_lanes(chips, today, base_dates):

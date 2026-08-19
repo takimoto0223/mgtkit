@@ -1,28 +1,46 @@
 @echo off
-chcp 65001 >nul
-rem mgtkit ã‚¢ãƒ—ãƒªãƒžãƒãƒ¼ã‚¸ãƒ£ãƒ¼ã®èµ·å‹• (å¿…è¦ãƒ©ã‚¤ãƒ–ãƒ©ãƒªã®ç¢ºèªè¾¼ã¿)
-title mgtkit ã‚¢ãƒ—ãƒªãƒžãƒãƒ¼ã‚¸ãƒ£ãƒ¼
+chcp 932 >nul
+rem mgtkit ƒAƒvƒŠƒ}ƒl[ƒWƒƒ[‚Ì‹N“® (•K—vƒ‰ƒCƒuƒ‰ƒŠ‚ÌŠm”Fž‚Ý)
+rem •¶ŽšƒR[ƒh‚Í Shift_JIS ŒÅ’è (UTF-8 ‚¾‚Æ cmd ‚ª“Ç‚ÝŽæ‚èˆÊ’u‚ðŒ©Ž¸‚¤B
+rem Ú×‚Í manager/scripts/setup.bat ‚Ì–`“ª‚Æ decisions.md)
+title mgtkit ƒAƒvƒŠƒ}ƒl[ƒWƒƒ[
 cd /d "%~dp0.."
 
-rem èµ·å‹•ã®ãŸã³ã«æœ€æ–°ã®ãƒžãƒãƒ¼ã‚¸ãƒ£ãƒ¼ã¸æ›´æ–°ã™ã‚‹
-rem (ã‚ªãƒ•ãƒ©ã‚¤ãƒ³ç­‰ã§å¤±æ•—ã—ã¦ã‚‚ã€ãã®ã¾ã¾æ‰‹å…ƒã®ç‰ˆã§èµ·å‹•ã™ã‚‹)
-echo æœ€æ–°ç‰ˆã‚’ç¢ºèªã—ã¦ã„ã¾ã™...
+rem ‹N“®‚Ì‚½‚Ñ‚ÉÅV‚Ìƒ}ƒl[ƒWƒƒ[‚ÖXV‚·‚é
+rem (ƒIƒtƒ‰ƒCƒ““™‚ÅŽ¸”s‚µ‚Ä‚àA‚»‚Ì‚Ü‚ÜŽèŒ³‚Ì”Å‚Å‹N“®‚·‚é)
+echo ÅV”Å‚ðŠm”F‚µ‚Ä‚¢‚Ü‚·...
 git pull --ff-only >nul 2>nul
-if errorlevel 1 echo â€» æœ€æ–°åŒ–ã§ãã¾ã›ã‚“ã§ã—ãŸã€‚æ‰‹å…ƒã®ç‰ˆã®ã¾ã¾èµ·å‹•ã—ã¾ã™ã€‚
+if errorlevel 1 echo ¦ ÅV‰»‚Å‚«‚Ü‚¹‚ñ‚Å‚µ‚½BŽèŒ³‚Ì”Å‚Ì‚Ü‚Ü‹N“®‚µ‚Ü‚·B
 
-set "PY=python"
-where py >nul 2>nul && set "PY=py"
+rem ŽÀÛ‚É“®‚­ Python ‚ð’T‚·Bwhere ‚¾‚ÆƒXƒgƒA—U“±ƒXƒ^ƒu‚ð
+rem u“±“üÏ‚Ýv‚ÆŒë”»’è‚µA‚±‚Ìæ‚Ì pip ‚ª——R‚à‚È‚­Ž¸”s‚·‚é
+set "PY="
+py -3 --version >nul 2>nul && set "PY=py -3"
+if not defined PY (
+    python -c "import sys" >nul 2>nul && set "PY=python"
+)
+if not defined PY (
+    echo Python ‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñB
+    echo setup.bat ‚ð‚à‚¤ˆê“xŽÀs‚µ‚Ä Python ‚ð“±“ü‚µ‚Ä‚©‚çA
+    echo ‚ ‚ç‚½‚ß‚Ä‹N“®‚µ‚Ä‚­‚¾‚³‚¢B
+    pause
+    exit /b 1
+)
 
 %PY% -c "import flet" >nul 2>nul
 if errorlevel 1 (
-    echo å¿…è¦ãƒ©ã‚¤ãƒ–ãƒ©ãƒª ^(flet^) ã‚’ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã—ã¦ã„ã¾ã™...
+    echo •K—vƒ‰ƒCƒuƒ‰ƒŠ ^(flet^) ‚ðƒCƒ“ƒXƒg[ƒ‹‚µ‚Ä‚¢‚Ü‚·...
     %PY% -m pip install -r manager\requirements.txt
     if errorlevel 1 (
-        echo ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã«å¤±æ•—ã—ã¾ã—ãŸã€‚ãƒãƒƒãƒˆãƒ¯ãƒ¼ã‚¯æŽ¥ç¶šã‚’ç¢ºèªã—ã¦ãã ã•ã„ã€‚
+        echo ƒCƒ“ƒXƒg[ƒ‹‚ÉŽ¸”s‚µ‚Ü‚µ‚½BƒCƒ“ƒ^[ƒlƒbƒg‚ÉÚ‘±‚Å‚«‚Ä‚¢‚é‚©A
+        echo ŽÐ“àƒlƒbƒgƒ[ƒN‚ª pypi.org ‚ðŽÕ‚Á‚Ä‚¢‚È‚¢‚©Šm”F‚µ‚Ä‚­‚¾‚³‚¢B
         pause
         exit /b 1
     )
 )
 
+rem Python ‘¤‚Ìo—Í‚Í UTF-8 ‚Ì‚Ü‚Üˆµ‚¤ (CP932 ‚Å•\‚¹‚È‚¢‹L†‚ª
+rem ƒƒO‚Éo‚Ä‚à—Ž‚¿‚È‚¢‚æ‚¤‚É)B‚±‚±‚©‚ç‰º‚Í ASCII ‚Ì‚Ý‚É‚·‚é
+chcp 65001 >nul
 %PY% -m manager.main
 if errorlevel 1 pause
