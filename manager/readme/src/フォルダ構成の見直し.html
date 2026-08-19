@@ -126,12 +126,10 @@
   .grp.c2 { background: #f1faf3; } .grp.c2::before { background: #5aa571; }
   .grp.c3 { background: #fdf3f3; } .grp.c3::before { background: #c47575; }
   .grp.c4 { background: #f5f7f9; } .grp.c4::before { background: #8d99ab; }
-  .grp .tag, .box .tag { float: right;
+  .grp .tag { float: right;
               font-family: 'IPAPGothic', sans-serif;
               font-size: 8.2pt; font-weight: bold; padding: 0.2mm 1.2mm;
               border-radius: 3px; border: 1px solid; }
-  .box .tag { color: #6b7280; border-color: #c7ccd4; background: #f9fafb;
-              font-weight: normal; }
 
   .t1 { color: #17456f; } .t2 { color: #1c6334; }
   .t3 { color: #8f2d2d; } .t4 { color: #414c5c; }
@@ -191,7 +189,7 @@
     <div class="tree">
       <div class="ln root">C:\Users\(自分)\</div>
 
-      <div class="box"><span class="tag">入れ物</span>
+      <div class="box">
         <div class="ln"><span class="br">├─ </span><span class="nm">mgtkit\</span><span class="ds">   <b>ここが一番手前に見えている</b></span></div>
         <div class="grp c3"><span class="tag g3">3 × 道具</span>
           <div class="ln"><span class="mk">×</span><span class="br">│  ├─ </span><span class="nm t3">.git\</span><span class="ds">   <span class="hid">(隠し)</span> 版を管理する中身</span></div>
@@ -208,7 +206,7 @@
         </div>
       </div>
 
-      <div class="box"><span class="tag">入れ物</span>
+      <div class="box">
         <div class="ln"><span class="br">└─ </span><span class="nm">AppData\Local\mgtkit\</span><span class="ds">   <span class="hid">深い場所。ふつうは誰もたどり着かない</span></span></div>
 
         <div class="grp c2"><span class="tag g2">2 △ 正式版</span>
@@ -251,12 +249,12 @@
     <div class="tree">
       <div class="ln root">C:\Users\(自分)\</div>
 
-      <div class="box"><span class="tag">入れ物</span>
+      <div class="box">
         <div class="ln"><span class="br">└─ </span><span class="nm">mgtkit_appmanager\</span><span class="ds">   <b>mgtkit 関係はここ 1 つだけ。</b>中の mgtkit のフォルダと区別できるよう改名</span></div>
 
         <div class="grp c1"><span class="tag g1">1 ◎ 入口</span>
           <div class="ln" id="a-dst"><span class="mk">◎</span><span class="br">   ├─ </span><span class="nm t1">マネージャー起動.bat</span><span class="ds"> のショートカット <b>(デスクトップにコピーしても使えます)</b></span></div>
-          <div class="ln"><span class="mk">◎</span><span class="br">   ├─ </span><span class="nm t1">_はじめに読む.txt</span><span class="ds">   このフォルダの中身の説明</span></div>
+          <div class="ln"><span class="br">   ├─ </span><span class="nm t1">アプリマネージャー使い方ガイド.pdf</span><span class="ds">   アプリマネージャーの使い方・フォルダ構成の説明</span></div>
         </div>
 
         <div class="grp c2"><span class="tag g2">2 △ 正式版</span>
@@ -266,7 +264,7 @@
           <div class="ln" id="b-src"><span class="br">   │  └─ </span>起動.bat<span class="ds">   非常用。この正式版を直接動かす</span></div>
         </div>
 
-        <div class="box hide"><span class="tag">入れ物</span>
+        <div class="box hide">
           <div class="ln"><span class="mk">×</span><span class="br">   └─ </span><span class="nm">.manager\</span><span class="ds">   <b>ここから下はマネージャーの持ち物。開かないでください</b> (通常は非表示)</span></div>
 
           <div class="grp c3"><span class="tag g3">3 × 道具</span>
