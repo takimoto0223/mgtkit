@@ -54,8 +54,10 @@ DRAW_WIRE = """() => {
   ].join(' ');
   svg.setAttribute('viewBox', `0 0 ${pr.width} ${pr.height}`);
   svg.setAttribute('preserveAspectRatio', 'none');
+  // 矢じりは **入口の行の側** に付ける。「奥の .bat の中身が、入口の
+  // ショートカットとして出てくる」向き (赤入れ 2026-08)
   svg.innerHTML =
-    `<path d="${d}"/><path d="M${xt},${yt} l7,-3.5 M${xt},${yt} l7,3.5"/>`;
+    `<path d="${d}"/><path d="M${x0},${y0} l7,-3.5 M${x0},${y0} l7,3.5"/>`;
   return d;
 }"""
 

@@ -76,14 +76,15 @@
   .g4 { background: #eaedf2; border-color: #8d99ab; color: #414c5c; }
 
   /* ---- 2 段組み ---- */
-  .cols { display: flex; gap: 7mm; align-items: stretch; }
+  .cols { display: flex; gap: 9mm; align-items: stretch; }
   .col { flex: 1; min-width: 0; }
   .colhead { display: flex; align-items: baseline; gap: 3mm;
              margin-bottom: 1.8mm; }
   .colhead .n { font-size: 11.5pt; font-weight: bold; color: #1e3a5f; }
   .colhead .s { font-size: 8.6pt; color: #6b7280; }
   /* パネル自体には枠も地色も置かない (赤入れ 2026-08「この枠線ケス」)。
-     枠は入れ物 (.box) だけが持ち、階層が枠の数で分かるようにする */
+     枠は入れ物 (.box) だけが持ち、階層が枠の数で分かるようにする。
+     入れ物の枠は左へはみ出して描くので、列のすき間はその分ひろく取る */
   .panel { padding: 0.6mm 0 3.6mm; height: 100%; position: relative; }
 
   /* ---- ツリー ---- */
@@ -103,15 +104,22 @@
 
   /* 入れ物・群とも **左の余白を作らない**。左に余白を持たせると、
      枠をまたぐたびに枝の縦線がずれる。色帯は ::before の重ね描きにして
-     幅を食わせない */
-  /* 入れ物の枠は濃いグレーの実線 (赤入れ 2026-08)。
-     ふだん開かない入れ物 (.manager\) だけ .box.hide で破線にして、
+     幅を食わせない。
+     入れ物の枠も同じ理由で border では引かず、**::before で文字の並びの
+     外 (左) へはみ出させて描く**。深さごとに左へずらすので、枠と中の
+     カードのあいだに余白ができても枝は縦に通ったまま
+     (赤入れ 2026-08「マージンをもう少し取って」) */
+  .box { position: relative; background: #ffffff;
+         padding: 2.2mm 1.6mm 2.6mm 0; margin: 3mm 0; }
+  .box::before { content: ''; position: absolute;
+                 top: 0; bottom: 0; left: -3.6mm; right: 0;
+                 border: 2px solid #6b7280; border-radius: 5px; }
+  /* ふだん開かない入れ物 (.manager\) だけ破線。
      「実線＝見える／破線＝隠れている」を枠の描き方だけで言う */
-  .box { border: 2px solid #4b5563; background: #ffffff;
-         border-radius: 5px; padding: 1.8mm 2.4mm 2.2mm 0; margin: 2mm 0; }
-  .box.hide { border: 1.6px dashed #98a2b0; }
+  .box .box::before { left: -1.8mm;
+                      border: 1.6px dashed #a3adb9; }
   .grp { position: relative; border-radius: 0 5px 5px 0;
-         padding: 1.6mm 1.2mm 1.6mm 0; margin: 1.8mm 0; }
+         padding: 1.6mm 1.2mm 1.6mm 0; margin: 2mm 0; }
   .grp::before { content: ''; position: absolute; left: 0; top: 0;
                  bottom: 0; width: 4px; border-radius: 2px 0 0 2px; }
   .grp.c1 { background: #f2f7fc; } .grp.c1::before { background: #5b8cc0; }
