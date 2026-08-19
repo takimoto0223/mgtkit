@@ -254,6 +254,8 @@ def main(page: ft.Page):
         updated = usage.rates_updated_text(config)
         model = usage.model_name(config)
         price_url = usage.pricing_url(config)
+        console_url = ('https://platform.claude.com/settings/'
+                       'workspaces/default/keys')
 
         def usd(v):
             return '$%.2f' % v if (v >= 0.005 or v == 0) else '$%.3f' % v
@@ -336,6 +338,15 @@ def main(page: ft.Page):
                 ft.Text('正確な請求額は Claude Console で確認してください。'
                         '他の PC や他のアプリでの利用は含みません。',
                         size=11, color='#6b7280'),
+                ft.Text(spans=[
+                    ft.TextSpan(
+                        console_url,
+                        ft.TextStyle(
+                            color=NAVY,
+                            decoration=ft.TextDecoration.UNDERLINE),
+                        url=console_url,
+                        tooltip='ブラウザで Claude Console を開きます'),
+                ], size=11, color='#6b7280'),
             ], tight=True, width=620),
             actions=[ft.TextButton('閉じる',
                                    on_click=lambda _: page.pop_dialog())]))
