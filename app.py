@@ -2293,6 +2293,114 @@ def api_export_dxf():
         return _error_response(e)
 
 
+# ---------------------------------------------------------------------------
+# エンドポイント: 材料数量集計 (RC梁・柱・壁)
+# ---------------------------------------------------------------------------
+
+@app.route('/api/quantity_wall_sections', methods=['POST'])
+def api_quantity_wall_sections():
+    """断面名に'W'を含み配筋定義の無いRC断面 (線材壁パネル候補) の一覧."""
+    p = request.get_json(force=True)
+    err = _check_input_file(p.get('mgt_path'), 'mgtファイル')
+    if err:
+        return jsonify({'error': err}), 400
+    try:
+        from mgtkit.quantity import wall_line_candidate_sections
+        sections = wall_line_candidate_sections(
+            p['mgt_path'], limit_sec_no=float(p.get('limit_sec_no', 9000)))
+        return jsonify({'sections': sections})
+    except Exception as e:  # noqa: BLE001
+        return _error_response(e)
+
+
+@app.route('/api/quantity_wall_thicknesses', methods=['POST'])
+def api_quantity_wall_thicknesses():
+    """配筋(*REBAR-WALL)のある板要素壁パネルが使う厚みID一覧."""
+    p = request.get_json(force=True)
+    err = _check_input_file(p.get('mgt_path'), 'mgtファイル')
+    if err:
+        return jsonify({'error': err}), 400
+    try:
+        from mgtkit.quantity import wall_plate_thicknesses
+        thicknesses = wall_plate_thicknesses(p['mgt_path'])
+        return jsonify({'thicknesses': thicknesses})
+    except Exception as e:  # noqa: BLE001
+        return _error_response(e)
+
+
+@app.route('/api/quantity_slab_thicknesses', methods=['POST'])
+def api_quantity_slab_thicknesses():
+    """RC(材料type3)のスラブ用板要素が使う厚みID一覧."""
+    p = request.get_json(force=True)
+    err = _check_input_file(p.get('mgt_path'), 'mgtファイル')
+    if err:
+        return jsonify({'error': err}), 400
+    try:
+        from mgtkit.quantity import slab_plate_thicknesses
+        thicknesses = slab_plate_thicknesses(p['mgt_path'])
+        return jsonify({'thicknesses': thicknesses})
+    except Exception as e:  # noqa: BLE001
+        return _error_response(e)
+
+
+@app.route('/api/quantity', methods=['POST'])
+def api_quantity():
+    """RC梁・柱・壁・スラブの配筋x部材長からの数量集計 (鉄筋質量・コンクリート体積)."""
+    p = request.get_json(force=True)
+    err = _check_input_file(p.get('mgt_path'), 'mgtファイル')
+    if err:
+        return jsonify({'error': err}), 400
+    try:
+        from mgtkit.quantity import (compute_quantities, summarize_by_diameter,
+                                     export_quantity_xlsx)
+        cover = {'beam': float(p.get('beam_cover', 40)),
+                 'column': float(p.get('column_cover', 40)),
+                 'wall': float(p.get('wall_cover', 40))}
+        wall_layer_by_thickness = None
+        if p.get('wall_layer_by_thickness'):
+            wall_layer_by_thickness = {
+                int(float(k)): str(v) for k, v
+                in dict(p['wall_layer_by_thickness']).items()}
+        wall_line_rebar = None
+        if p.get('wall_line_rebar'):
+            wall_line_rebar = {int(float(k)): v for k, v
+                              in dict(p['wall_line_rebar']).items()}
+        slab_rebar_by_thickness = None
+        if p.get('slab_rebar_by_thickness'):
+            slab_rebar_by_thickness = {
+                int(float(k)): v for k, v
+                in dict(p['slab_rebar_by_thickness']).items()}
+        result = compute_quantities(
+            p['mgt_path'], cover=cover,
+            wall_layer_by_thickness=wall_layer_by_thickness,
+            wall_line_rebar=wall_line_rebar,
+            slab_rebar_by_thickness=slab_rebar_by_thickness)
+        out_dir = _out_dir(p, 'quantity')
+        xlsx_path = os.path.join(out_dir, 'quantity_check.xlsx')
+        export_quantity_xlsx(result, xlsx_path)
+        skipped = (result['beam']['skipped'] + result['column']['skipped']
+                  + result['wall']['skipped'] + result['slab']['skipped'])
+        return jsonify({
+            'diameters': summarize_by_diameter(result),
+            'concrete_m3': {'beam': result['beam']['concrete_m3'],
+                            'column': result['column']['concrete_m3'],
+                            'wall': result['wall']['concrete_m3'],
+                            'slab': result['slab']['concrete_m3'],
+                            'total': result['total_concrete_m3']},
+            'n_beam': len(result['beam']['rows']),
+            'n_column': len(result['column']['rows']),
+            'n_wall': (len(result['wall']['rows'])
+                      + len(result['wall'].get('line_rows', []))),
+            'n_slab': sum(r['n_elements'] for r in result['slab']['rows']),
+            'skipped': skipped,
+            'xlsx': {'name': os.path.basename(xlsx_path),
+                    'url': _register_file(xlsx_path) + '&dl=1'},
+            'out_dir': out_dir,
+        })
+    except Exception as e:  # noqa: BLE001
+        return _error_response(e)
+
+
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
 

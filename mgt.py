@@ -613,6 +613,29 @@ def mgtopen_thickness(filename):
     return thickness
 
 
+def mgtopen_thickness_name(filename):
+    """mgtファイルより厚さIDと名称(*THICKNESSの3番目フィールド)の対応を取得する.
+
+    新規追加 (MATLAB原典なし、UIの厚み一覧表示用)。mgtopen_thickness と同じ
+    区間を走査し、3番目フィールド(NAME、例 'S20')を厚さIDごとに集める。
+
+    戻り値: {厚さID(int): 名称(str)}。*THICKNESSが無い場合は空dict。
+    """
+    lines = _lines(filename)
+    startthick, endthick = _scan_section(lines, '*THICKNESS', 11,
+                                         guard='*ENDDATA', guard_first=True)
+    if startthick == -1:
+        return {}
+
+    names = {}
+    for iwall in range(1, endthick + 2 - startthick):
+        tline = lines[startthick - 1 + (iwall - 1)]
+        tn = _tlinenum(tline)
+        tid = int(_str2double(_field(tline, tn, 1)))
+        names[tid] = space_erace(_field(tline, tn, 3))
+    return names
+
+
 # ---------------------------------------------------------------------------
 # mgtopen_group.m
 # ---------------------------------------------------------------------------
