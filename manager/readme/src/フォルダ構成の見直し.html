@@ -11,8 +11,10 @@
     .tree のフォント指定を変えると枝がずれる
   - パスは日本語 Windows の見え方 (円記号) に揃うよう和文等幅を先に置く
   - **入れ物のフォルダには群の色を塗らない** (中に別々の群を含むため、
-    どの色を塗っても嘘になる)。白地＋破線の枠にする。左右で同じものが
-    同じ描き方になるようにそろえること (管理者の赤入れ 2026-08)
+    どの色を塗っても嘘になる)。白地＋濃いグレーの実線の枠にし、
+    ふだん開かない入れ物 (.manager\) だけ破線 (.box.hide) にする。
+    左右で同じものが同じ描き方になるようにそろえること
+    (管理者の赤入れ 2026-08)
   - 色だけに頼らないよう、群の番号と記号 (◎ △ ×) を必ず添える。
     2 型色覚では緑地と赤地の差が 1.03:1 でほぼ判別できない
   - 説明で補わず、見た目で分からせる。冒頭と重複する説明文は置かない
@@ -80,9 +82,9 @@
              margin-bottom: 1.8mm; }
   .colhead .n { font-size: 11.5pt; font-weight: bold; color: #1e3a5f; }
   .colhead .s { font-size: 8.6pt; color: #6b7280; }
-  .panel { border: 1px solid #d8dee6; border-radius: 6px;
-           padding: 3.4mm 3.6mm 3.6mm; background: #fcfdfe; height: 100%;
-           position: relative; }
+  /* パネル自体には枠も地色も置かない (赤入れ 2026-08「この枠線ケス」)。
+     枠は入れ物 (.box) だけが持ち、階層が枠の数で分かるようにする */
+  .panel { padding: 0.6mm 0 3.6mm; height: 100%; position: relative; }
 
   /* ---- ツリー ---- */
   .tree { font-family: 'IPAGothic', monospace; font-size: 10.4pt;
@@ -90,10 +92,10 @@
   /* 記号 (◎ △ ×) は文字の並びの外 (左の溝) に置く。並びの中に入れると
      その行だけ枝の縦線が記号のぶんずれる (管理者の赤入れ「まっすぐ
      あわせる」)。全行が同じ左端から始まるので枝が縦に通る */
-  .ln { white-space: pre; position: relative; padding-left: 7mm; }
+  .ln { white-space: pre; position: relative; padding-left: 6mm; }
   .br { color: #9aa5b1; }
   .nm { font-weight: bold; }
-  .ds { font-family: 'IPAPGothic', sans-serif; font-size: 9.2pt;
+  .ds { font-family: 'IPAPGothic', sans-serif; font-size: 8.4pt;
         color: #5b6572; font-weight: normal; }
   .star { color: #b45309; font-weight: bold; }
   .mk { position: absolute; left: 1.8mm; top: 0;
@@ -102,10 +104,14 @@
   /* 入れ物・群とも **左の余白を作らない**。左に余白を持たせると、
      枠をまたぐたびに枝の縦線がずれる。色帯は ::before の重ね描きにして
      幅を食わせない */
-  .box { border: 1.6px dashed #98a2b0; background: #ffffff;
+  /* 入れ物の枠は濃いグレーの実線 (赤入れ 2026-08)。
+     ふだん開かない入れ物 (.manager\) だけ .box.hide で破線にして、
+     「実線＝見える／破線＝隠れている」を枠の描き方だけで言う */
+  .box { border: 2px solid #4b5563; background: #ffffff;
          border-radius: 5px; padding: 1.8mm 2.4mm 2.2mm 0; margin: 2mm 0; }
+  .box.hide { border: 1.6px dashed #98a2b0; }
   .grp { position: relative; border-radius: 0 5px 5px 0;
-         padding: 1.6mm 2.4mm 1.6mm 0; margin: 1.8mm 0; }
+         padding: 1.6mm 1.2mm 1.6mm 0; margin: 1.8mm 0; }
   .grp::before { content: ''; position: absolute; left: 0; top: 0;
                  bottom: 0; width: 4px; border-radius: 2px 0 0 2px; }
   .grp.c1 { background: #f2f7fc; } .grp.c1::before { background: #5b8cc0; }
@@ -114,7 +120,7 @@
   .grp.c4 { background: #f5f7f9; } .grp.c4::before { background: #8d99ab; }
   .grp .tag, .box .tag { float: right;
               font-family: 'IPAPGothic', sans-serif;
-              font-size: 8.8pt; font-weight: bold; padding: 0.2mm 1.6mm;
+              font-size: 8.2pt; font-weight: bold; padding: 0.2mm 1.2mm;
               border-radius: 3px; border: 1px solid; }
   .box .tag { color: #6b7280; border-color: #c7ccd4; background: #f9fafb;
               font-weight: normal; }
@@ -130,9 +136,11 @@
 
   /* ショートカットの行き先を示す曲線 (座標は実測値) */
   /* 曲線を引くため、変更後のパネルだけ右に余白を確保する */
-  .panel.wired { padding-right: 20mm; }
+  .panel.wired { padding-right: 12mm; }
+  /* .grp / .box は後から地色を塗るので、z-index がないと曲線が
+     枠をまたぐたびに塗りつぶされて切れて見える (赤入れ 2026-08) */
   .wires { position: absolute; inset: 0; width: 100%; height: 100%;
-           pointer-events: none; }
+           pointer-events: none; z-index: 3; }
   .wires path { fill: none; stroke: #2563eb; stroke-width: 1.1;
                 stroke-linecap: round; }
   .wires text { font-family: 'IPAPGothic', sans-serif; font-size: 7pt;
@@ -157,8 +165,8 @@
 <div class="legend">
   <div class="lg g1"><b>1 ◎ 入口</b>
     普段はここから起動します。移動・コピーは自由です。</div>
-  <div class="lg g2"><b>2 △ 正式版のアプリ</b>
-    見る・コピーは自由。改造はこれをコピーして行います。アプリマネージャーで起動したときに実際に動くプログラムです。</div>
+  <div class="lg g2"><b>2 △ リリースされた最新版のアプリ</b>
+    見る・コピーは自由。改造はこれをコピーして行います。アプリマネージャーから起動したときに開いて実際に動くプログラムです。</div>
   <div class="lg g3"><b>3 × 道具</b>
     アプリマネージャーが動くための、GitHub のリポジトリの複製 (開発用のファイルも含めてまるごと)。さわらないでください。</div>
   <div class="lg g4"><b>4 × 置き場</b>
@@ -170,7 +178,7 @@
 <!-- ================= 変更前 ================= -->
 <div class="col">
   <div class="colhead"><span class="n">変更前 (いま)</span>
-    <span class="s">フォルダは 2 か所。名前はどちらも mgtkit で混乱する。</span></div>
+    <span class="s">C:\Users\(自分)\ 以下にフォルダが 2 か所。名前はどちらも mgtkit で混乱する。</span></div>
   <div class="panel">
     <div class="tree">
       <div class="ln root">C:\Users\(自分)\</div>
@@ -196,7 +204,7 @@
         <div class="ln"><span class="br">└─ </span><span class="nm">AppData\Local\mgtkit\</span><span class="ds">   <span class="hid">深い場所。ふつうは誰もたどり着かない</span></span></div>
 
         <div class="grp c2"><span class="tag g2">2 △ 正式版</span>
-          <div class="ln"><span class="mk">△</span><span class="br">   ├─ </span><span class="nm t2">stable\mgtkit\</span><span class="ds">   <span class="star">★いま動いているアプリ。改造するときはこれをフォルダの外へコピー</span></span></div>
+          <div class="ln"><span class="mk">△</span><span class="br">   ├─ </span><span class="nm t2">stable\mgtkit\</span><span class="ds">   <span class="star">★アプリマネージャーから起動されるアプリ。改造するときはこれをフォルダの外へコピー</span></span></div>
           <div class="ln"><span class="br">   │  ├─ </span>app.py  s_check.py <span class="ds">…  (配布版。tests\ や manager\ は入っていない)</span></div>
           <div class="ln"><span class="br">   │  ├─ </span>version.json<span class="ds">   どの版か・どこから直したかの目印</span></div>
           <div class="ln"><span class="br">   │  └─ </span>起動.bat<span class="ds">   非常用。この正式版を直接動かす</span></div>
@@ -217,7 +225,7 @@
 <!-- ================= 変更後 ================= -->
 <div class="col">
   <div class="colhead"><span class="n">変更後 (案)</span>
-    <span class="s">フォルダは 1 つ。開いて見えるのは 3 つだけ</span></div>
+    <span class="s">C:\Users\(自分)\ 以下にフォルダは 1 つ。開いて見えるのは 3 つだけ</span></div>
   <div class="panel wired">
     <!-- ショートカットの行き先 (アプリマネージャー →
          .manager\mgtkit\manager\マネージャー起動.bat)。
@@ -236,25 +244,25 @@
       <div class="ln root">C:\Users\(自分)\</div>
 
       <div class="box"><span class="tag">入れ物</span>
-        <div class="ln"><span class="br">└─ </span><span class="nm">mgtkit_appmanager\</span><span class="ds">   <b>mgtkit 関係はここ 1 つだけ。</b>中の mgtkit と区別できるよう改名</span></div>
+        <div class="ln"><span class="br">└─ </span><span class="nm">mgtkit_appmanager\</span><span class="ds">   <b>mgtkit 関係はここ 1 つだけ。</b>中の mgtkit のフォルダと区別できるよう改名</span></div>
 
         <div class="grp c1"><span class="tag g1">1 ◎ 入口</span>
-          <div class="ln" id="a-dst"><span class="mk">◎</span><span class="br">   ├─ </span><span class="nm t1">マネージャー起動.bat</span><span class="ds"> のショートカット (デスクトップにコピーしても使えます)</span></div>
-          <div class="ln"><span class="mk">◎</span><span class="br">   ├─ </span><span class="nm t1">_はじめに読む.txt</span><span class="ds">   このフォルダの中身と、改造するときの手順</span></div>
+          <div class="ln" id="a-dst"><span class="mk">◎</span><span class="br">   ├─ </span><span class="nm t1">マネージャー起動.bat</span><span class="ds"> のショートカット <b>(デスクトップにコピーしても使えます)</b></span></div>
+          <div class="ln"><span class="mk">◎</span><span class="br">   ├─ </span><span class="nm t1">_はじめに読む.txt</span><span class="ds">   このフォルダの中身の説明</span></div>
         </div>
 
         <div class="grp c2"><span class="tag g2">2 △ 正式版</span>
-          <div class="ln"><span class="mk">△</span><span class="br">   ├─ </span><span class="nm t2">stable\mgtkit\</span><span class="ds">   <span class="star">★いま動いているアプリ。改造するときはこれをフォルダの外へコピー</span></span></div>
+          <div class="ln"><span class="mk">△</span><span class="br">   ├─ </span><span class="nm t2">stable\mgtkit\</span><span class="ds">   <span class="star">★アプリマネージャーから起動されるアプリ。改造するときはこれをフォルダの外へコピー</span></span></div>
           <div class="ln"><span class="br">   │  ├─ </span>app.py  s_check.py <span class="ds">…  (配布版。tests\ や manager\ は入っていない)</span></div>
           <div class="ln"><span class="br">   │  ├─ </span>version.json<span class="ds">   どの版か・どこから直したかの目印</span></div>
           <div class="ln" id="b-src"><span class="br">   │  └─ </span>起動.bat<span class="ds">   非常用。この正式版を直接動かす</span></div>
         </div>
 
-        <div class="box"><span class="tag">入れ物</span>
+        <div class="box hide"><span class="tag">入れ物</span>
           <div class="ln"><span class="mk">×</span><span class="br">   └─ </span><span class="nm">.manager\</span><span class="ds">   <b>ここから下はマネージャーの持ち物。開かないでください</b> (通常は非表示)</span></div>
 
           <div class="grp c3"><span class="tag g3">3 × 道具</span>
-            <div class="ln"><span class="br">      ├─ </span><span class="nm t3">mgtkit\</span><span class="ds">   旧 C:\Users\(自分)\mgtkit がまるごと移ってくる</span></div>
+            <div class="ln"><span class="br">      ├─ </span><span class="nm t3">mgtkit\</span><span class="ds">   GitHub リポジトリの複製。旧 C:\Users\(自分)\mgtkit がまるごと移ってくる</span></div>
             <div class="ln"><span class="br">      │  ├─ </span><span class="nm t3">.git\</span><span class="ds">   <span class="hid">(隠し)</span> 版を管理する中身</span></div>
             <div class="ln"><span class="br">      │  ├─ </span>app.py  mgt.py  s_check.py  rc_check.py  section.py <span class="ds">…</span></div>
             <div class="ln"><span class="br">      │  ├─ </span>data\   static\   templates\</div>

@@ -61,6 +61,7 @@
   .card { border: 1px solid #e5e7eb; border-radius: 5px;
           padding: 2.4mm 3mm; margin-top: 2mm; font-size: 9pt;
           line-height: 1.6; }
+  .card .only { margin: 0 0 1.4mm; }
   .card ul { margin: 1mm 0 0; padding-left: 5mm; }
   .card li { margin: 0.8mm 0; }
   .muted { color: #6b7280; }
@@ -69,8 +70,7 @@
          padding: 2.6mm 3.2mm; margin-top: 2mm; }
   .ask .h { font-weight: bold; color: #17456f; display: block;
             margin-bottom: 1mm; font-size: 10.5pt; }
-  .ask ol { margin: 1mm 0 0; padding-left: 6mm; }
-  .ask li { margin: 1mm 0; }
+  .ask p { margin: 1mm 0 0; }
 </style>
 </head>
 <body>
@@ -88,10 +88,13 @@
 <h2>切り替えでお願いすること (見込み)</h2>
 
 <div class="card">
+  <p class="only"><b>お願いするのは 1 つだけです。</b>新しい <code>setup.bat</code> を
+  もう一度ダブルクリックしてください (5 分程度の見込みです)。あとは
+  マネージャーが引っ越しから後片付けまで自動で行います。</p>
   <ul>
-    <li>新しい場所へ<b>セットアップをもう一度実行</b>していただきます (5 分程度の見込みです)。</li>
     <li>お名前・API キー・利用量は<b>そのまま引き継ぎます</b>。入力し直しは不要です。</li>
-    <li><b>古いフォルダはご自分で消さないでください。</b>ご案内のあとで安全に片付けます。</li>
+    <li><b>古いフォルダはご自分で消さないでください。</b>引き継ぎに使います。
+      済んだあとにマネージャーが自動で片付けます。</li>
     <li>計算結果 (<code>mgtkit_out</code>) は今までどおり mgt ファイルと同じ場所です。<b>移動しません。</b></li>
     <li>使い方ガイドに書かれているフォルダの場所 (1・2・4・8 章と付録) は、切り替えにあわせて改訂します。</li>
   </ul>
@@ -99,12 +102,11 @@
 
 <div class="ask">
   <span class="h">ご意見のお願い</span>
-  次の 3 点について、お気づきのことをお知らせください。「特に問題なし」のご返信も助かります。
-  <ol>
-    <li>「改造してよい場所は <code>stable\mgtkit</code> のコピーだけ」は、1 枚目の図で伝わりましたか</li>
-    <li>切り替えのときに一度だけ作業をお願いすることに、支障はありませんか</li>
-    <li>フォルダ名 <code>mgtkit_appmanager</code> と案内ファイル名 <code>_はじめに読む.txt</code> は分かりやすいですか</li>
-  </ol>
+  <p>そもそも、<b>このプログラムの置き場は <code>C:\Users\(自分)\</code> の下でよいでしょうか。</b>
+  たとえば「<code>C:\Users</code> の直下 (誰のフォルダでもない場所) の方がよい」など、
+  ご希望があればお知らせください。置き場所は今なら変えられます。</p>
+  <p class="muted">そのほか 1 枚目の図についてお気づきのことがあれば、あわせてお知らせください。
+  「特に問題なし」のご返信も助かります。</p>
 </div>
 
 </body>
