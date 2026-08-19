@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<!--
+  mgtkit フォルダ構成の見直し 2 枚目 (A4 縦。図の補足)
+
+  1 枚目 (A3 横) は フォルダ構成の見直し.html。Chromium は 1 つの PDF に
+  複数の用紙サイズを混ぜられないため、別々に PDF 化してから
+  pdfunite でつなぐ:
+
+    python make_a3.py フォルダ構成の見直し.html   p1.pdf   (420x297mm)
+    python make_a4.py フォルダ構成の見直し-2.html p2.pdf   (A4 縦)
+    pdfunite p1.pdf p2.pdf ../フォルダ構成の見直し.pdf
+
+  - 用語・色は 1 枚目と同じ (群の番号と記号 ◎ △ × を必ず添える)
+  - パスは日本語 Windows の見え方 (円記号) に揃うよう和文等幅を先に置く
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>mgtkit フォルダ構成の見直し (案) 2/2</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 210mm; height: 297mm; padding: 13mm 15mm 11mm;
+    font-family: 'IPAPGothic', sans-serif;
+    color: #1f2937; font-size: 9.4pt; line-height: 1.65;
+    background: #ffffff;
+  }
+  .head { display: flex; align-items: baseline; gap: 3mm;
+          margin-bottom: 3mm; }
+  .mark { background: #16283c; color: #ffffff; border-radius: 4px;
+          padding: 1mm 2.6mm; display: inline-flex; gap: 2mm;
+          align-items: baseline; flex: none; }
+  .mark .logo { font-weight: bold; font-size: 9pt; }
+  .mark .t { color: #9fb3c8; font-size: 7pt; }
+  h1 { color: #1e3a5f; font-size: 12.5pt; margin: 0; }
+  .pg { margin-left: auto; color: #9ca3af; font-size: 8.5pt; flex: none; }
+  h2 { color: #1e3a5f; font-size: 11pt; margin: 5mm 0 2mm;
+       padding-bottom: 1.2mm; border-bottom: 2px solid #1e3a5f; }
+  p { margin: 1.6mm 0; }
+  code { font-family: 'IPAGothic', monospace; font-size: 8.6pt;
+         background: #f1f3f5; border-radius: 2px; padding: 0 1mm; }
+
+  table.mv { border-collapse: collapse; width: 100%; font-size: 8.4pt; }
+  table.mv th, table.mv td { border: 1px solid #d1d5db;
+    padding: 1.2mm 1.6mm; text-align: left; vertical-align: top;
+    line-height: 1.45; }
+  table.mv th { background: #f3f4f6; color: #374151; }
+  /* 「なぜ」が狭いと語中で折り返すので、パス列を詰めて右へ配る */
+  table.mv td.c, table.mv th.c { width: 17%; font-weight: bold; }
+  table.mv td.p, table.mv th.p { width: 25%; }
+  .t1 { color: #17456f; } .t2 { color: #1c6334; }
+  .t3 { color: #8f2d2d; } .t4 { color: #414c5c; }
+
+  .rule { border: 1px solid #e0a83c; background: #fefaed;
+          border-left: 4px solid #e0a83c; border-radius: 0 5px 5px 0;
+          padding: 2.6mm 3.2mm; margin: 2mm 0 0; }
+  .rule .h { font-weight: bold; color: #92400e; display: block;
+             margin-bottom: 1mm; font-size: 10.5pt; }
+  .card { border: 1px solid #e5e7eb; border-radius: 5px;
+          padding: 2.4mm 3mm; margin-top: 2mm; font-size: 9pt;
+          line-height: 1.6; }
+  .card ul { margin: 1mm 0 0; padding-left: 5mm; }
+  .card li { margin: 0.8mm 0; }
+  .muted { color: #6b7280; }
+  .ask { border: 1px solid #5b8cc0; background: #f2f7fc;
+         border-left: 4px solid #5b8cc0; border-radius: 0 5px 5px 0;
+         padding: 2.6mm 3.2mm; margin-top: 2mm; }
+  .ask .h { font-weight: bold; color: #17456f; display: block;
+            margin-bottom: 1mm; font-size: 10.5pt; }
+  .ask ol { margin: 1mm 0 0; padding-left: 6mm; }
+  .ask li { margin: 1mm 0; }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <span class="mark"><span class="logo">mgtkit</span><span class="t">アプリマネージャー</span></span>
+  <h1>フォルダ構成の見直し (案)</h1>
+  <span class="pg">2 / 2</span>
+</div>
+
+<div class="rule">
+  <span class="h">覚えていただきたいのは、これだけです</span>
+  <code>mgtkit_appmanager\stable\mgtkit</code> が、いま動いているアプリです。<br>
+  改造するときは、<b>デスクトップなど <code>mgtkit_appmanager</code> の外</b>に貼り付けてから直してください。<br>
+  <span class="muted">例) <code>stable\mgtkit</code> を右クリック → コピー → デスクトップに貼り付け →
+  できた <code>mgtkit</code> フォルダの中で作業 → そのフォルダを ZIP にして「更新版を提出」タブから提出。</span>
+</div>
+
+<h2>何がどう変わるか</h2>
+
+<table class="mv">
+  <tr><th class="c">なにが</th><th class="p">いま</th><th class="p">これから</th><th>なぜ</th></tr>
+  <tr>
+    <td class="c"><span class="t2">2 △ 正式版のアプリ</span></td>
+    <td><code>AppData\Local\mgtkit\stable\mgtkit</code></td>
+    <td><code>mgtkit_appmanager\stable\mgtkit</code></td>
+    <td>改造するときのコピー元。<b>用があるので手前に出す</b></td>
+  </tr>
+  <tr>
+    <td class="c"><span class="t3">3 × 道具</span></td>
+    <td><code>C:\Users\(自分)\mgtkit</code></td>
+    <td><code>mgtkit_appmanager\.manager\mgtkit</code></td>
+    <td>直接なおすと更新が止まる。<b>そもそも見せない</b></td>
+  </tr>
+  <tr>
+    <td class="c"><span class="t4">4 × 置き場</span></td>
+    <td><code>AppData\Local\mgtkit\</code> の各所</td>
+    <td><code>mgtkit_appmanager\.manager\</code> の下</td>
+    <td>開いてもできることがない。<b>まとめて隠す</b><br>
+        <span class="muted">(β版が自動で片付く動きは今までどおり)</span></td>
+  </tr>
+  <tr>
+    <td class="c"><span class="t1">1 ◎ 入口</span></td>
+    <td>複製の中の <code>manager\マネージャー起動.bat</code><br>
+        非常用は複製の中の <code>起動.bat</code></td>
+    <td>フォルダ直下とデスクトップの<b>ショートカット</b></td>
+    <td>隠したフォルダの中まで開きに行かなくて済む</td>
+  </tr>
+</table>
+
+<h2>まちがって直してしまったときは</h2>
+
+<div class="card">
+  <b>鍵はかけません。</b>かけても外せてしまいますし、鍵の掛け外しに失敗すると<b>更新そのものが止まります</b>。
+  かわりに、<code>stable\mgtkit</code> に手が入っていたら、更新の前に
+  <code>mgtkit_appmanager\stash\日時\</code> へ<b>退避してからお知らせ</b>します
+  (複製ではすでにこの仕組みが動いています)。<br>
+  <span class="muted">ただし<b>退避は保険であって、直してよいという意味ではありません</b>。
+  <code>stable\mgtkit</code> は更新のたびに丸ごと入れ替わる場所なので、作業を続ける場所には向きません。</span>
+</div>
+
+<h2>切り替えでお願いすること (見込み)</h2>
+
+<div class="card">
+  <ul>
+    <li>新しい場所へ<b>セットアップをもう一度実行</b>していただきます (5 分程度の見込みです)。</li>
+    <li>お名前・API キー・利用量は<b>そのまま引き継ぎます</b>。入力し直しは不要です。</li>
+    <li><b>古いフォルダはご自分で消さないでください。</b>ご案内のあとで安全に片付けます。</li>
+    <li>計算結果 (<code>mgtkit_out</code>) は今までどおり mgt ファイルと同じ場所です。<b>移動しません。</b></li>
+    <li>使い方ガイドに書かれているフォルダの場所 (1・2・4・8 章と付録) は、切り替えにあわせて改訂します。</li>
+  </ul>
+</div>
+
+<div class="ask">
+  <span class="h">ご意見のお願い</span>
+  次の 3 点について、お気づきのことをお知らせください。「特に問題なし」のご返信も助かります。
+  <ol>
+    <li>「改造してよい場所は <code>stable\mgtkit</code> のコピーだけ」は、1 枚目の図で伝わりましたか</li>
+    <li>切り替えのときに一度だけ作業をお願いすることに、支障はありませんか</li>
+    <li>フォルダ名 <code>mgtkit_appmanager</code> と案内ファイル名 <code>_はじめに読む.txt</code> は分かりやすいですか</li>
+  </ol>
+</div>
+
+</body>
+</html>
