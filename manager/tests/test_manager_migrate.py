@@ -183,6 +183,17 @@ class TestDryRun:
         assert before == after
         assert not (home / paths.MANAGER_DIR_NAME / migrate.MARKER_NAME).exists()
 
+    def test_works_before_anything_is_created(self, tmp_path):
+        # 下見は「まだ何も作っていない状態」からできる必要がある
+        # (setup.bat が clone する前に、何が起きるかだけ見たい)
+        old_clone, old_root = _old_layout(tmp_path)
+        home = tmp_path / 'not_created_yet'
+        result = migrate.migrate(str(home), old_clone=str(old_clone),
+                                 old_root=str(old_root), dry_run=True,
+                                 say=lambda *_: None)
+        assert result['moved']
+        assert not home.exists(), '下見でフォルダを作らない'
+
     def test_still_reports_what_it_would_move(self, tmp_path):
         old_clone, old_root = _old_layout(tmp_path)
         home, _ = _new_home(tmp_path)

@@ -353,16 +353,26 @@ def migrate(home, clone=None, dry_run=False, no_cleanup=False,
     """引っ越しを行う。行ったことの要約 (dict) を返す."""
     clone = clone or os.path.join(home, paths.MANAGER_DIR_NAME, 'mgtkit')
     if not os.path.isdir(clone):
-        raise MigrateError('新しい場所の準備ができていません (%s)。'
-                           'setup.bat を最初から実行してください。' % clone)
+        if not dry_run:
+            raise MigrateError('新しい場所の準備ができていません (%s)。'
+                               'setup.bat を最初から実行してください。'
+                               % clone)
+        # 下見 (--dry-run) は「まだ何も作っていない状態」から実行できる
+        # ようにする。いま動いているクローンを元に、何が起きるかだけ言う
+        clone = paths.REPO_ROOT
     found_clone, found_root = find_old(old_clone, old_root)
+    say('置き場所: %s' % home)
     result = {'moved': [], 'entry': None, 'hidden': False, 'guide': False,
               'marker': None, 'new_install': not (found_clone or found_root)}
 
     if result['new_install']:
         say('これまでのフォルダは見つかりませんでした (新規の導入として続けます)。')
     else:
-        say('これまでのフォルダから引き継ぎます:')
+        say('見つかったこれまでのフォルダ:')
+        for found in (found_clone, found_root):
+            if found:
+                say('  %s' % found)
+        say('引き継ぎます:')
         result['moved'] = carry_over(plan(home, found_clone, found_root),
                                      dry_run=dry_run, say=say)
 
@@ -402,13 +412,16 @@ def main(argv=None):
     args = p.parse_args(argv)
     home = args.home or paths.default_home_root()
     if args.dry_run:
-        print('--- 試験 (dry-run): 実際には何も書き換えません ---')
+        print('--- 下見 (dry-run): 実際には何も書き換えません ---')
     try:
         migrate(home, dry_run=args.dry_run, no_cleanup=args.no_cleanup)
     except MigrateError as e:
         print('引っ越しを完了できませんでした: %s' % e)
         return 1
-    print('引っ越しの準備ができました: %s' % home)
+    if args.dry_run:
+        print('--- 下見はここまで。何も書き換えていません ---')
+    else:
+        print('引っ越しの準備ができました: %s' % home)
     return 0
 
 
