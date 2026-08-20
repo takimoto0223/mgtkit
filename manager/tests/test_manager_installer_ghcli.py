@@ -1,6 +1,7 @@
 """manager/installer.py・ghcli.py・updater.py のテスト (外部プロセスはモック)。"""
 import io
 import json
+import logging
 import os
 import zipfile
 
@@ -295,6 +296,84 @@ class TestInstallRelease:
         info = updater.local_version_info(str(inst))
         assert info == {'version': 'v1.4', 'commit': 'abc123',
                         'distributed_at': '2026-08-18'}
+
+
+class TestFailureMessages:
+    """原因を名指しする案内は、原因が分かった分岐でだけ出す.
+
+    「使用中です。再起動を」は、空き容量不足や置き場所の不在で出ると
+    利用者に**直らない操作**を延々させる。errno で分かる分だけ書く。
+    """
+
+    def _replace_with(self, monkeypatch, tmp_path, exc):
+        src = tmp_path / 'src'
+        src.mkdir()
+        (src / 'app.py').write_text('x', encoding='utf-8')
+        install_dir = tmp_path / 'inst' / 'mgtkit'
+        install_dir.mkdir(parents=True)
+
+        real_rename = os.rename
+
+        def fake_rename(a, b):
+            if os.path.abspath(a) == str(install_dir):
+                raise exc
+            return real_rename(a, b)
+        monkeypatch.setattr(installer.os, 'rename', fake_rename)
+        with pytest.raises(installer.InstallError) as got:
+            installer._replace_dir(str(src), str(install_dir))
+        return str(got.value)
+
+    def test_locked_folder_says_in_use(self, monkeypatch, tmp_path):
+        msg = self._replace_with(
+            monkeypatch, tmp_path, PermissionError(13, '使用中'))
+        assert '使用中' in msg
+
+    def test_disk_full_does_not_say_in_use(self, monkeypatch, tmp_path):
+        msg = self._replace_with(
+            monkeypatch, tmp_path, OSError(28, 'No space left'))
+        assert '空き容量' in msg
+        assert '使用中' not in msg and '再起動' not in msg
+
+    def test_missing_location_does_not_say_in_use(self, monkeypatch,
+                                                  tmp_path):
+        msg = self._replace_with(
+            monkeypatch, tmp_path, FileNotFoundError(2, 'No such file'))
+        assert '見つからない' in msg
+        assert '使用中' not in msg and '再起動' not in msg
+
+    def test_unknown_cause_points_at_the_log(self, monkeypatch, tmp_path):
+        msg = self._replace_with(monkeypatch, tmp_path, OSError(75, '謎'))
+        assert 'manager.log' in msg
+        assert '使用中' not in msg and '再起動' not in msg
+
+    def test_broken_zip_and_environment_errors_differ(self, tmp_path,
+                                                      monkeypatch):
+        bad = tmp_path / 'bad.zip'
+        bad.write_bytes(b'not a zip')
+        with pytest.raises(installer.InstallError) as broken:
+            installer.extract_zip(str(bad), str(tmp_path / 'x'))
+        assert '壊れている' in str(broken.value)
+
+        z = tmp_path / 'ok.zip'
+        _make_zip(str(z), {'app.py': 'x'})
+
+        def no_space(*a, **k):
+            raise OSError(28, 'No space left')
+        monkeypatch.setattr(installer.zipfile.ZipFile, 'extractall',
+                            no_space)
+        with pytest.raises(installer.InstallError) as env:
+            installer.extract_zip(str(z), str(tmp_path / 'y'))
+        assert '空き容量' in str(env.value)
+        # やり直しても直らないので「再度お試しください」とは言わない
+        assert '再度お試しください' not in str(env.value)
+
+    def test_the_cause_reaches_the_log(self, tmp_path, caplog):
+        bad = tmp_path / 'bad.zip'
+        bad.write_bytes(b'not a zip')
+        with caplog.at_level(logging.ERROR, logger='manager.installer'):
+            with pytest.raises(installer.InstallError):
+                installer.extract_zip(str(bad), str(tmp_path / 'x'))
+        assert any(r.exc_info for r in caplog.records)   # 追跡できる
 
 
 class TestInstallLock:

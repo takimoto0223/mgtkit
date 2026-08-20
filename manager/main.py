@@ -18,9 +18,9 @@ import webbrowser
 
 from . import (autofix, claude_helper, conflicts, diffdialog, diffview,
                feedback, ghcli,
-               history, historyview, launcher, localstate, logsetup, migrate,
-               paths, reviewcache, reviews, rocketfx, safeio, selfupdate,
-               settings, submit, uiguard, updater, usage)
+               history, historyview, installer, launcher, localstate,
+               logsetup, migrate, paths, reviewcache, reviews, rocketfx,
+               safeio, selfupdate, settings, submit, uiguard, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -648,12 +648,22 @@ def main(page: ft.Page):
             refresh_local_version(latest=True)
             _show_updated(latest)
             ok = True
+        except (installer.InstallError, ghcli.GhError) as e:
+            # 文言を持っている例外は、その理由をそのまま見せる
+            # (置き場が一杯・使用中などをネットワークのせいにしない)
+            log.exception('自動更新に失敗しました')
+            t1_preparing_tag.visible = False
+            t1_notice.value = ('%s (次回の起動時にもう一度試します)'
+                               % str(e))
+            _update_state['pending'] = latest
+            ok = False
         except Exception:
             log.exception('自動更新に失敗しました')
             t1_preparing_tag.visible = False
-            t1_notice.value = ('自動更新に失敗しました。ネットワーク接続を'
-                               '確認してください (次回の起動時にもう一度'
-                               '試します)。')
+            t1_notice.value = ('自動更新に失敗しました (次回の起動時に'
+                               'もう一度試します)。繰り返す場合は、'
+                               'ログ (manager.log) を管理者にお知らせ'
+                               'ください。')
             _update_state['pending'] = latest
             ok = False
         t1_launch_btn.disabled = False
@@ -1493,6 +1503,7 @@ def main(page: ft.Page):
                 t4_status.value = ''
                 _show_ai_error(e)
             except (submit.SubmitError, ghcli.GhError, GitError) as e:
+                log.info('提出を中断しました: %s', e)
                 t4_status.value = str(e)
             except Exception as e:
                 log.exception('finalize_submission failed')
@@ -1653,6 +1664,7 @@ def main(page: ft.Page):
                 submit.prepare_submission, zip_path, config,
                 None, _submit_progress)
         except (submit.SubmitError, ghcli.GhError, GitError) as e:
+            log.info('提出を中断しました: %s', e)
             t4_status.value = str(e)
             t4_submit_btn.disabled = False
             page.update()
@@ -3257,10 +3269,19 @@ def main(page: ft.Page):
         def work():
             try:
                 data = _fetch_review_snapshot()
+            except (reviews.ReviewError, ghcli.GhError) as e:
+                # gh 未導入・未ログインは、その例外が正しい案内を
+                # 持っている (承認タブと同じ見せ方に揃える)
+                log.info('更新チェックをスキップしました: %s', e)
+                t1_fresh.value = str(e)
+                page.update()
+                return
             except Exception:
-                log.info('更新チェックをスキップしました (オフライン等)')
-                t1_fresh.value = ('確認できませんでした。ネットワーク接続を'
-                                  'ご確認ください。')
+                # 通信の失敗は上の GhError が正しい文言を持っている。
+                # ここに来るのは想定外なので原因を決め打ちしない
+                log.exception('更新チェックに失敗しました')
+                t1_fresh.value = ('確認できませんでした (繰り返す場合は'
+                                  'ログ manager.log を管理者へ)。')
                 page.update()
                 return
             if data is None:
@@ -3272,8 +3293,11 @@ def main(page: ft.Page):
             try:
                 result = updater.check_update(repo, stable,
                                               releases=data['releases'])
+            except ghcli.GhError as e:
+                log.info('更新チェックをスキップしました: %s', e)
+                result = None
             except Exception:
-                log.info('更新チェックをスキップしました (オフライン等)')
+                log.exception('更新チェックに失敗しました')
                 result = None
             if result is None:
                 return

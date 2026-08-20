@@ -159,7 +159,10 @@ def inspect_zip(zip_path):
         installer.extract_zip(zip_path, extract_dir)
     except installer.InstallError as e:
         safeio.rmtree(tmp)
-        raise SubmitError(str(e))
+        # 提出は利用者が選んだ ZIP なので「取得した ZIP」とは言わない。
+        # 原因 (空き容量・パスの長さ等) は installer が文言に入れている
+        log.exception('提出 ZIP を開けませんでした: %s', zip_path)
+        raise SubmitError(str(e)) from e
 
     info = versions.read_version_json(extract_dir)
     if info is None:

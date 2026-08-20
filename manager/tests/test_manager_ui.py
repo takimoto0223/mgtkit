@@ -623,3 +623,69 @@ def test_auto_update_gives_up_while_an_install_is_running(monkeypatch):
     page = _FakePage()
     manager_main.main(page)               # 起動時の自動更新が走る
 
+
+def test_update_check_shows_the_real_reason_not_network(monkeypatch):
+    """gh 未導入・未ログインを「ネットワーク」で塗りつぶさないこと (#8).
+
+    これらの例外は**正しい案内文**を持っている (承認タブは str(e) を
+    出しており、起動タブだけが握り潰していた)。
+    """
+    from manager import main as manager_main
+
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+
+    def not_logged_in(*a, **k):
+        raise manager_main.ghcli.GhError(
+            'GitHub へのログインが必要です。「gh auth login」を'
+            '実行してください。')
+    monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot',
+                        not_logged_in)
+    monkeypatch.setattr(manager_main.reviewcache, 'load_from_disk',
+                        lambda *a, **k: None)
+
+    page = _FakePage()
+    manager_main.main(page)
+    texts = _walk_texts(page.added[1], [])
+    assert any('gh auth login' in t for t in texts)
+    assert not any('ネットワーク接続をご確認' in t for t in texts)
+
+
+def test_auto_update_failure_keeps_the_real_reason(monkeypatch):
+    """取り込み失敗の理由 (空き容量など) をネットワークのせいにしない (#6)."""
+    from manager import installer, main as manager_main
+
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+    snap = {'pending': [], 'releases': [], 'me': 'yamada-taro', 'merged': []}
+    monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviews, 'fork_memo', lambda *a, **k: {})
+    monkeypatch.setattr(manager_main.reviewcache, 'put',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviewcache, 'load_from_disk',
+                        lambda *a, **k: None)
+    monkeypatch.setattr(manager_main.updater, 'check_update',
+                        lambda *a, **k: {
+                            'has_update': True,
+                            'latest': {'tag': 'v1.9', 'prerelease': False,
+                                       'notes': ''}})
+    monkeypatch.setattr(manager_main.launcher, 'port_in_use',
+                        lambda *a, **k: False)
+
+    def no_space(*a, **k):
+        raise installer.InstallError(
+            'パソコンの空き容量が足りないため、新しい版に'
+            '置き換えられませんでした。')
+    monkeypatch.setattr(manager_main.updater, 'install_release', no_space)
+
+    page = _FakePage()
+    manager_main.main(page)
+    texts = _walk_texts(page.added[1], [])
+    assert any('空き容量' in t for t in texts)
+    assert not any('ネットワーク接続を確認してください' in t for t in texts)
+

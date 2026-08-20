@@ -796,3 +796,44 @@ class TestFallbackPrBody:
         body = submit.fallback_pr_body('改善しました', '', 'v1.1', 'x')
         notes = reviews.release_notes_from_pr(body, 'v1.2')
         assert '制限事項' not in notes
+
+
+class TestGitErrorMessages:
+    """git を実行できない理由を取り違えないこと (#12)."""
+
+    def test_missing_workdir_does_not_blame_git(self, tmp_path):
+        """作業フォルダが消えただけで「git が無い」と言わないこと.
+
+        git は入っているのに setup.bat の再実行を促され、何をしても
+        直らない案内になっていた。
+        """
+        from manager import gitcli
+        with pytest.raises(GitError) as got:
+            gitcli.run_git(['status'], cwd=str(tmp_path / 'kieta'))
+        assert '作業用のデータが見つかりません' in str(got.value)
+        assert 'setup.bat' not in str(got.value)
+
+    def test_missing_git_still_says_so(self, monkeypatch, tmp_path):
+        from manager import gitcli
+
+        def no_git(*a, **k):
+            raise FileNotFoundError(2, 'git')
+        monkeypatch.setattr(gitcli.subprocess, 'run', no_git)
+        with pytest.raises(GitError) as got:
+            gitcli.run_git(['status'], cwd=str(tmp_path))
+        assert 'git コマンドが見つかりません' in str(got.value)
+
+
+class TestMergeCleanupKeepsTheCause:
+    """後始末が元の例外を握り潰さないこと (#12: 画面が固まる原因)."""
+
+    def test_cleanup_failure_does_not_replace_the_error(self, monkeypatch,
+                                                        tmp_path):
+        from manager import conflicts
+
+        def raises_oserror(args, cwd):
+            raise NotADirectoryError(20, 'cwd が無い')
+        monkeypatch.setattr(conflicts, '_git_raw', raises_oserror)
+        # 後始末が失敗しても例外を投げない (呼び出し元の raise が生きる)
+        conflicts._cleanup_merge(str(tmp_path / 'nai'))
+
