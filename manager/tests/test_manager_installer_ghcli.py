@@ -288,3 +288,46 @@ class TestCollaboratorInvitation:
         monkeypatch.setattr(ghcli, 'run_gh',
                             lambda args, timeout=60: '[]')
         assert ghcli.accept_repo_invitation('o/r') is False
+
+
+class TestSwapLeftovers:
+    """更新の入れ替えは「隣に用意して名前を付け替える」方式なので、
+    強制終了や電源断で作業フォルダが残る。放置すると更新のたびに溜まる。
+    新しい配置では stable が利用者に見えるので、なおさら残せない。
+    """
+
+    def test_sweeps_only_its_own_leftovers(self, tmp_path):
+        (tmp_path / (installer.SWAP_PREFIX + 'aaa')).mkdir()
+        (tmp_path / (installer.SWAP_PREFIX + 'bbb') / 'old').mkdir(parents=True)
+        (tmp_path / 'mgtkit').mkdir()          # 本物。消してはいけない
+        (tmp_path / 'version.json').write_text('{}', encoding='utf-8')
+        assert installer.sweep_swap_leftovers(str(tmp_path)) == 2
+        assert (tmp_path / 'mgtkit').is_dir()
+        assert (tmp_path / 'version.json').is_file()
+        assert not list(tmp_path.glob(installer.SWAP_PREFIX + '*'))
+
+    def test_missing_folder_is_harmless(self, tmp_path):
+        assert installer.sweep_swap_leftovers(str(tmp_path / 'nope')) == 0
+
+    def test_work_parent_is_used_when_given(self, tmp_path, monkeypatch):
+        # 作業フォルダは、指定された隠し場所に作られること
+        src = tmp_path / 'src'
+        src.mkdir()
+        (src / 'app.py').write_text('# app', encoding='utf-8')
+        install_dir = tmp_path / 'visible' / 'mgtkit'
+        install_dir.mkdir(parents=True)
+        work_parent = tmp_path / 'hidden' / 'tmp'
+        installer._replace_dir(str(src), str(install_dir), str(work_parent))
+        assert (install_dir / 'app.py').is_file()
+        # 見える側に残骸が出ていないこと
+        assert not list((tmp_path / 'visible').glob(
+            installer.SWAP_PREFIX + '*'))
+
+    def test_defaults_to_the_parent(self, tmp_path):
+        src = tmp_path / 'src'
+        src.mkdir()
+        (src / 'app.py').write_text('# app', encoding='utf-8')
+        install_dir = tmp_path / 'inst' / 'mgtkit'
+        install_dir.mkdir(parents=True)
+        installer._replace_dir(str(src), str(install_dir))
+        assert (install_dir / 'app.py').is_file()

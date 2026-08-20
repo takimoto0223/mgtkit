@@ -625,7 +625,8 @@ def main(page: ft.Page):
                                    % (latest['tag'], msg))
                 page.update()
             updater.install_release(repo, latest, stable,
-                                    on_progress=progress)
+                                    on_progress=progress,
+                                    config=config)
             _update_state['pending'] = None
             t1_status.value = ''
             refresh_local_version(latest=True)
@@ -682,7 +683,8 @@ def main(page: ft.Page):
                              % pending['tag'])
                     launcher.stop_app(paths.stable_port(config))
                     updater.install_release(repo, pending, stable,
-                                            on_progress=progress)
+                                            on_progress=progress,
+                                            config=config)
                     _update_state['pending'] = None
                     refresh_local_version(latest=True)
                     _show_updated(pending)
@@ -701,7 +703,8 @@ def main(page: ft.Page):
                     # 置き換えられないため、先に終了させる
                     launcher.stop_app(paths.stable_port(config))
                     updater.install_release(repo, latest, stable,
-                                            on_progress=progress)
+                                            on_progress=progress,
+                                            config=config)
                     refresh_local_version(latest=True)
                     _refresh_current_notes()
             except (ghcli.GhError, launcher.LaunchError, Exception) as e:
@@ -1682,7 +1685,8 @@ def main(page: ft.Page):
                         # 新しい版の起動ができないため先に終了する
                         launcher.stop_app(paths.beta_port(config))
                         updater.install_release(repo, release, beta,
-                                                on_progress=progress)
+                                                on_progress=progress,
+                                                config=config)
                     _, url = launcher.launch_app(
                         beta, paths.beta_port(config), channel='beta',
                         config=config)
@@ -3221,6 +3225,21 @@ def main(page: ft.Page):
         run_bg(work)
 
     cleanup_old_folders()
+
+    # ---- 前回の入れ替えの残骸を掃く ----
+    # 更新は「新しい内容を隣に用意して名前を付け替える」方式なので、
+    # 強制終了や電源断で作業フォルダが残ることがある。放っておくと
+    # 更新のたびに溜まるので、起動のたびに一度だけ掃く
+
+    def sweep_update_leftovers():
+        def work():
+            try:
+                updater.sweep_leftovers(config)
+            except Exception:
+                log.exception('前回の入れ替えの残骸を片付けられませんでした')
+        run_bg(work)
+
+    sweep_update_leftovers()
 
     # キャッシュの事前取得は check_update_notice のスナップショット取得が
     # 兼ねる (ログイン名・メンバー一覧・一覧・リリース一覧が一度に温まる)
