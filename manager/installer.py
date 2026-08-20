@@ -8,6 +8,8 @@ import sys
 import tempfile
 import zipfile
 
+from . import safeio
+
 log = logging.getLogger(__name__)
 
 
@@ -45,7 +47,7 @@ def _replace_dir(src, install_dir):
                                '閉じて再試行し、直らない場合はパソコンを'
                                '再起動してからお試しください。')
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        safeio.rmtree(work)   # 中身は入れ替え前のフォルダ (読み取り専用あり)
 
 
 def extract_zip(zip_path, install_dir):
@@ -69,7 +71,7 @@ def extract_zip(zip_path, install_dir):
             src = tmp
         _replace_dir(src, install_dir)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        safeio.rmtree(tmp)    # ZIP の中身 (クローンが混ざっていることも)
     return install_dir
 
 

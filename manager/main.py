@@ -18,8 +18,8 @@ import webbrowser
 
 from . import (autofix, conflicts, diffdialog, diffview, feedback, ghcli,
                history, historyview, launcher, localstate, paths,
-               reviewcache, reviews, rocketfx, selfupdate, settings,
-               submit, uiguard, updater, usage)
+               reviewcache, reviews, rocketfx, safeio, selfupdate,
+               settings, submit, uiguard, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -701,7 +701,7 @@ def main(page: ft.Page):
                     dlg_status.value = (str(e2)
                                         or 'ダウンロードに失敗しました。')
                 finally:
-                    shutil.rmtree(tmp, ignore_errors=True)
+                    safeio.rmtree(tmp)
                     btn.disabled = False
                     page.update()
             run_bg(work)

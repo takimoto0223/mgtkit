@@ -3,10 +3,9 @@
 import datetime
 import logging
 import os
-import shutil
 import tempfile
 
-from . import ghcli, installer, paths, versions
+from . import ghcli, installer, paths, safeio, versions
 
 log = logging.getLogger(__name__)
 
@@ -80,4 +79,4 @@ def install_release(repo, release, instance_dir, python=None,
         progress('完了')
         return app_d
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        safeio.rmtree(tmp)

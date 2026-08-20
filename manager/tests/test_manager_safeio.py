@@ -1,9 +1,12 @@
-"""manager/safeio.py (状態ファイルを壊さない保存) のテスト。
+"""manager/safeio.py (状態ファイルの保存と後片付け) のテスト。
 
-素の open(path, 'w') は開いた時点で中身を空にするため、書き込み中に
+保存: 素の open(path, 'w') は開いた時点で中身を空にするため、書き込み中に
 落ちると 0 バイトのファイルが残る。読み手はそれを「未登録」「記録なし」
 と読み替えてしまうので、失ったことに誰も気づかない。ここでは
 「落ちても前の中身が残る」「一時ファイルが散らからない」を固定する。
+
+後片付け: 読み取り専用のファイルを含むフォルダ (git のクローン) を
+消せること、消せなかったときに例外ではなく False で分かることを固定する。
 """
 import json
 import os
@@ -182,3 +185,115 @@ class TestReviewCacheSurvivesCrash:
         data = reviewcache.load_from_disk(cfg)
         assert data['pending'] == [{'number': 1}]
         assert _leftovers(tmp_path) == []
+
+
+def _is_root():
+    return getattr(os, 'geteuid', lambda: 1)() == 0
+
+
+def _clone_like_tree(root):
+    """git のクローンを模した、読み取り専用の中身を含むフォルダ.
+
+    git は Windows でクローンの pack / loose object に読み取り専用属性を
+    付ける。POSIX でも「中のものを消せないフォルダ」を作れば同じ形の
+    詰まり方を再現できる。
+    """
+    objects = root / '.git' / 'objects' / 'ab'
+    objects.mkdir(parents=True)
+    obj = objects / 'cdef0123456789'
+    obj.write_bytes(b'object')
+    (root / 'app.py').write_text('x', encoding='utf-8')
+    os.chmod(str(obj), stat.S_IRUSR)                        # 読み取り専用
+    os.chmod(str(objects), stat.S_IRUSR | stat.S_IXUSR)     # 消せないフォルダ
+    return root
+
+
+class TestRmtree:
+    def test_removes_a_plain_folder(self, tmp_path):
+        d = tmp_path / 'work'
+        (d / 'sub').mkdir(parents=True)
+        (d / 'sub' / 'a.txt').write_text('x', encoding='utf-8')
+        assert safeio.rmtree(str(d)) is True
+        assert not d.exists()
+
+    def test_missing_folder_counts_as_removed(self, tmp_path):
+        assert safeio.rmtree(str(tmp_path / 'nope')) is True
+
+    def test_empty_path_is_harmless(self):
+        # submit.cleanup は prep.get('tmp', '') を渡すことがある
+        assert safeio.rmtree('') is True
+        assert safeio.rmtree(None) is True
+
+    def test_removes_read_only_tree(self, tmp_path):
+        root = _clone_like_tree(tmp_path / 'workrepo')
+        assert safeio.rmtree(str(root)) is True
+        assert not root.exists()
+
+    @pytest.mark.skipif(_is_root(),
+                        reason='root は権限に関係なく消せるため')
+    def test_plain_rmtree_cannot_do_it(self, tmp_path):
+        """素の shutil.rmtree では消しきれないこと (この対処が要る根拠)."""
+        import shutil
+
+        root = _clone_like_tree(tmp_path / 'workrepo')
+        with pytest.raises(OSError):
+            shutil.rmtree(str(root))
+        assert root.exists()
+        # ignore_errors=True は例外を出さないだけで、やはり消えない
+        shutil.rmtree(str(root), ignore_errors=True)
+        assert root.exists()
+        # 後片付け (残すと pytest の一時フォルダ掃除が詰まる)
+        assert safeio.rmtree(str(root)) is True
+
+    def test_reports_failure_instead_of_raising(self, tmp_path,
+                                                monkeypatch):
+        d = tmp_path / 'stubborn'
+        d.mkdir()
+        (d / 'a.txt').write_text('x', encoding='utf-8')
+
+        def boom(path, **kw):
+            raise OSError('消せません (試験)')
+        monkeypatch.setattr(safeio.shutil, 'rmtree', boom)
+
+        assert safeio.rmtree(str(d)) is False    # 例外は投げない
+        assert d.exists()
+
+    def test_silent_failure_is_detected(self, tmp_path, monkeypatch):
+        """例外が出なくても、残っていれば False を返すこと.
+
+        消えたことにして先へ進むと、移行の後片付けで旧フォルダが
+        残ったまま「片付いた」と誤解する。消したあとに存在を確かめて
+        から成否を決める。
+        """
+        d = tmp_path / 'quiet'
+        d.mkdir()
+        monkeypatch.setattr(safeio.shutil, 'rmtree',
+                            lambda path, **kw: None)
+        assert safeio.rmtree(str(d)) is False
+        assert d.exists()
+
+    def test_uses_the_handler_this_python_understands(self, tmp_path):
+        """失敗ハンドラの引数名は Python 3.12 で onerror → onexc に変わった.
+
+        取り違えると shutil.rmtree が TypeError になるため、実際に
+        呼んで通ることを確かめる。
+        """
+        seen = {}
+
+        def spy(path, **kw):
+            seen.update(kw)
+        import shutil
+        real = shutil.rmtree
+        try:
+            shutil.rmtree = spy
+            d = tmp_path / 'x'
+            d.mkdir()
+            safeio.rmtree(str(d))
+        finally:
+            shutil.rmtree = real
+        assert list(seen) == [safeio._RMTREE_HANDLER]
+        assert safeio._RMTREE_HANDLER in ('onexc', 'onerror')
+        # 本物にその名前の引数があること
+        import inspect
+        params = inspect.signature(real).parameters
+        assert safeio._RMTREE_HANDLER in params
