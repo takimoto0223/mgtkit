@@ -6,9 +6,9 @@
 
 いちばん大事なのは次の 3 つ:
 
-- **旧フォルダをこの場で消さない** (消してよいのは新しい方が動いたあと)
+- **旧フォルダを消すのはいちばん最後** (途中で失敗したら無傷で残る)
 - **何度実行しても同じ結果になる** (途中で失敗しても、もう一度実行できる)
-- **引き継ぎを確認できないときは片付けを予約しない**
+- **引き継ぎを確認できないときは消さない**
 """
 import json
 import os
@@ -99,18 +99,30 @@ class TestCarryOver:
         for name in ('workrepo', 'diffcache', 'beta', 'reviews_cache.json'):
             assert not (mgr / name).exists(), name
 
-    def test_old_folders_are_untouched(self, tmp_path):
-        # 引っ越しは読むだけ。消してよいのは新しい方が動いたあと
+    def test_old_folders_are_removed_last(self, tmp_path):
+        # 引き継ぎ・確認・入口づくりが済んでから消す (setup.bat 一発)
         old_clone, old_root = _old_layout(tmp_path)
         home, _ = _new_home(tmp_path)
-        _run(home, old_clone, old_root)
+        result = _run(home, old_clone, old_root)
+        assert set(result['removed']) == {str(old_clone), str(old_root)}
+        assert not old_clone.exists() and not old_root.exists()
+        assert result['marker'] is None, '全部消えたら札は要らない'
+
+    def test_a_failure_leaves_the_old_folders_alone(self, tmp_path):
+        # 途中で止まったら旧フォルダは無傷。もう一度 setup.bat を実行できる
+        old_clone, old_root = _old_layout(tmp_path)
+        (old_root / 'settings.json').write_text('{壊れている',
+                                                encoding='utf-8')
+        home, _ = _new_home(tmp_path)
+        with pytest.raises(migrate.MigrateError):
+            _run(home, old_clone, old_root)
         assert (old_root / 'settings.json').is_file()
         assert (old_clone / '.git').is_dir()
 
     def test_running_twice_changes_nothing(self, tmp_path):
         old_clone, old_root = _old_layout(tmp_path)
         home, _ = _new_home(tmp_path)
-        _run(home, old_clone, old_root)
+        _run(home, old_clone, old_root, no_cleanup=True)
         # 新しい側で書き換えたものが 2 回目で上書きされないこと
         keep = home / paths.MANAGER_DIR_NAME / 'settings.json'
         keep.write_text(json.dumps(
@@ -277,40 +289,33 @@ class TestStopOldApps:
 
 
 class TestCleanupLater:
-    def _migrated(self, tmp_path, first_launch=True):
+    """消しきれなかったフォルダを、次回の起動で消し直す。
+
+    引っ越し本体はその場で消す (setup.bat 一発)。ただしフォルダが使用中
+    などで消えないことがあるので、残ったものだけを札に書いて持ち越す。
+    """
+
+    def _stuck(self, tmp_path, monkeypatch):
+        """引っ越しはできたが、旧フォルダを消せなかった状態を作る."""
         old_clone, old_root = _old_layout(tmp_path)
         home, _ = _new_home(tmp_path)
-        _run(home, old_clone, old_root)
+        monkeypatch.setattr(safeio, 'rmtree', lambda path: False)
+        result = _run(home, old_clone, old_root)
+        monkeypatch.undo()
+        monkeypatch.setattr(launcher, 'port_in_use', lambda port: False)
         root = str(home / paths.MANAGER_DIR_NAME)
-        if first_launch:
-            # setup.bat が起動する 1 回目。ここでは消さない
-            migrate.run_cleanup(install_root=root)
+        assert result['marker'], '消せなかったら札を残す'
         return home, old_clone, old_root, root
 
-    def test_the_launch_setup_starts_does_not_delete(self, tmp_path):
-        # 「新しい方が実際に動いたと分かってから消す」を成り立たせる。
-        # setup.bat は引っ越しの直後にマネージャーを起動するので、その
-        # 1 回目で消すと確かめる間もなく旧フォルダが消える (実機で発生)
-        home, old_clone, old_root, root = self._migrated(
-            tmp_path, first_launch=False)
-        removed, left, gave_up = migrate.run_cleanup(install_root=root)
-        assert (removed, left, gave_up) == ([], [], False)
-        assert old_clone.exists() and old_root.exists()
-        assert migrate.read_marker(install_root=root)['launched'] is True
-
-    def test_the_next_launch_deletes(self, tmp_path):
-        home, old_clone, old_root, root = self._migrated(tmp_path)
-        removed, left, gave_up = migrate.run_cleanup(install_root=root)
-        assert set(removed) == {str(old_clone), str(old_root)}
-        assert not old_clone.exists() and not old_root.exists()
-
-    def test_marker_lists_both_old_folders(self, tmp_path):
-        home, old_clone, old_root, root = self._migrated(tmp_path)
+    def test_marker_lists_what_could_not_be_removed(self, tmp_path,
+                                                    monkeypatch):
+        home, old_clone, old_root, root = self._stuck(tmp_path, monkeypatch)
         data = migrate.read_marker(install_root=root)
         assert set(data['targets']) == {str(old_clone), str(old_root)}
 
-    def test_cleanup_removes_them_and_drops_the_marker(self, tmp_path):
-        home, old_clone, old_root, root = self._migrated(tmp_path)
+    def test_next_launch_removes_them_and_drops_the_marker(self, tmp_path,
+                                                           monkeypatch):
+        home, old_clone, old_root, root = self._stuck(tmp_path, monkeypatch)
         removed, left, gave_up = migrate.run_cleanup(install_root=root)
         assert set(removed) == {str(old_clone), str(old_root)}
         assert left == [] and gave_up is False
@@ -318,35 +323,33 @@ class TestCleanupLater:
         assert migrate.read_marker(install_root=root) is None
 
     def test_no_marker_means_no_work(self, tmp_path):
-        # ふだんの起動。札が無ければ何もしない
-        home, _ = _new_home(tmp_path)  # noqa: F841
+        # ふだんの起動。札が無ければ何もしない (引っ越しで消えきった場合)
+        home, _ = _new_home(tmp_path)
         root = str(home / paths.MANAGER_DIR_NAME)
         assert migrate.read_marker(install_root=root) is None
         assert migrate.run_cleanup(install_root=root) == ([], [], False)
 
-    def test_locked_folder_is_left_for_next_time(self, tmp_path, monkeypatch):
-        home, old_clone, old_root, root = self._migrated(tmp_path)
+    def test_still_locked_is_left_for_next_time(self, tmp_path, monkeypatch):
+        home, old_clone, old_root, root = self._stuck(tmp_path, monkeypatch)
         monkeypatch.setattr(safeio, 'rmtree', lambda path: False)
         removed, left, gave_up = migrate.run_cleanup(install_root=root)
         assert removed == [] and gave_up is False
         assert len(left) == 2
-        data = migrate.read_marker(install_root=root)
-        assert data['attempts'] == 1, '次の起動で試し直せるよう札を残す'
+        assert migrate.read_marker(install_root=root)['attempts'] == 1
 
     def test_gives_up_after_enough_tries(self, tmp_path, monkeypatch):
         # 永久に試し続けない。案内に切り替えて札を下ろす
-        home, old_clone, old_root, root = self._migrated(tmp_path)
+        home, old_clone, old_root, root = self._stuck(tmp_path, monkeypatch)
         monkeypatch.setattr(safeio, 'rmtree', lambda path: False)
         for _ in range(migrate.MAX_CLEANUP_ATTEMPTS - 1):
             _, _, gave_up = migrate.run_cleanup(install_root=root)
             assert gave_up is False
         _, left, gave_up = migrate.run_cleanup(install_root=root)
-        assert gave_up is True
-        assert left
+        assert gave_up is True and left
         assert migrate.read_marker(install_root=root) is None
 
-    def test_already_gone_counts_as_done(self, tmp_path):
-        home, old_clone, old_root, root = self._migrated(tmp_path)
+    def test_already_gone_counts_as_done(self, tmp_path, monkeypatch):
+        home, old_clone, old_root, root = self._stuck(tmp_path, monkeypatch)
         safeio.rmtree(str(old_clone))
         safeio.rmtree(str(old_root))
         removed, left, gave_up = migrate.run_cleanup(install_root=root)
