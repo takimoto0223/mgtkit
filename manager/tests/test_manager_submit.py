@@ -11,8 +11,10 @@ import zipfile
 
 import pytest
 
+from pathlib import Path
+
 from manager import claude_helper, reviews, submit, versions
-from manager.gitcli import run_git
+from manager.gitcli import GitError, run_git
 
 
 def _git(args, cwd):
@@ -473,6 +475,92 @@ s_check.py を変更
 
 - s_check.py — 断面算定の追加
 '''
+
+
+class TestWorkRepoRecovery:
+    """取得や提出が途中で強制終了された作業クローンからの回復.
+
+    チェックアウトの途中で落ちると .git は無事でも作業ツリーが半端に残り
+    (index.lock + 未追跡扱いのファイル)、そのままでは checkout -B が拒否
+    されて提出の確定・統合が**何度やり直しても**同じ文言で失敗していた。
+    """
+
+    def _make_residue(self, workrepo):
+        """チェックアウト中に強制終了された残骸を作る."""
+        wr = Path(workrepo)
+        # 追跡から外れて中身も違うファイル = checkout が「上書きになる」と拒否する
+        _git(['rm', '--cached', 'app.py'], cwd=wr)
+        (wr / 'app.py').write_text('half checked out\n', encoding='utf-8')
+        (wr / 'garbage.tmp').write_text('x', encoding='utf-8')
+        (wr / '.git' / 'index.lock').write_text('', encoding='utf-8')
+
+    def test_reset_work_tree_clears_residue(self, repo_env):
+        from manager import gitcli
+        self._make_residue(repo_env['workrepo'])
+        gitcli.reset_work_tree(repo_env['workrepo'])
+        wr = Path(repo_env['workrepo'])
+        assert not (wr / '.git' / 'index.lock').exists()
+        assert not (wr / 'garbage.tmp').exists()
+        # 元の追跡内容に戻っていて、checkout -B が通る
+        run_git(['checkout', '-B', 'feature/x', repo_env['base_sha']],
+                cwd=repo_env['workrepo'])
+
+    def test_finalize_succeeds_after_a_killed_checkout(self, repo_env,
+                                                       tmp_path,
+                                                       monkeypatch):
+        def fake_run_gh(args, timeout=60):
+            if args[:2] == ['api', 'user']:
+                return 'testuser\n'
+            if args[:2] == ['pr', 'create']:
+                return 'https://github.com/o/r/pull/99\n'
+            if args[:2] == ['pr', 'list']:
+                return ''
+            raise AssertionError('unexpected gh call: %r' % args)
+        monkeypatch.setattr(submit.ghcli, 'run_gh', fake_run_gh)
+        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("app v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        self._make_residue(repo_env['workrepo'])
+        result = submit.finalize_submission(prep, [], 'テスト提出', {})
+        assert result['pr_url']
+        # 残骸 (garbage.tmp) が提出に混ざっていないこと
+        tree = run_git(['ls-tree', '-r', '--name-only', result['branch']],
+                       cwd=repo_env['workrepo'])
+        assert 'garbage.tmp' not in tree
+
+    def test_reset_work_tree_missing_dir_has_its_own_message(self, tmp_path):
+        from manager import gitcli
+        with pytest.raises(GitError, match='見つかりません'):
+            gitcli.reset_work_tree(str(tmp_path / 'nai'))
+
+    def test_ensure_rebuilds_a_broken_clone(self, repo_env, monkeypatch):
+        """HEAD が引けない残骸は作り直す (fetch は通ってしまい見抜けない)."""
+        from manager import gitcli
+        wr = repo_env['workrepo']
+        os.remove(os.path.join(wr, '.git', 'HEAD'))
+        cloned = []
+
+        def fake_clone(slug, dest):
+            cloned.append(slug)
+            _git(['clone', repo_env['origin'], dest],
+                 cwd=repo_env['tmp'])
+        monkeypatch.setattr(gitcli, '_clone_work_repo', fake_clone)
+        assert gitcli.ensure_work_repo('o/r', wr) == wr
+        assert cloned == ['o/r']
+        run_git(['rev-parse', '--verify', 'HEAD'], cwd=wr)   # 使える
+
+    def test_ensure_leaves_a_healthy_clone_alone(self, repo_env,
+                                                 monkeypatch):
+        from manager import gitcli
+        monkeypatch.setattr(
+            gitcli, '_clone_work_repo',
+            lambda *a: pytest.fail('健全なクローンを作り直した'))
+        # fetch=False の高速経路 (差分表示) は何もしないこと
+        wr = repo_env['workrepo']
+        before = (Path(wr) / 'app.py').read_text(encoding='utf-8')
+        assert gitcli.ensure_work_repo('o/r', wr, fetch=False) == wr
+        assert (Path(wr) / 'app.py').read_text(encoding='utf-8') == before
 
 
 class TestReviewAiText:

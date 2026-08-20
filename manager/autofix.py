@@ -23,7 +23,8 @@ import re
 import time
 
 from . import claude_helper, ghcli, paths
-from .gitcli import GitError, ensure_work_repo, run_git
+from .gitcli import (GitError, ensure_work_repo,
+                     reset_work_tree, run_git)
 from .submit import BLOCKED_EXTENSIONS, workrepo_dir
 
 log = logging.getLogger(__name__)
@@ -123,6 +124,7 @@ def attempt_fix(workrepo, branch, failure_log, config=None):
 
     戻り値: 修正の要約文字列。修正できない場合は AutofixError。
     """
+    reset_work_tree(workrepo)   # 前回の強制終了の残骸で checkout が拒否されないように
     run_git(['fetch', 'origin', branch], cwd=workrepo, timeout=300)
     run_git(['checkout', '-B', branch, 'origin/%s' % branch], cwd=workrepo)
 
