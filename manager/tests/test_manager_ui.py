@@ -274,9 +274,11 @@ class _NoTimer:
         pass
 
 
-def _page_with_a_downloaded_update(monkeypatch):
+def _page_with_a_downloaded_update(monkeypatch, notes=None):
     """更新版を自動で取り込み終えた直後の画面を作る (取得・起動は偽物).
 
+    notes を渡すと、その版のリリースノートを持たせる (起動タブの
+    「現行版の更新内容」の表示を見るため)。
     戻り値: (page, launched)。launched にはアプリを開いた回数が入る。
     """
     from manager import main as manager_main
@@ -286,7 +288,10 @@ def _page_with_a_downloaded_update(monkeypatch):
     monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
     monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
 
-    snap = {'pending': [], 'releases': [], 'me': 'yamada-taro', 'merged': []}
+    releases = ([{'tag': 'v1.2', 'prerelease': False, 'notes': notes}]
+                if notes is not None else [])
+    snap = {'pending': [], 'releases': releases, 'me': 'yamada-taro',
+            'merged': []}
     monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot',
                         lambda *a, **k: dict(snap))
     monkeypatch.setattr(manager_main.reviews, 'fork_memo', lambda *a, **k: {})
@@ -316,6 +321,32 @@ def _page_with_a_downloaded_update(monkeypatch):
     manager_main.main(page)
     assert installed == ['v1.2']          # 起動時に自動で取り込まれた
     return page, launched
+
+
+def test_launch_tab_shows_the_submission_title_first(monkeypatch):
+    """起動タブの「現行版の更新内容」に、提出のタイトルが 1 行目で出ること.
+
+    タイトルは見出し用に独立した行にする (markdown の # をそのまま
+    見せない)。v1.4 以前の版名だけの見出しは行ごと出さない。
+    """
+    page, _ = _page_with_a_downloaded_update(
+        monkeypatch,
+        notes='# 荷重分布図の PDF 書き出しに対応\n\n'
+              '## 更新内容\n\n- 荷重ケースごとに 1 図\n')
+    texts = _walk_texts(page.added[1], [])
+    assert '荷重分布図の PDF 書き出しに対応' in texts
+    assert not any(t.startswith('# ') for t in texts)
+
+
+def test_launch_tab_without_a_title_shows_only_the_notes(monkeypatch):
+    """見出しの無い古い版 (「# mgtkit v1.2 リリースノート」) の表示."""
+    page, _ = _page_with_a_downloaded_update(
+        monkeypatch,
+        notes='# mgtkit v1.2 リリースノート\n\n'
+              '## 更新内容\n\n部材数量集計のアプリを追加\n')
+    texts = _walk_texts(page.added[1], [])
+    assert any('部材数量集計のアプリを追加' in t for t in texts)
+    assert not any('リリースノート' in t for t in texts)
 
 
 def test_launch_after_an_update_tells_where_the_new_version_landed(

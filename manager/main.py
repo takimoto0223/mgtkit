@@ -16,7 +16,8 @@ import flet as ft
 
 import webbrowser
 
-from . import (autofix, conflicts, diffdialog, diffview, feedback, ghcli,
+from . import (autofix, claude_helper, conflicts, diffdialog, diffview,
+               feedback, ghcli,
                history, historyview, launcher, localstate, migrate, paths,
                reviewcache, reviews, rocketfx, safeio, selfupdate,
                settings, submit, uiguard, updater, usage)
@@ -398,6 +399,10 @@ def main(page: ft.Page):
     # 現行版の更新内容 (常設。何が入っている版かを後から確認できる)
     t1_notes_head = ft.Text('', size=13, weight=ft.FontWeight.BOLD,
                             color='#374151')
+    # 提出のタイトル (リリースノートの先頭 # 行)。版名の見出しの下に
+    # 太字で 1 行だけ出す。無い版 (v1.4 以前) では欄ごと隠す
+    t1_notes_title = ft.Text('', size=16.5, weight=ft.FontWeight.BOLD,
+                             color='#1f2937', selectable=True, visible=False)
     t1_notes_body = ft.Text('', size=13, selectable=True, color='#374151')
     # AI が自動で調整した箇所は琥珀色の枠で色分けして見せる
     t1_notes_ai_body = ft.Text('', size=12.5, selectable=True,
@@ -413,8 +418,11 @@ def main(page: ft.Page):
         ], spacing=6, tight=True))
     t1_notes_box = ft.Container(
         visible=False, bgcolor='#f5f7fa', border_radius=6, padding=12,
-        content=ft.Column([t1_notes_head, t1_notes_body, t1_notes_ai_box],
-                          spacing=6))
+        content=ft.Column([
+            t1_notes_head,
+            # 見出しと本文が同列に見えないよう、下だけ余白を足す
+            ft.Container(t1_notes_title, margin=ft.Margin(0, 0, 0, 4)),
+            t1_notes_body, t1_notes_ai_box], spacing=6))
     t1_launch_btn = ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
                                     bgcolor=NAVY, color='#ffffff')
     # installing: 自動更新の実行中 (二重実行と起動の衝突を防ぐ) /
@@ -502,13 +510,17 @@ def main(page: ft.Page):
             t1_notes_box.visible = False
         else:
             t1_notes_head.value = '現行版 (%s) の更新内容' % rel['tag']
-            normal, ai = history.split_ai_note(
+            headline, rest = history.split_title(
                 _clean_notes(rel['tag'], rel.get('notes')))
+            normal, ai = history.split_ai_note(rest)
+            t1_notes_title.value = headline or ''
+            t1_notes_title.visible = bool(headline)
             t1_notes_body.value = normal or '(更新内容の記載はありません)'
             t1_notes_ai_body.value = ai or ''
             t1_notes_ai_box.visible = bool(ai)
             t1_notes_box.visible = True
-            _fit_window_to_notes(t1_notes_body.value)
+            _fit_window_to_notes('\n'.join(
+                x for x in (headline, t1_notes_body.value) if x))
         page.update()
 
     def _show_updated(release):
@@ -802,7 +814,11 @@ def main(page: ft.Page):
             return s['pr'].get('title') or ''
         note = _clean_notes(s['tag'],
                             (s['release'].get('notes') or '')) or ''
-        first = note.strip().splitlines()
+        # 先頭が提出のタイトル (# 行) ならそのまま概要に使う
+        headline, rest = history.split_title(note)
+        if headline:
+            return headline
+        first = rest.strip().splitlines()
         return (first[0].lstrip('-· ').strip() if first else '') or '配布'
 
     # 過去の更新ログの「図へ戻る」用 (開いている図と一覧への参照)
@@ -1287,24 +1303,30 @@ def main(page: ft.Page):
         t4_status.value = msg
         page.update()
 
-    def _review_ai_text(update, limits):
+    def _review_ai_text(title, update, limits):
         """自動作成の結果を提出者に見せて直させる (裏の処理から呼ばれる).
 
-        この 2 項目はそのまま正式版のリリースノートになるため、本人が
+        この 3 項目はそのまま正式版のリリースノートになるため、本人が
         一度も読まないまま全員に公開されないようにする (管理者指示
-        2026-08)。戻り値: (更新内容, 制限事項) / 取り消しなら None。
+        2026-08)。タイトルは承認タブの見出しにもなる。
+        戻り値: (タイトル, 更新内容, 制限事項) / 取り消しなら None。
         呼び出し元は run_bg の中なので、答えが出るまでここで待つ。
         """
         done = threading.Event()
         answer = {}
+        # 入力欄はダイアログ面 (薄グレー) と同化しないよう白で塗る
+        # (「直してください」と促す画面なので、編集できる場所を立たせる)
+        _box = dict(width=500, border_color='#6b7280',
+                    focused_border_color=NAVY, filled=True,
+                    fill_color='#ffffff', focused_bgcolor='#ffffff',
+                    hover_color='#ffffff')   # hover で灰色に変えない
+        ttl = ft.TextField(value=title, max_length=submit.TITLE_MAX, **_box)
         # 行数の上限は既定ウィンドウ (760x640) に収まる範囲で決める
         # (超える分は欄の中がスクロールする)
         upd = ft.TextField(value=update, min_lines=4, max_lines=7,
-                           multiline=True, width=500, border_color='#6b7280',
-                           focused_border_color=NAVY)
+                           multiline=True, **_box)
         lim = ft.TextField(value=limits, min_lines=2, max_lines=4,
-                           multiline=True, width=500, border_color='#6b7280',
-                           focused_border_color=NAVY)
+                           multiline=True, **_box)
 
         def finish(value):
             answer['v'] = value
@@ -1317,21 +1339,37 @@ def main(page: ft.Page):
             modal=True, title=ft.Text('この内容で提出します'),
             content=ft.Column([
                 ft.Text('Claude が下書きしました。おかしなところがあれば'
-                        '直してください。この文章は、正式版になったときの'
-                        '「更新内容」としてそのまま全員に表示されます。',
+                        '直してください。ここに書かれた内容は、正式版に'
+                        'なったときの「更新内容」としてそのまま全員に'
+                        '表示されます。',
                         size=12.5, color='#4b5563'),
-                ft.Text('更新内容', size=13, weight=ft.FontWeight.BOLD,
-                        color='#374151'),
+                # 補足は「更新内容」という欄名を使わずに行き先を言う
+                # (すぐ下に同名の欄があり、自動転記と誤読されるため)
+                ft.Row([ft.Text('タイトル', size=13,
+                                weight=ft.FontWeight.BOLD, color='#374151'),
+                        ft.Text('承認画面の見出しと、リリース時の文頭の'
+                                '1 行になります', size=12, color='#4b5563')],
+                       spacing=8,
+                       vertical_alignment=ft.CrossAxisAlignment.END),
+                ttl,
+                # 欄のかたまりが近接で読めるよう、項目名の上だけ空ける
+                ft.Container(
+                    ft.Text('更新内容', size=13, weight=ft.FontWeight.BOLD,
+                            color='#374151'),
+                    margin=ft.Margin(0, 6, 0, 0)),
                 upd,
-                ft.Text('ご利用にあたっての制限事項', size=13,
-                        weight=ft.FontWeight.BOLD, color='#374151'),
+                ft.Container(
+                    ft.Text('ご利用にあたっての制限事項', size=13,
+                            weight=ft.FontWeight.BOLD, color='#374151'),
+                    margin=ft.Margin(0, 6, 0, 0)),
                 lim,
             ], tight=True, width=520, spacing=5),
             actions=[
                 ft.TextButton('取り消す', on_click=lambda _: finish(None)),
                 ft.FilledButton('この内容で提出する', bgcolor=NAVY,
                                 color='#ffffff',
-                                on_click=lambda _: finish((upd.value,
+                                on_click=lambda _: finish((ttl.value,
+                                                           upd.value,
                                                            lim.value)))])
         try:
             page.show_dialog(dlg)
@@ -1343,6 +1381,52 @@ def main(page: ft.Page):
             return None
         done.wait()
         return answer.get('v')
+
+    def _show_ai_error(err):
+        """自動作成の失敗を提出者に知らせる (提出は行われていない).
+
+        黙って定型文で提出すると、更新内容が空のまま正式版のリリースノート
+        まで進んでしまう。止めた理由をその場で見せる (管理者の指示 2026-08)。
+        """
+        def close_err(_=None):
+            page.pop_dialog()
+            page.update()
+
+        def retry(_=None):
+            # 同じ ZIP は選び直してもらう (提出の作業場所は片付け済み)。
+            # ファイル選択からの既存フローをそのまま使い回す
+            page.pop_dialog()
+            page.update()
+            page.run_task(on_submit, None)
+        items = [
+            ft.Text(str(err), size=13.5, color='#374151', selectable=True),
+            ft.Text('提出は行われていません (まだ何も送られていません)。',
+                    size=12.5, color='#4b5563'),
+            ft.Text('「自分で入力する」を選べば Claude を使わずに'
+                    '提出できます。', size=12.5, color='#4b5563'),
+        ]
+        if getattr(err, 'detail', ''):
+            # 管理者へ伝えるときの手がかり (英数字のまま小さく出す)
+            items.append(ft.Text('詳細: %s' % err.detail, size=12,
+                                 color='#4b5563', selectable=True))
+        try:
+            page.show_dialog(ft.AlertDialog(
+                modal=True,
+                title=ft.Row([
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=AMBER,
+                            size=22),
+                    ft.Text('自動作成できませんでした'),
+                ], spacing=8),
+                content=ft.Column(items, tight=True, width=460, spacing=8),
+                actions=[
+                    ft.TextButton('閉じる', on_click=close_err),
+                    ft.FilledButton('もう一度 ZIP を選ぶ', bgcolor=NAVY,
+                                    color='#ffffff', on_click=retry),
+                ]))
+            page.update()
+        except Exception:
+            log.exception('自動作成の失敗ダイアログを表示できませんでした')
+            t4_status.value = '自動作成できませんでした: %s' % err
 
     def _do_finalize(prep, deletions, existing_branch=None, use_ai=False):
         # ダイアログを閉じた直後に反応を見せる (裏の処理は数十秒かかる)
@@ -1364,6 +1448,11 @@ def main(page: ft.Page):
                     '提出内容: %s' % result['pr_url'])
                 t4_commit_msg.value = ''
                 t4_limits.value = ''
+            except claude_helper.ClaudeError as e:
+                # 定型文へ落とさず提出を止める。理由はダイアログで見せる
+                log.warning('自動作成に失敗しました: %s (%s)', e, e.detail)
+                t4_status.value = ''
+                _show_ai_error(e)
             except (submit.SubmitError, ghcli.GhError, GitError) as e:
                 t4_status.value = str(e)
             except Exception as e:

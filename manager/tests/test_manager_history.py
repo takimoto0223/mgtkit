@@ -319,6 +319,25 @@ class TestBuildTimeline:
         assert 99 not in [c['number'] for c in tl['chips']]
 
 
+class TestSplitTitle:
+    """リリースノートの先頭の見出し (提出のタイトル) を切り出す."""
+
+    def test_headline_is_split_off(self):
+        title, rest = history.split_title(
+            '# 荷重分布図の PDF 書き出しに対応\n\n## 更新内容\n\n- 1 図')
+        assert title == '荷重分布図の PDF 書き出しに対応'
+        assert rest.startswith('## 更新内容')
+
+    def test_no_headline(self):
+        title, rest = history.split_title('## 更新内容\n\n- 改善')
+        assert title is None
+        assert rest == '## 更新内容\n\n- 改善'
+
+    def test_empty(self):
+        assert history.split_title('') == (None, '')
+        assert history.split_title(None) == (None, '')
+
+
 class TestSplitAiNote:
     def test_no_ai_section(self):
         normal, ai = history.split_ai_note('v1.6 リリース。\n\n- 修正')

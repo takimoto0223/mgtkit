@@ -401,6 +401,28 @@ def pr_body_sections(body):
     return sections
 
 
+# PR タイトルの最大長 (GitHub の一覧で切れずに読める範囲)。承認タブの
+# 見出しと、正式版のリリースノートの 1 行目に出る
+TITLE_MAX = 70
+
+# タイトルに使う行の頭から落とす箇条書きの記号 ("-30%" のような書き出しを
+# 壊さないよう、ハイフン・アスタリスクは後ろに空白がある場合だけ落とす)
+_BULLET = re.compile(r'^\s*(?:[-*]\s+|[・･]\s*)')
+
+
+def title_line(text):
+    """複数行の文章から PR タイトル用の 1 行を作る.
+
+    最初の中身のある行を採り、箇条書きの記号を落として TITLE_MAX で切る。
+    空文字なら '' (呼び出し側が既定のタイトルへ落とす)。
+    """
+    for line in (text or '').splitlines():
+        line = _BULLET.sub('', line).strip()
+        if line:
+            return line[:TITLE_MAX]
+    return ''
+
+
 def user_sections(body):
     """PR 本文から利用者向けの 2 項目 (更新内容, 制限事項) を取り出す.
 
@@ -457,7 +479,8 @@ def fallback_pr_body(update_text, limitations, base_version, summary):
 
 def finalize_submission(prep, intentional_deletions, commit_message='',
                         config=None, on_progress=None, existing_branch=None,
-                        limitations='', use_ai=False, on_review=None):
+                        limitations='', use_ai=False, on_review=None,
+                        title=''):
     """準備済みの提出を確定する.
 
     intentional_deletions: 「意図的な削除」とユーザーが確認したファイル。
@@ -468,11 +491,17 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
     use_ai: True なら提出のまとめ (コミットメッセージ・PR 本文) を Claude で
     自動生成する (API 使用料は提出者負担のため、UI で本人が選んだときのみ
     True にする)。False なら手書きの内容から API を使わず組み立てる。
-    on_review: 自動生成した「更新内容」「制限事項」を提出者に見せて直させる
-    ための関数 (update, limits) -> (update, limits) / None。この 2 項目は
-    そのまま正式版のリリースノートになるため、本人が一度も読まないまま
-    公開されないようにする (管理者の指示 2026-08)。None を返したら
-    SubmitCancelled を送出する (まだ push していないので副作用は残らない)。
+    on_review: 自動生成した「タイトル」「更新内容」「制限事項」を提出者に
+    見せて直させるための関数 (title, update, limits) -> 同じ 3 つ組 / None。
+    この 3 項目はそのまま正式版のリリースノートになるため、本人が一度も
+    読まないまま公開されないようにする (管理者の指示 2026-08)。None を
+    返したら SubmitCancelled を送出する (まだ push していないので副作用は
+    残らない)。
+    title: 提出者が書いたタイトル (任意)。空なら更新内容の 1 行目を使い、
+    それも無ければ「vX.Y を基点とした機能追加の提出」に落とす。
+    use_ai のときは自動生成が失敗した時点で claude_helper.ClaudeError を
+    そのまま上げる (黙って定型文で提出すると、更新内容が空のまま正式版まで
+    進んでしまうため。管理者の指示 2026-08)。
     戻り値: dict(pr_url, branch, commit_message)
     """
     def progress(msg):
@@ -516,32 +545,34 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         summary = _diff_summary(changes, intentional)
         diff_text = run_git(['diff', '--cached'], cwd=workrepo)
 
-        message = (commit_message or '').strip()
-        if not message and use_ai:
-            progress('コミットメッセージを自動生成しています...')
-            message = claude_helper.generate_commit_message(
-                summary, diff_text) or ''
-        if not message:
-            message = '%s を基点とした機能追加の提出' % prep['base_version']
-
         notes = ''
         if prep['safety']['warnings']:
             notes = ('# 提出時の警告 (承認時に確認)\n- '
                      + '\n- '.join(prep['safety']['warnings']))
-        # 本文は送信の前に作る。自動作成のときは提出者に見せて直させるので、
-        # ここで取り消されても push 済みのブランチが残らない
+        # タイトルも本文も送信の前に用意する。自動作成のときは提出者に
+        # 見せて直させるので、ここで取り消されても push 済みのブランチが
+        # 残らない
+        update_text = (commit_message or '').strip()
+        title_text = title_line(title) or title_line(update_text)
         body = None
         if use_ai:
+            progress('タイトルを自動作成しています...')
+            drafted = claude_helper.generate_commit_message(
+                summary, diff_text, strict=True)
+            title_text = title_line(drafted) or title_text
             progress('提出内容のまとめを作成しています...')
             body = claude_helper.generate_pr_body(
-                summary, diff_text, prep['base_version'], notes)
-            if body and on_review:
-                reviewed = on_review(*user_sections(body))
+                summary, diff_text, prep['base_version'], notes, strict=True)
+            update_text, limits_text = user_sections(body)
+            if on_review:
+                reviewed = on_review(title_text, update_text, limits_text)
                 if reviewed is None:
                     raise SubmitCancelled('提出を取り消しました。')
-                body = body_with_user_sections(body, *reviewed)
+                title_text = title_line(reviewed[0]) or title_text
+                update_text, limits_text = reviewed[1], reviewed[2]
+                body = body_with_user_sections(body, update_text, limits_text)
         if not body:
-            body = fallback_pr_body(commit_message, limitations,
+            body = fallback_pr_body(update_text, limitations,
                                     prep['base_version'], summary)
         # 提出の基点 (提出者が取得した版) を機械可読で残す。過去の更新ログの
         # 図はこれを読む。自動生成した本文には版名が入る保証がないため、
@@ -550,7 +581,11 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
                                                 prep['base_commit']), body)
         if notes:
             body += '\n\n' + notes
-        title = message.splitlines()[0][:70]
+        # タイトルは PR の見出し (承認タブ) と正式版のリリースノートの
+        # 1 行目になる。コミットメッセージは「タイトル + 空行 + 更新内容」
+        title = title_text or ('%s を基点とした機能追加の提出'
+                               % prep['base_version'])
+        message = '%s\n\n%s' % (title, update_text) if update_text else title
 
         progress('変更を記録しています...')
         run_git(['-c', 'user.name=%s' % user,
