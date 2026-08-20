@@ -16,7 +16,7 @@ import logging
 import os
 import threading
 
-from . import paths
+from . import paths, safeio
 
 log = logging.getLogger(__name__)
 
@@ -102,9 +102,7 @@ def put(pending, releases, me, seq=None, config=None, merged=None):
             _mem['applied_seq'] = seq
         _mem['data'] = data
     try:
-        os.makedirs(paths.install_root(config), exist_ok=True)
-        with open(_path(config), 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False)
+        safeio.write_json(_path(config), data)
     except OSError:
         log.warning('一覧スナップショットの保存に失敗 (表示には影響なし)',
                     exc_info=True)

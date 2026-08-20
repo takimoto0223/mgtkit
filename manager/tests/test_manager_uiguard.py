@@ -110,3 +110,67 @@ class TestReviewActionsAreGuarded:
             calls = _guard_calls(name)
             assert 'begin' in calls, '%s に開始の札がない' % name
             assert 'end' in calls, '%s に終了の札がない (無効のまま残る)' % name
+
+
+def _inner_func(outer, inner):
+    """main.py の関数 (outer) の中に定義された関数 (inner) の構文木."""
+    tree = ast.parse(open(_MAIN_PY, encoding='utf-8').read())
+    top = next((n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == outer), None)
+    assert top is not None, '%s が main.py に見つからない' % outer
+    found = next((n for n in ast.walk(top)
+                  if isinstance(n, ast.FunctionDef) and n.name == inner),
+                 None)
+    assert found is not None, '%s の中に %s がない' % (outer, inner)
+    return found
+
+
+def _caught(node):
+    """その関数が捕まえている例外の名前."""
+    names = set()
+    for h in ast.walk(node):
+        if not isinstance(h, ast.ExceptHandler) or h.type is None:
+            continue
+        parts = h.type.elts if isinstance(h.type, ast.Tuple) else [h.type]
+        for p in parts:
+            if isinstance(p, ast.Name):
+                names.add(p.id)
+            elif isinstance(p, ast.Attribute):
+                names.add(p.attr)
+    return names
+
+
+def _called(node):
+    """その関数が呼んでいる関数・メソッドの名前."""
+    names = set()
+    for n in ast.walk(node):
+        if not isinstance(n, ast.Call):
+            continue
+        if isinstance(n.func, ast.Name):
+            names.add(n.func.id)
+        elif isinstance(n.func, ast.Attribute):
+            names.add(n.func.attr)
+    return names
+
+
+class TestSaveFailureReturnsTheButton:
+    """保存に失敗しても「押せない状態」で止まらないこと.
+
+    run_bg は素の threading.Thread なので、渡した関数から例外が漏れると
+    スレッドが黙って死ぬ。ボタンは無効・文言は「〜しています...」の
+    ままになり、押し直すこともできない (manager/CLAUDE.md「失敗したら
+    ボタンを押せる状態に戻す」に反する)。
+
+    settings.save_settings は入力の不備 (ValueError) だけでなく、
+    保存先を作れない・書けないとき (OSError) にも失敗する。
+    """
+
+    def test_first_run_dialog_handles_save_failure(self):
+        work = _inner_func('show_first_run_dialog', 'work')
+        caught = _caught(work)
+        assert 'ValueError' in caught, '入力の不備を捕まえていない'
+        assert 'OSError' in caught, '保存の失敗を捕まえていない'
+        # 失敗経路はボタンを押せる状態に戻し、ログにも残す
+        called = _called(work)
+        assert 'dialog_error' in called, 'ボタンを戻していない'
+        assert 'exception' in called, 'log.exception で残していない'

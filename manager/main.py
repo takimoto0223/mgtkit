@@ -18,8 +18,8 @@ import webbrowser
 
 from . import (autofix, conflicts, diffdialog, diffview, feedback, ghcli,
                history, historyview, launcher, localstate, paths,
-               reviewcache, reviews, rocketfx, selfupdate, settings,
-               submit, uiguard, updater, usage)
+               reviewcache, reviews, rocketfx, safeio, selfupdate,
+               settings, submit, uiguard, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -701,7 +701,7 @@ def main(page: ft.Page):
                     dlg_status.value = (str(e2)
                                         or 'ダウンロードに失敗しました。')
                 finally:
-                    shutil.rmtree(tmp, ignore_errors=True)
+                    safeio.rmtree(tmp)
                     btn.disabled = False
                     page.update()
             run_bg(work)
@@ -3109,6 +3109,16 @@ def main(page: ft.Page):
                                            key_field.value, config)
                 except ValueError as e:
                     dialog_error(save_btn, err_text, str(e))
+                    return
+                except OSError:
+                    # 保存先を作れない・書けない (空き容量やアクセス権)。
+                    # 捕まえないと run_bg のスレッドが黙って死に、
+                    # 「登録しています...」のままボタンが戻らなくなる
+                    log.exception('設定を保存できませんでした')
+                    dialog_error(save_btn, err_text,
+                                 '設定を保存できませんでした。パソコンの'
+                                 '空き容量と、保存先を使う権限があるかを'
+                                 '確認して、もう一度お試しください。')
                     return
                 page.pop_dialog()
                 page.update()
