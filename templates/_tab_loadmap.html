@@ -1,0 +1,92 @@
+<!-- ============ タブ: 荷重分布図 ============ -->
+<!-- index.html から include される。既存タブの markup に合わせてある。 -->
+<section class="tab" id="tab-loadmap">
+  <fieldset>
+    <legend>荷重分布図PDF生成</legend>
+    <div class="row">
+      <button class="sub" onclick="loadmapCases()">荷重ケースを読み込み</button>
+      <span class="hint">mgtに入力された荷重 (床荷重・面荷重・節点荷重) を
+        荷重ケースごとに1図で描きます。MIDASの荷重入力画面を貼る代わりに
+        使えます</span>
+    </div>
+    <div class="row"><b>出力する荷重ケース</b>
+      <button class="sub" onclick="checkAll('lmcase',true)">全選択</button>
+      <button class="sub" onclick="checkAll('lmcase',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="lm_cases_box"><span class="hint">
+      「荷重ケースを読み込み」で一覧を表示します</span></div>
+
+    <div class="row"><b>用紙と割付</b></div>
+    <div class="row">
+      <label class="inline">用紙
+        <select id="lm_paper" onchange="loadmapCell()">
+          <option value="5">A5</option>
+          <option value="4" selected>A4</option>
+          <option value="3">A3</option>
+          <option value="2">A2</option>
+        </select></label>
+      <label class="inline"><input type="checkbox" id="lm_landscape"
+        onchange="loadmapCell()"> 横向き</label>
+      <label class="inline">1ページの図数
+        <select id="lm_perpage" onchange="loadmapCell()">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4" selected>4</option>
+          <option value="6">6</option>
+          <option value="8">8</option>
+          <option value="9">9</option>
+        </select></label>
+      <label class="inline">または 列
+        <input type="number" id="lm_cols" min="1" max="8" style="width:52px"
+               oninput="loadmapCell()"></label>
+      <label class="inline">× 行
+        <input type="number" id="lm_rows" min="1" max="8" style="width:52px"
+               oninput="loadmapCell()"></label>
+    </div>
+    <div class="row">
+      <label class="inline">余白[mm]
+        <input type="number" id="lm_margin" value="8" step="1" min="0"
+               style="width:56px" oninput="loadmapCell()"></label>
+      <label class="inline">図どうしの間隔[mm]
+        <input type="number" id="lm_gap" value="4" step="1" min="0"
+               style="width:56px" oninput="loadmapCell()"></label>
+      <span class="hint" id="lm_cell"></span>
+    </div>
+
+    <div class="row"><b>視点</b></div>
+    <div class="row">
+      <label class="inline">方位角[°]
+        <input type="range" id="lm_az" min="-90" max="90" step="1" value="-40"
+               oninput="loadmapAngle('az')">
+        <input type="number" id="lm_az_n" value="-40" step="1"
+               style="width:60px" oninput="loadmapAngle('az_n')"></label>
+      <label class="inline">見下ろし角[°]
+        <input type="range" id="lm_el" min="0" max="60" step="1" value="24"
+               oninput="loadmapAngle('el')">
+        <input type="number" id="lm_el_n" value="24" step="1"
+               style="width:60px" oninput="loadmapAngle('el_n')"></label>
+      <button class="sub" onclick="loadmapViewSheet()">視点の比較シート</button>
+      <span class="hint">比較シートは選択した先頭のケースを18通りの角度で
+        並べたA3です。良い角度を見つけて上の欄に入れてください</span>
+    </div>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="lm_arrows" checked>
+        面荷重に矢印を描く</label>
+      <span class="hint">床荷重は領域の塗りと符号、節点荷重は矢印と値で
+        描きます</span>
+    </div>
+
+    <div class="row">
+      <button class="sub emph" onclick="loadmapPreview(1)">プレビュー</button>
+      <button class="act" onclick="plotLoadmap()">荷重分布図PDFを作成</button>
+      <span class="hint">プレビューは1ページぶんを画像で表示します
+        (紙面の計算はPDFと同じなので、見えているものがそのまま出力に
+        なります)。生成物は &lt;出力先&gt;\mgtkit_out\loadmap\ に
+        保存されます</span>
+    </div>
+    <div id="lm_msg"></div>
+    <div id="lm_preview"></div>
+  </fieldset>
+</section>
+<script src="/static/loadmap.js"></script>

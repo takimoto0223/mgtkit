@@ -53,6 +53,7 @@ from mgtkit.ratio_pipeline import (run_steel_check,
 from mgtkit.w_check import w_al_match, w_al_names
 from mgtkit.export_tex import export_model_tex, export_ratio_detail_tex
 from mgtkit.export_dxf import export_dxf
+from mgtkit.loadmap.routes import make_blueprint as _loadmap_bp
 
 app = Flask(__name__)
 
@@ -394,6 +395,10 @@ def _parse_heights(p):
 # ---------------------------------------------------------------------------
 # エンドポイント: ページ・ファイル配信・アップロード
 # ---------------------------------------------------------------------------
+
+# 荷重分布図タブ (mgtkit/loadmap/)。共通ヘルパを渡して登録する
+app.register_blueprint(_loadmap_bp(sys.modules[__name__]))
+
 
 @app.route('/')
 def index():
