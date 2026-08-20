@@ -223,6 +223,80 @@ class TestPruneBetas:
         assert (beta / 'メモ.txt').exists()
 
 
+class TestInstallRelease:
+    """取り込みは「全部済んでから」済んだ印 (version.json) を置く.
+
+    印を展開直後に置くと、そのあとの pip が失敗しても「入っている」に
+    なり、次からは取り込みごと飛ばして**必要ライブラリの無いアプリ**を
+    起動しようとする (画面は成功と出るのに何も起きず、自力では直せない)。
+    """
+
+    def _prepare(self, monkeypatch, tmp_path, entries):
+        """配布 ZIP の取得と作業フォルダをモックし、インスタンスを返す."""
+        z = tmp_path / 'rel.zip'
+        _make_zip(str(z), entries)
+        monkeypatch.setattr(updater.ghcli, 'download_release',
+                            lambda *a, **k: (str(z), False))
+        monkeypatch.setattr(updater.ghcli, 'tag_commit_sha',
+                            lambda *a, **k: 'abc123')
+        monkeypatch.setattr(updater.paths, 'install_root',
+                            lambda config=None: str(tmp_path / 'root'))
+        return tmp_path / 'inst'
+
+    def _release(self):
+        return {'tag': 'v1.4', 'published_at': '2026-08-18', 'assets': []}
+
+    def test_marker_is_not_left_behind_when_pip_fails(self, monkeypatch,
+                                                      tmp_path):
+        inst = self._prepare(monkeypatch, tmp_path, {
+            'app.py': 'x',
+            'version.json': '{"version": "v1.4", "commit": "abc"}'})
+
+        def boom(*a, **k):
+            raise installer.InstallError('必要ライブラリの…')
+        monkeypatch.setattr(updater.installer, 'install_requirements', boom)
+
+        with pytest.raises(installer.InstallError):
+            updater.install_release('o/r', self._release(), str(inst))
+        # 「入っている」と誤認されないこと (次に押せば取り込み直される)
+        assert updater.local_version_info(str(inst)) is None
+        assert (inst / 'mgtkit' / 'app.py').exists()
+
+    def test_marker_keeps_the_distributed_contents(self, monkeypatch,
+                                                   tmp_path):
+        """配布物の version.json は中身をそのまま戻すこと."""
+        body = ('{"version": "v1.4", "commit": "abc123", '
+                '"distributed_at": "2026-08-18", "built_by": "CI"}')
+        inst = self._prepare(monkeypatch, tmp_path,
+                             {'app.py': 'x', 'version.json': body})
+        monkeypatch.setattr(updater.installer, 'install_requirements',
+                            lambda *a, **k: True)
+
+        updater.install_release('o/r', self._release(), str(inst))
+        info = updater.local_version_info(str(inst))
+        assert info['version'] == 'v1.4'
+        assert info['built_by'] == 'CI'      # 余分な項目も失わない
+
+    def test_marker_is_written_after_pip_when_missing(self, monkeypatch,
+                                                      tmp_path):
+        """配布物に version.json が無いときも、印は最後に置くこと."""
+        inst = self._prepare(monkeypatch, tmp_path, {'app.py': 'x'})
+        seen = {}
+
+        def install_requirements(app_dir, python=None):
+            # pip の時点ではまだ印が無い (途中で落ちれば残らない)
+            seen['during'] = versions.read_version_json(app_dir)
+            return True
+        monkeypatch.setattr(updater.installer, 'install_requirements',
+                            install_requirements)
+
+        updater.install_release('o/r', self._release(), str(inst))
+        assert seen['during'] is None
+        info = updater.local_version_info(str(inst))
+        assert info == {'version': 'v1.4', 'commit': 'abc123',
+                        'distributed_at': '2026-08-18'}
+
+
 def test_manager_main_compiles():
     # flet は CI に入れないため import はせず、構文チェックのみ行う
     src_path = os.path.join(os.path.dirname(updater.__file__), 'main.py')
