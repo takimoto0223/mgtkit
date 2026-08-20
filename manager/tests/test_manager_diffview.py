@@ -117,6 +117,20 @@ class TestBuildHtml:
         assert '変更のない' in page                     # 折りたたみ
         assert 'β版 v1.1-beta.2' in page
 
+    def test_user_sections_lead_the_page(self, diff_repo):
+        # 提出時の「更新内容」「制限事項」を差分より先に出す
+        meta = dict(self.META,
+                    update_text='- 荷重分布図を出せるようにした',
+                    limits_text='- 床荷重のみ対応です')
+        page = diffview.build_html(meta, 'main', 'feature', diff_repo)
+        assert '- 荷重分布図を出せるようにした' in page
+        assert '- 床荷重のみ対応です' in page
+        assert page.index('荷重分布図を出せる') < page.index('フォルダ比較')
+
+    def test_no_user_sections_no_lead_box(self, diff_repo):
+        page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
+        assert 'card usum' not in page   # CSS 定義は残るが箱は出ない
+
     def test_binary_is_marked_out_of_scope(self, diff_repo):
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
         assert 'img.png' in page
@@ -318,7 +332,8 @@ class TestBuildModelFastPath:
         monkeypatch.setattr(diffview, 'run_git', spy)
         pr = {'number': 7, 'title': 't', 'author': 'a',
               'branch': 'feature', 'head_sha': head, 'fork_sha': fork,
-              'body': ''}
+              'body': '## 更新内容\n\n- 改善した\n\n'
+                      '## ご利用にあたっての制限事項\n\n- なし\n'}
         model, _ = diffview.build_model(pr, {'repo': 'o/r'},
                                         workrepo=diff_repo)
         # fetch も merge-base 計算も行われない (分岐点は fork_sha)
@@ -326,6 +341,9 @@ class TestBuildModelFastPath:
         assert not [a for a in calls if a[0] == 'merge-base']
         assert model['head_ref'] == head
         assert any(e['path'] == 'calc.py' for e in model['files'])
+        # 提出時の利用者向け 2 項目がモデルに載る (差分冒頭の表示用)
+        assert model['update_text'] == '- 改善した'
+        assert model['limits_text'] == '- なし'
 
     def test_fetches_when_commits_missing(self, diff_repo, monkeypatch):
         calls = []

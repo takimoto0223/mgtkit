@@ -423,6 +423,21 @@ def title_line(text):
     return ''
 
 
+def split_body_title(body):
+    """本文の先頭にある「# タイトル」行を (タイトル, 残り) に分ける.
+
+    generate_pr_body は 1 行目にタイトルを書く (API 呼び出しを提出
+    1 回につき 1 回にするため、タイトル専用の生成はしない)。PR 本文には
+    タイトル欄が別にあるので、本文からはこの行を抜いて使う。
+    無ければ ('', 全文)。
+    """
+    lines = (body or '').lstrip().splitlines()
+    if lines and lines[0].startswith('# '):
+        return (lines[0][2:].strip(),
+                '\n'.join(lines[1:]).lstrip('\n'))
+    return '', (body or '')
+
+
 def user_sections(body):
     """PR 本文から利用者向けの 2 項目 (更新内容, 制限事項) を取り出す.
 
@@ -556,13 +571,13 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         title_text = title_line(title) or title_line(update_text)
         body = None
         if use_ai:
-            progress('タイトルを自動作成しています...')
-            drafted = claude_helper.generate_commit_message(
-                summary, diff_text, strict=True)
-            title_text = title_line(drafted) or title_text
+            # API 呼び出しは提出 1 回につきこの 1 回だけ。タイトルも
+            # 本文の 1 行目 (# 行) としてまとめて書かせて取り出す
             progress('提出内容のまとめを作成しています...')
             body = claude_helper.generate_pr_body(
                 summary, diff_text, prep['base_version'], notes, strict=True)
+            drafted, body = split_body_title(body)
+            title_text = title_line(drafted) or title_text
             update_text, limits_text = user_sections(body)
             if on_review:
                 reviewed = on_review(title_text, update_text, limits_text)

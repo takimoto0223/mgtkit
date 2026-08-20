@@ -1321,6 +1321,18 @@ def main(page: ft.Page):
                     fill_color='#ffffff', focused_bgcolor='#ffffff',
                     hover_color='#ffffff')   # hover で灰色に変えない
         ttl = ft.TextField(value=title, max_length=submit.TITLE_MAX, **_box)
+        # 空のまま提出させない (無題だと承認側が何の提出か分からない)。
+        # 灰色のボタンにはせず、押した瞬間に理由を欄の直下へ出す
+        ttl_err = ft.Text('', size=12, color=RED, visible=False)
+
+        def _ttl_clear(_=None):
+            # 文字が入った瞬間に赤枠と理由を消す (その場で・通信なし)
+            if ttl_err.visible:
+                ttl_err.visible = False
+                ttl.border_color = '#6b7280'
+                ttl.focused_border_color = NAVY
+                page.update()
+        ttl.on_change = _ttl_clear
         # 行数の上限は既定ウィンドウ (760x640) に収まる範囲で決める
         # (超える分は欄の中がスクロールする)
         upd = ft.TextField(value=update, min_lines=4, max_lines=7,
@@ -1335,6 +1347,18 @@ def main(page: ft.Page):
                                '提出を取り消しています...')
             page.update()
             done.set()
+
+        def submit_reviewed(_):
+            if not (ttl.value or '').strip():
+                ttl_err.value = ('未記入です。何の提出か分かるタイトルを'
+                                 '入力してください。')
+                ttl_err.visible = True
+                ttl.border_color = RED
+                ttl.focused_border_color = RED
+                page.update()
+                ttl.focus()
+                return
+            finish((ttl.value, upd.value, lim.value))
         dlg = ft.AlertDialog(
             modal=True, title=ft.Text('この内容で提出します'),
             content=ft.Column([
@@ -1352,6 +1376,7 @@ def main(page: ft.Page):
                        spacing=8,
                        vertical_alignment=ft.CrossAxisAlignment.END),
                 ttl,
+                ttl_err,
                 # 欄のかたまりが近接で読めるよう、項目名の上だけ空ける
                 ft.Container(
                     ft.Text('更新内容', size=13, weight=ft.FontWeight.BOLD,
@@ -1368,9 +1393,7 @@ def main(page: ft.Page):
                 ft.TextButton('取り消す', on_click=lambda _: finish(None)),
                 ft.FilledButton('この内容で提出する', bgcolor=NAVY,
                                 color='#ffffff',
-                                on_click=lambda _: finish((ttl.value,
-                                                           upd.value,
-                                                           lim.value)))])
+                                on_click=submit_reviewed)])
         try:
             page.show_dialog(dlg)
             page.update()

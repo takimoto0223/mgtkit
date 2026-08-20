@@ -44,6 +44,7 @@ _LN_W = 46
 
 # 概算の行高 (ジャンプ先オフセット計算用。フォント差でずれるのは許容)
 _H_SEC = 40
+_H_USUM_LINE = 19     # 冒頭「提出内容」の 1 行ぶん (概算)
 _H_SUMROW = 34
 _H_FILEHEAD = 46
 _H_NOTE = 34
@@ -229,6 +230,43 @@ def _file_note_text(text):
         content=ft.Text(text, size=12, color='#6b7280'))
 
 
+def _user_summary_box(model):
+    """冒頭に出す「更新内容」「制限事項」(提出時の記載の転載).
+
+    承認判断の第一材料なので差分より先に見せる (管理者指示 2026-08)。
+    このまま正式版のリリースノートになる文章。無い提出 (旧様式・
+    手書きで空欄) では出さない。戻り値: (control, 概算高さ) / None。
+    """
+    update = (model.get('update_text') or '').strip()
+    limits = (model.get('limits_text') or '').strip()
+    if not (update or limits):
+        return None
+    rows = [ft.Text('提出時に書かれた内容です。正式版になったときに'
+                    '「更新内容」「ご利用にあたっての制限事項」として'
+                    'そのまま全員に表示されます。',
+                    size=12, color='#6b7280')]
+    n_lines = 1
+    for label, text in (('更新内容', update),
+                        ('ご利用にあたっての制限事項', limits)):
+        if not text:
+            continue
+        # 項目の切れ目が行間と同じにならないよう、見出しの上を広げる
+        rows.append(ft.Container(
+            ft.Text(label, size=13, weight=ft.FontWeight.BOLD,
+                    color='#374151'),
+            margin=ft.Margin(0, 8, 0, 0)))
+        rows.append(ft.Text(text, size=13, color='#1f2937',
+                            selectable=True))
+        n_lines += 1 + text.count('\n') + 1
+    box = ft.Container(
+        bgcolor='#ffffff', border_radius=8,
+        border=ft.Border.all(1, '#e5e7eb'),
+        padding=ft.Padding.symmetric(vertical=10, horizontal=14),
+        margin=ft.Margin(0, 0, 0, 10),
+        content=ft.Column(rows, spacing=4, tight=True))
+    return box, 40 + n_lines * _H_USUM_LINE
+
+
 def build_items(model, on_jump, code_w=420.0, on_expand=None):
     """ダイアログの ListView に積む項目一式を組み立てる.
 
@@ -254,6 +292,9 @@ def build_items(model, on_jump, code_w=420.0, on_expand=None):
         items.append(ctrl)
         y += h
 
+    usum = _user_summary_box(model)
+    if usum is not None:
+        add(usum[0], usum[1])
     add(_sec_header('<1> フォルダ比較 (変更されたファイル %d 件)'
                     % len(model['files'])), _H_SEC)
     for e in model['files']:

@@ -463,7 +463,8 @@ class TestFullFlow:
 
     def test_blank_reviewed_title_falls_back_to_the_draft(
             self, repo_env, tmp_path, gh_mock, monkeypatch):
-        # タイトルを消して提出しても、見出しが空の提出にはならない
+        # UI は空タイトルを赤枠で止める (main._review_ai_text)。ここは
+        # その裏の安全網: 万一空で通っても見出しが空の提出にはならない
         _fake_ai(monkeypatch)
         z = _make_zip(tmp_path, _dist_files(
             repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
@@ -481,7 +482,7 @@ class TestFullFlow:
         def boom(*a, **k):
             raise submit.claude_helper.ClaudeError('キーが無効です', 'HTTP 401')
         monkeypatch.setattr(submit.claude_helper,
-                            'generate_commit_message', boom)
+                            'generate_pr_body', boom)
         z = _make_zip(tmp_path, _dist_files(
             repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
         prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
@@ -508,19 +509,23 @@ class TestFullFlow:
 
 
 def _fake_ai(monkeypatch):
-    """Claude の下書き (タイトル + 本文) を返す差し替え."""
+    """Claude の下書き (1 行目 = タイトルの本文) を返す差し替え.
+
+    タイトル生成の API は呼ばれない (提出 1 回 = 呼び出し 1 回の約束)。
+    呼ばれたら失敗させて見張る。
+    """
+    def boom(*a, **k):
+        raise AssertionError('提出で generate_commit_message が呼ばれた '
+                             '(API 呼び出しは generate_pr_body の 1 回だけ)')
     monkeypatch.setattr(submit.claude_helper, 'generate_commit_message',
-                        lambda *a, **k: _AI_MESSAGE)
+                        boom)
     monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
                         lambda *a, **k: _AI_BODY)
 
 
-_AI_MESSAGE = '''二丁山形鋼の断面算定に対応
+_AI_BODY = '''# 二丁山形鋼の断面算定に対応
 
-- s_check.py に TL2_analysis() を追加
-'''
-
-_AI_BODY = '''## 更新内容
+## 更新内容
 
 - 二丁山形鋼の断面算定に対応
 
@@ -561,6 +566,25 @@ class TestReviewAiText:
         assert '- 二丁山形鋼(2L)に対応しました' in notes
         assert '- 不等辺は未対応' in notes
         assert '影響範囲' not in notes
+
+
+class TestSplitBodyTitle:
+    """generate_pr_body の 1 行目 (# タイトル) を本文から切り出す."""
+
+    def test_title_is_split_off(self):
+        title, rest = submit.split_body_title(
+            '# 荷重分布図の PDF 書き出しに対応\n\n## 更新内容\n\n- 1 図')
+        assert title == '荷重分布図の PDF 書き出しに対応'
+        assert rest.startswith('## 更新内容')
+
+    def test_no_title_line(self):
+        title, rest = submit.split_body_title('## 更新内容\n\n- 改善')
+        assert title == ''
+        assert rest == '## 更新内容\n\n- 改善'
+
+    def test_empty(self):
+        assert submit.split_body_title('') == ('', '')
+        assert submit.split_body_title(None) == ('', '')
 
 
 class TestTitleLine:
