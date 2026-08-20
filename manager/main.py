@@ -17,7 +17,7 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffdialog, diffview, feedback, ghcli,
-               history, historyview, launcher, localstate, paths,
+               history, historyview, launcher, localstate, migrate, paths,
                reviewcache, reviews, rocketfx, safeio, selfupdate,
                settings, submit, uiguard, updater, usage)
 from .gitcli import GitError
@@ -665,7 +665,8 @@ def main(page: ft.Page):
                 """ブラウザでアプリを開く (取り込みの知らせを読んだあと)."""
                 try:
                     _, url = launcher.launch_app(
-                        stable, paths.stable_port(config), channel='stable')
+                        stable, paths.stable_port(config), channel='stable',
+                        config=config)
                     t1_status.value = 'ブラウザで開きます: %s' % url
                 except (launcher.LaunchError, Exception) as e:
                     log.exception('起動に失敗しました')
@@ -1683,7 +1684,8 @@ def main(page: ft.Page):
                         updater.install_release(repo, release, beta,
                                                 on_progress=progress)
                     _, url = launcher.launch_app(
-                        beta, paths.beta_port(config), channel='beta')
+                        beta, paths.beta_port(config), channel='beta',
+                        config=config)
                     t5_status.value = ('β版 %s を起動しました (安定版とは'
                                        '別画面・別データ): %s'
                                        % (release['tag'], url))
@@ -3190,6 +3192,35 @@ def main(page: ft.Page):
         run_bg(work)
 
     check_membership()
+
+    # ---- 引っ越しの後片付け ----
+    # フォルダ構成を切り替えたときだけ、以前のフォルダを消す札が置かれる。
+    # ふだんの起動でやることは「札が無いことを確かめる」だけ (ファイルが
+    # 1 つ無いのを見るだけなので、片付けが済めば負担は残らない)。
+
+    def cleanup_old_folders():
+        if migrate.read_marker(config) is None:
+            return                      # ふだんはここで終わり
+
+        def work():
+            try:
+                removed, left, gave_up = migrate.run_cleanup(config)
+            except Exception:
+                log.exception('以前のフォルダの片付けに失敗しました')
+                return
+            if removed:
+                log.info('以前のフォルダを片付けました: %s', '、'.join(removed))
+            if gave_up:
+                join_notice.value = (
+                    '以前のフォルダを自動で片付けられませんでした。'
+                    'お手数ですが手で削除してください: %s' % '、'.join(left))
+                page.update()
+            elif left:
+                log.info('片付けきれなかったので次回に回します: %s',
+                         '、'.join(left))
+        run_bg(work)
+
+    cleanup_old_folders()
 
     # キャッシュの事前取得は check_update_notice のスナップショット取得が
     # 兼ねる (ログイン名・メンバー一覧・一覧・リリース一覧が一度に温まる)

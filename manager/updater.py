@@ -27,7 +27,7 @@ def prune_betas(keep_tags, config=None):
     keep_tags: 残すβ版の版名 (いま一覧にある prerelease)。
     戻り値: 片付けた版名の一覧 (使用中などで消せなかったものは含めない)。
     """
-    root = os.path.join(paths.install_root(config), 'beta')
+    root = paths.beta_root(config)
     keep = set(keep_tags or ())
     removed = []
     try:

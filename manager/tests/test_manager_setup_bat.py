@@ -22,9 +22,13 @@ import pytest
 from manager import paths
 
 SETUP = os.path.join(paths.REPO_ROOT, 'manager', 'scripts', 'setup.bat')
+SETUP_TEST = os.path.join(paths.REPO_ROOT, 'manager', 'scripts',
+                          'setup-test.bat')
 MANAGER_LAUNCH = os.path.join(paths.REPO_ROOT, 'manager', 'マネージャー起動.bat')
 APP_LAUNCH = os.path.join(paths.REPO_ROOT, '起動.bat')
-ALL_BATS = [SETUP, MANAGER_LAUNCH, APP_LAUNCH]
+ALL_BATS = [SETUP, SETUP_TEST, MANAGER_LAUNCH, APP_LAUNCH]
+# Python を自分で探すバッチ (setup-test.bat は setup.bat を呼ぶだけ)
+PY_DETECT_BATS = [SETUP, MANAGER_LAUNCH, APP_LAUNCH]
 
 
 def read_text(path):
@@ -95,12 +99,17 @@ def test_ascii_only_after_switching_to_utf8(path):
 
 
 @pytest.mark.parametrize('path', ALL_BATS)
+def test_no_bat_uses_where_to_find_python(path):
+    # where python はストア誘導スタブ (Microsoft Store への誘導) を拾って
+    # しまい、未導入を「導入済み」と誤判定する
+    assert not re.search(r'where\s+py(thon)?\b', read_text(path), re.I), \
+        'Python の判定に where を使わない (ストア誘導スタブを誤検出する)'
+
+
+@pytest.mark.parametrize('path', PY_DETECT_BATS)
 def test_python_is_detected_by_running_it(path):
-    # where python はストア誘導スタブを拾ってしまうため使わない。
     # 実行してみる (py -3 --version / python -c) 方式であること
     text = read_text(path)
-    assert not re.search(r'where\s+py(thon)?\b', text, re.I), \
-        'Python の判定に where を使わない (ストア誘導スタブを誤検出する)'
     assert 'py -3 --version' in text
     assert 'python -c' in text
 
