@@ -8,7 +8,7 @@ import json
 import logging
 import os
 
-from . import paths
+from . import paths, safeio
 
 log = logging.getLogger(__name__)
 
@@ -27,9 +27,7 @@ def _load(config=None):
 
 
 def _save(data, config=None):
-    os.makedirs(paths.install_root(config), exist_ok=True)
-    with open(_path(config), 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    safeio.write_json(_path(config), data, indent=2)
 
 
 def hidden_prs(config=None):
