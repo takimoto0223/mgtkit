@@ -442,3 +442,102 @@ def test_no_tidying_while_a_beta_is_running(monkeypatch):
 
     _open_review_tab(page)
     assert pruned == []
+
+
+def _beta_button(page, label_part):
+    """β版カードのボタンを名前の一部で取り出す."""
+    for c in _walk_controls(page.added[1], []):
+        text = getattr(c, 'content', None)
+        if isinstance(text, str) and label_part in text and getattr(
+                c, 'on_click', None):
+            return c
+    raise AssertionError('「%s」のボタンが見つかりません' % label_part)
+
+
+# 提出 #147 に対応するβ版 (対応付けはリリースノートの #N で行われる)
+_TRY_BETA = {'tag': 'v1.5-beta.1', 'prerelease': True, 'assets': [],
+             'notes': '#147 v1.4 を基点とした機能追加の提出',
+             'published_at': '2026-08-19'}
+_TRY_PENDING = {
+    'number': 147, 'title': '機能追加の提出', 'url': 'https://x/147',
+    'branch': 'feature/147', 'author': 'hanako',
+    'created_at': '2026-08-19', 'created_at_full': '2026-08-19T00:00:00Z',
+    'head_sha': 'abc123', 'body': '', 'base_version': 'v1.4',
+    'base_commit': 'def456', 'approved': [], 'rejected': [],
+    'rejected_final': False, 'rejected_since': None, 'feedback': [],
+    'checks': 'success', 'conflicting': False,
+}
+
+
+def _page_with_a_beta_to_try(monkeypatch):
+    """取得済みのβ版カードが出ている画面を作る。戻り値: (page, main)."""
+    page, _pruned, main = _page_with_a_review_snapshot(
+        monkeypatch, [_TRY_BETA, _STABLE])
+    snap = {'pending': [_TRY_PENDING], 'releases': [_TRY_BETA, _STABLE],
+            'me': 'yamada-taro', 'merged': []}
+    monkeypatch.setattr(main.reviews, 'fetch_snapshot',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(main.reviewcache, 'put', lambda *a, **k: dict(snap))
+    monkeypatch.setattr(main.updater, 'local_version_info',
+                        lambda *a, **k: {'version': _TRY_BETA['tag']})
+    monkeypatch.setattr(
+        main.updater, 'install_release',
+        lambda *a, **k: pytest.fail('取得済みのβ版を取り直している'))
+    monkeypatch.setattr(main.launcher, 'port_in_use', lambda *a, **k: False)
+    _open_review_tab(page)
+    return page, main
+
+
+def test_trying_a_beta_stops_another_one_first(monkeypatch):
+    """別のβ版が動いていたら止めてから起動すること.
+
+    止めないとポートが塞がったままで、開くのは**前の版の画面**になる
+    (画面に版名が出ないため利用者は気づけない)。
+    """
+    page, main = _page_with_a_beta_to_try(monkeypatch)
+
+    stopped = []
+    monkeypatch.setattr(main.launcher, 'stop_other_beta',
+                        lambda tag, port, config=None: (
+                            stopped.append((tag, port)), True)[1])
+    monkeypatch.setattr(main.launcher, 'remember_beta', lambda *a, **k: None)
+    monkeypatch.setattr(main.launcher, 'launch_app',
+                        lambda *a, **k: (object(), 'http://127.0.0.1:8766/'))
+
+    _beta_button(page, 'を試す').on_click(None)
+    assert stopped == [(_TRY_BETA['tag'], 8766)]
+
+
+def test_message_does_not_claim_a_launch_that_did_not_happen(monkeypatch):
+    """すでに同じ版が動いていたら「起動しました」と言わないこと."""
+    page, main = _page_with_a_beta_to_try(monkeypatch)
+
+    monkeypatch.setattr(main.launcher, 'stop_other_beta',
+                        lambda *a, **k: False)     # 動いているのは同じ版
+    monkeypatch.setattr(main.launcher, 'remember_beta', lambda *a, **k: None)
+    # 既存の画面を開いただけ (新しく起動していない) を表す戻り値
+    monkeypatch.setattr(main.launcher, 'launch_app',
+                        lambda *a, **k: (None, 'http://127.0.0.1:8766/'))
+
+    _beta_button(page, 'を試す').on_click(None)
+    texts = _walk_texts(page.added[1], [])
+    assert any('すでに起動している' in t for t in texts)
+    assert not any('を起動しました' in t for t in texts)
+
+
+def test_the_running_beta_is_remembered_after_a_real_launch(monkeypatch):
+    """実際に起動したときは版を控える (次に別の版か判断するため)."""
+    page, main = _page_with_a_beta_to_try(monkeypatch)
+
+    remembered = []
+    monkeypatch.setattr(main.launcher, 'stop_other_beta',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(main.launcher, 'remember_beta',
+                        lambda tag, config=None: remembered.append(tag))
+    monkeypatch.setattr(main.launcher, 'launch_app',
+                        lambda *a, **k: (object(), 'http://127.0.0.1:8766/'))
+
+    _beta_button(page, 'を試す').on_click(None)
+    assert remembered == [_TRY_BETA['tag']]
+    texts = _walk_texts(page.added[1], [])
+    assert any('を起動しました' in t for t in texts)

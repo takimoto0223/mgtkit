@@ -97,12 +97,41 @@ def sweep_leftovers(config=None):
     return installer.sweep_swap_leftovers(*dirs)
 
 
+def _take_version_json(app_dir):
+    """展開直後の version.json を取り上げて中身を返す (無ければ None).
+
+    version.json は**取り込みが最後まで済んだ印**として扱われている
+    (「まだ入っていない」の判定は ``local_version_info`` が返す None
+    だけ)。展開した時点で置いたままにすると、そのあとの
+    ``install_requirements`` が失敗しても「入っている」ことになり、
+    次からは取り込みを丸ごと飛ばして**必要ライブラリの無いアプリ**を
+    起動しようとする (画面は成功と出るのに何も起きない)。そこでいったん
+    取り上げ、全部済んでから ``_put_version_json`` で戻す。
+
+    中身はそのまま持ち回す (配布物に入っていた版の内容を書き換えない)。
+    """
+    if versions.read_version_json(app_dir) is None:
+        return None                     # 無い / 壊れている = 印にならない
+    path = os.path.join(app_dir, 'version.json')
+    with open(path, 'rb') as f:
+        raw = f.read()
+    os.remove(path)
+    return raw
+
+
+def _put_version_json(app_dir, raw):
+    """取り上げた version.json を戻す (取り込み完了の印)."""
+    with open(os.path.join(app_dir, 'version.json'), 'wb') as f:
+        f.write(raw)
+
+
 def install_release(repo, release, instance_dir, python=None,
                     on_progress=None, config=None):
     """リリースを取得してインスタンスへ展開・依存インストールする.
 
     version.json が配布物に無い場合 (CI 整備前のソースアーカイブ) は
-    リリース情報から補完して書き込む。
+    リリース情報から補完して書き込む。どちらの場合も、書き込むのは
+    **必要ライブラリの導入まで済んだあと**にする (_take_version_json)。
     """
     def progress(msg):
         log.info('%s', msg)
@@ -120,19 +149,24 @@ def install_release(repo, release, instance_dir, python=None,
         app_d = paths.app_dir(instance_dir)
         installer.extract_zip(zip_path, app_d, swap_work_dir(config))
 
-        if versions.read_version_json(app_d) is None:
+        raw = _take_version_json(app_d)
+        if raw is None:
             commit = ''
             try:
                 commit = ghcli.tag_commit_sha(repo, tag)
             except ghcli.GhError:
                 log.warning('タグ %s のコミット SHA を取得できませんでした', tag)
-            versions.write_version_json(
-                app_d, tag, commit,
-                release.get('published_at')
-                or datetime.date.today().isoformat())
+            distributed_at = (release.get('published_at')
+                              or datetime.date.today().isoformat())
 
         progress('必要ライブラリを確認中...')
         installer.install_requirements(app_d, python=python)
+
+        # ここまで来て初めて「取り込み済み」になる
+        if raw is None:
+            versions.write_version_json(app_d, tag, commit, distributed_at)
+        else:
+            _put_version_json(app_d, raw)
         progress('完了')
         return app_d
     finally:
