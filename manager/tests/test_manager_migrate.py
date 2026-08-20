@@ -15,7 +15,13 @@ import os
 
 import pytest
 
-from manager import migrate, paths, safeio
+from manager import launcher, migrate, paths, safeio
+
+
+@pytest.fixture(autouse=True)
+def _no_running_app(monkeypatch):
+    # テスト機のポートを触らない。動いているアプリが無い状態を既定にする
+    monkeypatch.setattr(launcher, 'port_in_use', lambda port: False)
 
 
 def _old_layout(tmp_path, with_clone=True, usage_days=None):
@@ -212,13 +218,91 @@ class TestTestMode:
         assert not (home / paths.MANAGER_DIR_NAME / migrate.MARKER_NAME).exists()
 
 
+class TestStopOldApps:
+    """引っ越しの前に、これまでのアプリを終了する。
+
+    Windows は「プロセスが作業フォルダにしているフォルダ」を削除できない。
+    アプリは cwd=<インスタンス>/mgtkit で起動し、Flask のサーバーなので
+    ブラウザを閉じても生き続けるため、止めないと旧フォルダが永久に消せない
+    (実機で、空のフォルダが 5 つ残ることを確認)。
+    """
+
+    def _spy(self, monkeypatch, in_use=(8765, 8766), fail=False):
+        calls = []
+        monkeypatch.setattr(launcher, 'port_in_use',
+                            lambda port: port in in_use)
+
+        def stop(port, timeout=10.0):
+            calls.append(port)
+            if fail:
+                raise launcher.LaunchError('止められません')
+            return True
+
+        monkeypatch.setattr(launcher, 'stop_app', stop)
+        return calls
+
+    def test_both_apps_are_stopped(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        old_clone, old_root = _old_layout(tmp_path)
+        home, _ = _new_home(tmp_path)
+        result = _run(home, old_clone, old_root)
+        assert calls == [8765, 8766]
+        assert result['stopped'] == ['正式版', 'β版']
+
+    def test_nothing_running_means_nothing_to_stop(self, tmp_path,
+                                                   monkeypatch):
+        calls = self._spy(monkeypatch, in_use=())
+        old_clone, old_root = _old_layout(tmp_path)
+        home, _ = _new_home(tmp_path)
+        result = _run(home, old_clone, old_root)
+        assert calls == []
+        assert result['stopped'] == []
+
+    def test_migration_continues_when_it_cannot_stop(self, tmp_path,
+                                                     monkeypatch):
+        # 止められなくても引っ越しは進める (片付けが次回に回るだけ)
+        self._spy(monkeypatch, fail=True)
+        old_clone, old_root = _old_layout(tmp_path)
+        home, _ = _new_home(tmp_path)
+        result = _run(home, old_clone, old_root)
+        assert result['moved'], '引っ越しは止まらない'
+        assert result['stopped'] == []
+
+    def test_dry_run_stops_nothing(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        old_clone, old_root = _old_layout(tmp_path)
+        home, _ = _new_home(tmp_path)
+        _run(home, old_clone, old_root, dry_run=True)
+        assert calls == []
+
+
 class TestCleanupLater:
-    def _migrated(self, tmp_path):
+    def _migrated(self, tmp_path, first_launch=True):
         old_clone, old_root = _old_layout(tmp_path)
         home, _ = _new_home(tmp_path)
         _run(home, old_clone, old_root)
         root = str(home / paths.MANAGER_DIR_NAME)
+        if first_launch:
+            # setup.bat が起動する 1 回目。ここでは消さない
+            migrate.run_cleanup(install_root=root)
         return home, old_clone, old_root, root
+
+    def test_the_launch_setup_starts_does_not_delete(self, tmp_path):
+        # 「新しい方が実際に動いたと分かってから消す」を成り立たせる。
+        # setup.bat は引っ越しの直後にマネージャーを起動するので、その
+        # 1 回目で消すと確かめる間もなく旧フォルダが消える (実機で発生)
+        home, old_clone, old_root, root = self._migrated(
+            tmp_path, first_launch=False)
+        removed, left, gave_up = migrate.run_cleanup(install_root=root)
+        assert (removed, left, gave_up) == ([], [], False)
+        assert old_clone.exists() and old_root.exists()
+        assert migrate.read_marker(install_root=root)['launched'] is True
+
+    def test_the_next_launch_deletes(self, tmp_path):
+        home, old_clone, old_root, root = self._migrated(tmp_path)
+        removed, left, gave_up = migrate.run_cleanup(install_root=root)
+        assert set(removed) == {str(old_clone), str(old_root)}
+        assert not old_clone.exists() and not old_root.exists()
 
     def test_marker_lists_both_old_folders(self, tmp_path):
         home, old_clone, old_root, root = self._migrated(tmp_path)
@@ -235,7 +319,7 @@ class TestCleanupLater:
 
     def test_no_marker_means_no_work(self, tmp_path):
         # ふだんの起動。札が無ければ何もしない
-        home, _ = _new_home(tmp_path)
+        home, _ = _new_home(tmp_path)  # noqa: F841
         root = str(home / paths.MANAGER_DIR_NAME)
         assert migrate.read_marker(install_root=root) is None
         assert migrate.run_cleanup(install_root=root) == ([], [], False)

@@ -32,7 +32,7 @@ import shutil
 import subprocess
 import sys
 
-from . import paths, safeio
+from . import launcher, paths, safeio
 
 log = logging.getLogger(__name__)
 
@@ -173,6 +173,40 @@ def verify(home):
     return problems
 
 
+def stop_old_apps(config=None, dry_run=False, say=None):
+    """引っ越しの前に、これまでのアプリを終了する.
+
+    Windows は**プロセスが作業フォルダにしているフォルダを削除できない**。
+    アプリは ``launcher.launch_app`` が ``cwd=<インスタンス>/mgtkit`` で
+    起動するため、動いたままだと旧フォルダの中の ``mgtkit/`` が消せず、
+    その親も芋づるで残る。しかもアプリは Flask のサーバーなので、
+    **ブラウザを閉じてもプロセスは生き続ける** (実機で確認。旧
+    AppData\\Local\\mgtkit に空のフォルダが 5 つ残った)。
+
+    この時点で 8765 / 8766 を持っているのは**これまでのアプリだけ**で、
+    新しい方はまだ一度も起動していないので取り違えようがない。
+    ``stop_app`` は python 以外が使っているポートには触らない。
+    終了できなくても引っ越し自体は進める (片付けが次回に回るだけ)。
+    """
+    say = say or (lambda *_: None)
+    stopped = []
+    for label, port in (('正式版', paths.stable_port(config)),
+                        ('β版', paths.beta_port(config))):
+        if not launcher.port_in_use(port):
+            continue
+        say('  これまでの%sのアプリを終了します (ポート %d)' % (label, port))
+        if dry_run:
+            stopped.append(label)
+            continue
+        try:
+            if launcher.stop_app(port):
+                stopped.append(label)
+        except launcher.LaunchError:
+            log.warning('ポート %d のアプリを終了できませんでした', port,
+                        exc_info=True)
+    return stopped
+
+
 # ---------------------------------------------------------------------------
 # 入口 (ショートカット) と案内
 # ---------------------------------------------------------------------------
@@ -282,6 +316,9 @@ def write_marker(home, targets):
     safeio.write_json(path, {
         'targets': [t for t in targets if t],
         'attempts': 0,
+        # setup.bat はこのあとマネージャーを起動する。その 1 回目では
+        # 消さず、印を付けるだけにする (下記 run_cleanup)
+        'launched': False,
         'created_at': datetime.datetime.now().isoformat(timespec='seconds'),
     }, indent=2)
     return path
@@ -317,6 +354,18 @@ def run_cleanup(config=None, install_root=None):
     """
     data = read_marker(config, install_root)
     if not data:
+        return [], [], False
+    if not data.get('launched'):
+        # **1 回目は消さない。** setup.bat は引っ越しの直後にマネージャーを
+        # 起動するので、そこで消すと「新しい方が実際に動いたと分かってから
+        # 消す」が成り立たない (実機で、引っ越し直後に旧フォルダが消えた)。
+        # 印だけ付けて、利用者が次に入口から開いたときに消す
+        data['launched'] = True
+        try:
+            safeio.write_json(marker_path(config, install_root), data,
+                              indent=2)
+        except OSError:
+            log.warning('片付けの記録を更新できませんでした', exc_info=True)
         return [], [], False
     removed, left = [], []
     for target in data['targets']:
@@ -363,7 +412,8 @@ def migrate(home, clone=None, dry_run=False, no_cleanup=False,
     found_clone, found_root = find_old(old_clone, old_root)
     say('置き場所: %s' % home)
     result = {'moved': [], 'entry': None, 'hidden': False, 'guide': False,
-              'marker': None, 'new_install': not (found_clone or found_root)}
+              'marker': None, 'stopped': [],
+              'new_install': not (found_clone or found_root)}
 
     if result['new_install']:
         say('これまでのフォルダは見つかりませんでした (新規の導入として続けます)。')
@@ -373,6 +423,10 @@ def migrate(home, clone=None, dry_run=False, no_cleanup=False,
             if found:
                 say('  %s' % found)
         say('引き継ぎます:')
+        # 消す前ではなく**運ぶ前**に止める。動いたままだと旧フォルダの
+        # 中の mgtkit/ が作業フォルダとして掴まれ、あとで消せない
+        result['stopped'] = stop_old_apps(paths.load_config(),
+                                          dry_run=dry_run, say=say)
         result['moved'] = carry_over(plan(home, found_clone, found_root),
                                      dry_run=dry_run, say=say)
 
