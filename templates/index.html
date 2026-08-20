@@ -137,6 +137,7 @@
   <button data-tab="ratio">検定比図</button>
   <button data-tab="tex">TeX表</button>
   <button data-tab="dxf">DXF</button>
+  <button data-tab="quantity">数量集計</button>
 </nav>
 <main>
 
@@ -908,6 +909,73 @@
     <div id="sdx_prev" style="max-width:760px"></div>
     <div id="sdx_files"></div>
   </fieldset>
+</section>
+
+<!-- ============ タブ6: 数量集計 ============ -->
+<section class="tab" id="tab-quantity">
+  <fieldset>
+    <legend>RC材料数量集計 (梁・柱・壁・スラブ)</legend>
+    <div class="row"><span class="hint">配筋(*REBAR-BEAM/COLUMN/WALL)のある
+      RC断面、断面名に"W"を含み配筋定義の無い線材壁パネル、RCスラブ用板要素
+      (いずれも下欄で入力)を対象に、部材長・面積x配筋から鉄筋質量(径ごと)と
+      コンクリート体積を概算します。柱フープの本数は部材長÷ピッチ+1の概算
+      (継手・重ね代・フック等の増尺は含みません)。杭は今後対応予定です。</span>
+    </div>
+    <div class="row">
+      <label class="inline">かぶり厚(mm) 梁
+        <input type="number" id="qty_cover_beam" value="40"></label>
+      <label class="inline">柱
+        <input type="number" id="qty_cover_column" value="40"></label>
+      <label class="inline">壁
+        <input type="number" id="qty_cover_wall" value="40"></label>
+      <button class="act" onclick="runQuantity()">集計実行</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>板要素壁の配筋 (厚みごとの単配筋/複配筋)</legend>
+    <div class="row"><span class="hint">MIDASのWALL要素+*REBAR-WALLで
+      配筋定義されている壁パネル用です。径・ピッチはmgtから取得済みですが、
+      単配筋/複配筋の情報は無いため、厚みごとに指定してください
+      (未指定の厚みは複配筋として計算します)。</span>
+    </div>
+    <div class="row">
+      <button class="sub" onclick="loadQtyWallThicknesses()">対象厚みを読込</button>
+    </div>
+    <div id="qty_wallthick_msg"></div>
+    <div id="qty_wallthick_box"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>線材壁パネルの配筋入力 (断面名に"W"を含み配筋定義の無いRC断面)</legend>
+    <div class="row"><span class="hint">壁を梁・柱要素+矩形断面(中実角)で
+      モデル化している場合の入力欄です (例: RW20, EW20)。断面検定タブの
+      「配筋の無いRC断面」と同じ設定 (mgtkit_rcw_settings) を共有します。
+      名前の"_"より前を符号として同一符号はまとめて入力できます。</span>
+    </div>
+    <div class="row">
+      <button class="sub" onclick="loadQtyWallSections()">対象断面を読込</button>
+    </div>
+    <div id="qty_wallsec_msg"></div>
+    <div id="qty_wallsec_box"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>スラブの配筋 (厚みごとのX/Y方向筋)</legend>
+    <div class="row"><span class="hint">RC板要素(PLATE)のスラブ用です。
+      多数のメッシュ要素で構成される連続体として扱い、厚み区分の合計面積を
+      ピッチで割って延長を概算します(壁・柱のような要素単位の本数丸めは
+      行いません)。未入力の厚みは配筋なしとして扱います。</span>
+    </div>
+    <div class="row">
+      <button class="sub" onclick="loadQtySlabThicknesses()">対象厚みを読込</button>
+    </div>
+    <div id="qty_slabthick_msg"></div>
+    <div id="qty_slabthick_box"></div>
+  </fieldset>
+
+  <div id="qty_msg"></div>
+  <div id="qty_out"></div>
 </section>
 
 </main>

@@ -22,7 +22,7 @@ import re
 import shutil
 import tempfile
 
-from . import claude_helper, ghcli, installer, paths, versions
+from . import claude_helper, ghcli, installer, paths, safeio, versions
 from .gitcli import GitError, ensure_work_repo, run_git
 
 log = logging.getLogger(__name__)
@@ -150,26 +150,26 @@ def inspect_zip(zip_path):
     """ZIP を展開し version.json から基点を特定する.
 
     戻り値: dict(tmp, extract_dir, base_version, base_commit)
-    呼び出し側は使用後に shutil.rmtree(tmp) すること。
+    呼び出し側は使用後に cleanup() すること。
     """
     tmp = tempfile.mkdtemp(prefix='mgtkit_submit_')
     extract_dir = os.path.join(tmp, 'zip')
     try:
         installer.extract_zip(zip_path, extract_dir)
     except installer.InstallError as e:
-        shutil.rmtree(tmp, ignore_errors=True)
+        safeio.rmtree(tmp)
         raise SubmitError(str(e))
 
     info = versions.read_version_json(extract_dir)
     if info is None:
-        shutil.rmtree(tmp, ignore_errors=True)
+        safeio.rmtree(tmp)
         raise SubmitError(
             'この ZIP には版の情報 (version.json) が含まれていないか、'
             '壊れています。マネージャーで取得した版のフォルダを丸ごと ZIP に'
             'して提出してください。')
     commit = str(info.get('commit') or '').strip()
     if not commit:
-        shutil.rmtree(tmp, ignore_errors=True)
+        safeio.rmtree(tmp)
         raise SubmitError(
             '版の情報 (version.json) に基点の記録がありません。'
             'マネージャーで取得した版を基に作業してください。')
@@ -332,7 +332,13 @@ def prepare_submission(zip_path, config=None, workrepo=None,
 
 
 def cleanup(prep):
-    shutil.rmtree(prep.get('tmp', ''), ignore_errors=True)
+    """展開に使った一時フォルダを片付ける (消えたら True).
+
+    提出者の ZIP をそのまま展開した中身なので、クローン (.git) が
+    混ざっていることがある。git は Windows でクローンの中身に読み取り
+    専用属性を付けるため、素の rmtree では消しきれない。
+    """
+    return safeio.rmtree(prep.get('tmp', ''))
 
 
 # ---------------------------------------------------------------------------

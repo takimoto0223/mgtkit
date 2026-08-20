@@ -1875,3 +1875,300 @@ async function runDxf() {
       '<a class="dl" href="' + f.url + '">ダウンロード</a></div>').join('');
   } catch (e) { setMsg('dxf_msg', esc(e.message), 'msg-err'); }
 }
+
+// ---------------- 数量集計 ----------------
+function fmtNum(v, d) {
+  if (v === null || v === undefined) return '';
+  return Number(v).toLocaleString('ja-JP',
+    {minimumFractionDigits: d, maximumFractionDigits: d});
+}
+
+// 板要素壁(*REBAR-WALLで配筋定義されたWALL要素)の厚みごとの単配筋/複配筋。
+// 径・ピッチはmgtから取得済みなので、ここでは配筋の層数だけ厚みID単位で
+// 指定する。設定は localStorage (mgtkit_qty_wall_thick_layer) に保存する。
+let QTY_WALL_THICKNESSES = null;
+
+function qtyWallThickLayerStore() {
+  try {
+    return JSON.parse(localStorage.getItem('mgtkit_qty_wall_thick_layer')) || {};
+  } catch (e) { return {}; }
+}
+
+async function loadQtyWallThicknesses() {
+  setMsg('qty_wallthick_msg', ''); $('qty_wallthick_box').innerHTML = '';
+  try {
+    const j = await api('/api/quantity_wall_thicknesses',
+      {mgt_path: $('mgt_path').value});
+    QTY_WALL_THICKNESSES = j.thicknesses || [];
+    if (!QTY_WALL_THICKNESSES.length) {
+      setMsg('qty_wallthick_msg', '配筋定義(*REBAR-WALL)のある板要素壁は' +
+        'ありませんでした。', 'msg-note');
+      return;
+    }
+    const saved = qtyWallThickLayerStore();
+    let h = '<table class="res"><thead><tr><th>厚みID</th><th>厚み(mm)</th>' +
+      '<th>壁パネル数</th><th>配筋</th></tr></thead><tbody>';
+    QTY_WALL_THICKNESSES.forEach(t => {
+      const layer = saved[t.thick_id] || 'double';
+      h += '<tr class="qtytrow" data-id="' + t.thick_id + '">' +
+        '<td>' + t.thick_id + '</td>' +
+        '<td>' + fmtNum(t.thickness_mm, 0) + '</td>' +
+        '<td>' + t.n_walls + '</td>' +
+        '<td class="rcgcell"><select id="qtyt_layer' + t.thick_id + '">' +
+        '<option value="double"' + (layer === 'double' ? ' selected' : '') +
+        '>複配筋 (両面x2)</option>' +
+        '<option value="single"' + (layer === 'single' ? ' selected' : '') +
+        '>単配筋 (片面)</option></select></td></tr>';
+    });
+    h += '</tbody></table>';
+    $('qty_wallthick_box').innerHTML = h;
+  } catch (e) { setMsg('qty_wallthick_msg', esc(e.message), 'msg-err'); }
+}
+
+function harvestQtyWallThicknesses() {
+  const out = {};
+  if (!QTY_WALL_THICKNESSES) return out;
+  const saved = qtyWallThickLayerStore();
+  document.querySelectorAll('#qty_wallthick_box tr.qtytrow').forEach(tr => {
+    const tid = tr.dataset.id;
+    const sel = $('qtyt_layer' + tid);
+    if (!sel) return;
+    out[tid] = sel.value;
+    saved[tid] = sel.value;
+  });
+  localStorage.setItem('mgtkit_qty_wall_thick_layer', JSON.stringify(saved));
+  return out;
+}
+
+// 線材壁パネル(断面名に"W"を含み配筋定義の無いRC断面)の配筋入力。
+// 断面検定タブの「配筋の無いRC断面」入力(mgtkit_rcw_settings)と符号(prefix)
+// 単位で設定を共有する (RC_SAVED/rcSavedEntry/diSelect は断面検定タブ用に
+// 定義済みのものを流用)。
+let QTY_WALL_SECTIONS = null;
+
+function qtyWallCellHtml(i, w) {
+  return '縦筋 ' + diSelect('qtyw_vdi' + i, w.v_di || 10) +
+    '@<input type="number" id="qtyw_vp' + i + '" value="' +
+    (w.v_pitch || 200) + '" style="width:60px"> ' +
+    '横筋 ' + diSelect('qtyw_hdi' + i, w.h_di || 10) +
+    '@<input type="number" id="qtyw_hp' + i + '" value="' +
+    (w.h_pitch || 200) + '" style="width:60px"> ' +
+    '<select id="qtyw_sd' + i + '">' +
+    '<option value="2"' + ((w.sd || 2) === 2 ? ' selected' : '') +
+    '>ダブル配筋</option>' +
+    '<option value="1"' + (w.sd === 1 ? ' selected' : '') +
+    '>シングル配筋</option></select> ' +
+    '端部片側 <input type="number" id="qtyw_nr' + i + '" value="' +
+    (w.num_rebar || 0) + '" style="width:50px">本';
+}
+
+async function loadQtyWallSections() {
+  setMsg('qty_wallsec_msg', '', ''); $('qty_wallsec_box').innerHTML = '';
+  try {
+    const j = await api('/api/quantity_wall_sections',
+      {mgt_path: $('mgt_path').value});
+    QTY_WALL_SECTIONS = j.sections || [];
+    RC_SAVED = rcwStore();  // 断面検定タブの保存設定を読み込む(未保存なら空)
+    if (!QTY_WALL_SECTIONS.length) {
+      setMsg('qty_wallsec_msg', '断面名に"W"を含み配筋定義(*REBAR-BEAM/' +
+        'COLUMN)の無いRC断面はありませんでした。', 'msg-note');
+      return;
+    }
+    const prefixes = [...new Set(QTY_WALL_SECTIONS.map(s => s.prefix))];
+    let h = '<table class="res"><thead><tr><th>符号</th><th>断面数</th>' +
+      '<th>配筋</th></tr></thead><tbody>';
+    prefixes.forEach((pf, i) => {
+      const secs = QTY_WALL_SECTIONS.filter(s => s.prefix === pf);
+      const s = rcSavedEntry(pf);
+      h += '<tr class="qtywrow" data-idx="' + i + '" data-prefix="' +
+        esc(pf) + '"><td class="name">' + esc(pf) +
+        '<span class="cell-ele">' +
+        secs.map(x => esc(x.name)).join(', ') + '</span></td>' +
+        '<td>' + secs.length + '</td>' +
+        '<td class="rcgcell" id="qtyw_cell' + i + '">' +
+        qtyWallCellHtml(i, s.wall) + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    $('qty_wallsec_box').innerHTML = h;
+  } catch (e) { setMsg('qty_wallsec_msg', esc(e.message), 'msg-err'); }
+}
+
+// 表の入力値を断面番号ごとの配筋設定へ展開し、断面検定タブとの共有設定
+// (mgtkit_rcw_settings) にも保存する
+function harvestQtyWallSections() {
+  const out = {};
+  if (!QTY_WALL_SECTIONS) return out;
+  document.querySelectorAll('#qty_wallsec_box tr.qtywrow').forEach(tr => {
+    const i = +tr.dataset.idx;
+    const pf = tr.dataset.prefix;
+    if (!$('qtyw_vdi' + i)) return;
+    const sd = +$('qtyw_sd' + i).value;
+    const w = {v_dia: +$('qtyw_vdi' + i).value, v_pitch: +$('qtyw_vp' + i).value,
+              h_dia: +$('qtyw_hdi' + i).value, h_pitch: +$('qtyw_hp' + i).value,
+              layer: (sd === 1 ? 'single' : 'double'),
+              edge_num: +$('qtyw_nr' + i).value};
+    const s = rcSavedEntry(pf);
+    s.kind = 'wall';
+    s.wall = Object.assign({}, s.wall, {
+      v_di: w.v_dia, v_pitch: w.v_pitch, h_di: w.h_dia, h_pitch: w.h_pitch,
+      sd: sd, num_rebar: w.edge_num});
+    QTY_WALL_SECTIONS.filter(x => x.prefix === pf).forEach(x => {
+      out[x.no] = w;
+    });
+  });
+  localStorage.setItem('mgtkit_rcw_settings', JSON.stringify(RC_SAVED));
+  return out;
+}
+
+// 板要素スラブ(PLATE)の厚みごとX/Y方向筋・上端筋のみ/上下端筋入力。
+// 設定は localStorage (mgtkit_qty_slab_thick) に厚みID単位で保存する。
+let QTY_SLAB_THICKNESSES = null;
+
+function qtySlabThickStore() {
+  try {
+    return JSON.parse(localStorage.getItem('mgtkit_qty_slab_thick')) || {};
+  } catch (e) { return {}; }
+}
+
+// 配筋一段分(X/Y方向筋)の入力HTML。id接頭辞(例 'qtys_top9011_')を渡す
+function qtySlabDirHtml(prefix, w) {
+  w = w || {};
+  return 'X方向 ' + diSelect(prefix + 'xdi', w.x_dia || 10) +
+    '@<input type="number" id="' + prefix + 'xp" value="' +
+    (w.x_pitch || 200) + '" style="width:60px"> ' +
+    'Y方向 ' + diSelect(prefix + 'ydi', w.y_dia || 10) +
+    '@<input type="number" id="' + prefix + 'yp" value="' +
+    (w.y_pitch || 200) + '" style="width:60px">';
+}
+
+function qtySlabCellHtml(tid, s) {
+  const layer = s.layer || 'double';
+  const isDouble = layer === 'double';
+  return '<select id="qtys_layer' + tid + '" onchange="qtySlabLayerChange(' +
+    tid + ')">' +
+    '<option value="double"' + (isDouble ? ' selected' : '') +
+    '>ダブル配筋</option>' +
+    '<option value="single"' + (!isDouble ? ' selected' : '') +
+    '>シングル配筋</option></select>' +
+    '<div><span id="qtys_toplabel' + tid + '">' +
+    (isDouble ? '上端筋' : '配筋') + '</span> ' +
+    qtySlabDirHtml('qtys_top' + tid + '_', s.top) + '</div>' +
+    '<div id="qtys_bottomrow' + tid + '"' +
+    (isDouble ? '' : ' style="display:none"') + '>下端筋 ' +
+    qtySlabDirHtml('qtys_bottom' + tid + '_', s.bottom) + '</div>';
+}
+
+function qtySlabLayerChange(tid) {
+  const isDouble = $('qtys_layer' + tid).value === 'double';
+  $('qtys_bottomrow' + tid).style.display = isDouble ? '' : 'none';
+  $('qtys_toplabel' + tid).textContent = isDouble ? '上端筋' : '配筋';
+}
+
+async function loadQtySlabThicknesses() {
+  setMsg('qty_slabthick_msg', ''); $('qty_slabthick_box').innerHTML = '';
+  try {
+    const j = await api('/api/quantity_slab_thicknesses',
+      {mgt_path: $('mgt_path').value});
+    QTY_SLAB_THICKNESSES = j.thicknesses || [];
+    if (!QTY_SLAB_THICKNESSES.length) {
+      setMsg('qty_slabthick_msg', 'RC材料のスラブ用板要素はありませんでした。',
+        'msg-note');
+      return;
+    }
+    const saved = qtySlabThickStore();
+    let h = '<table class="res"><thead><tr><th>厚みID</th><th>名称</th>' +
+      '<th>厚み(mm)</th><th>要素数</th><th>面積(m2)</th><th>配筋</th>' +
+      '</tr></thead><tbody>';
+    QTY_SLAB_THICKNESSES.forEach(t => {
+      const s = saved[t.thick_id] || {};
+      h += '<tr class="qtystrow" data-id="' + t.thick_id + '">' +
+        '<td>' + t.thick_id + '</td>' +
+        '<td>' + esc(t.name || '') + '</td>' +
+        '<td>' + fmtNum(t.thickness_mm, 0) + '</td>' +
+        '<td>' + t.n_elements + '</td>' +
+        '<td>' + fmtNum(t.area_m2, 1) + '</td>' +
+        '<td class="rcgcell">' + qtySlabCellHtml(t.thick_id, s) + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    $('qty_slabthick_box').innerHTML = h;
+  } catch (e) { setMsg('qty_slabthick_msg', esc(e.message), 'msg-err'); }
+}
+
+function harvestQtySlabThicknesses() {
+  const out = {};
+  if (!QTY_SLAB_THICKNESSES) return out;
+  const saved = qtySlabThickStore();
+  const rd = prefix => ({x_dia: +$(prefix + 'xdi').value,
+                         x_pitch: +$(prefix + 'xp').value,
+                         y_dia: +$(prefix + 'ydi').value,
+                         y_pitch: +$(prefix + 'yp').value});
+  document.querySelectorAll('#qty_slabthick_box tr.qtystrow').forEach(tr => {
+    const tid = tr.dataset.id;
+    if (!$('qtys_layer' + tid)) return;
+    const layer = $('qtys_layer' + tid).value;
+    const cfg = {layer: layer, top: rd('qtys_top' + tid + '_')};
+    if (layer === 'double') cfg.bottom = rd('qtys_bottom' + tid + '_');
+    out[tid] = cfg;
+    saved[tid] = cfg;
+  });
+  localStorage.setItem('mgtkit_qty_slab_thick', JSON.stringify(saved));
+  return out;
+}
+
+async function runQuantity() {
+  setMsg('qty_msg', '', ''); $('qty_out').innerHTML = '';
+  try {
+    const j = await api('/api/quantity', {
+      mgt_path: $('mgt_path').value,
+      beam_cover: +$('qty_cover_beam').value,
+      column_cover: +$('qty_cover_column').value,
+      wall_cover: +$('qty_cover_wall').value,
+      wall_layer_by_thickness: harvestQtyWallThicknesses(),
+      wall_line_rebar: harvestQtyWallSections(),
+      slab_rebar_by_thickness: harvestQtySlabThicknesses()});
+
+    let h = '<table class="res"><thead><tr><th>径</th>' +
+      '<th>梁(kg)</th><th>柱(kg)</th><th>壁(kg)</th><th>スラブ(kg)</th>' +
+      '<th>合計(kg)</th><th>合計(m)</th></tr></thead><tbody>';
+    let tKg = 0, tM = 0;
+    j.diameters.forEach(r => {
+      h += '<tr><td>D' + r.dia + '</td>' +
+        '<td>' + fmtNum(r.beam_kg, 1) + '</td>' +
+        '<td>' + fmtNum(r.column_kg, 1) + '</td>' +
+        '<td>' + fmtNum(r.wall_kg, 1) + '</td>' +
+        '<td>' + fmtNum(r.slab_kg, 1) + '</td>' +
+        '<td><b>' + fmtNum(r.total_kg, 1) + '</b></td>' +
+        '<td>' + fmtNum(r.total_m, 1) + '</td></tr>';
+      tKg += r.total_kg; tM += r.total_m;
+    });
+    h += '<tr><td class="name"><b>合計</b></td><td></td><td></td><td></td>' +
+      '<td></td><td><b>' + fmtNum(tKg, 1) + '</b></td><td>' + fmtNum(tM, 1) +
+      '</td></tr></tbody></table>';
+
+    h += '<table class="res" style="margin-top:10px"><thead><tr>' +
+      '<th>部材</th><th>コンクリート体積(m3)</th><th>集計対象要素数</th>' +
+      '</tr></thead><tbody>' +
+      '<tr><td class="name">梁</td><td>' + fmtNum(j.concrete_m3.beam, 3) +
+      '</td><td>' + j.n_beam + '</td></tr>' +
+      '<tr><td class="name">柱</td><td>' + fmtNum(j.concrete_m3.column, 3) +
+      '</td><td>' + j.n_column + '</td></tr>' +
+      '<tr><td class="name">壁</td><td>' + fmtNum(j.concrete_m3.wall, 3) +
+      '</td><td>' + j.n_wall + '</td></tr>' +
+      '<tr><td class="name">スラブ</td><td>' + fmtNum(j.concrete_m3.slab, 3) +
+      '</td><td>' + j.n_slab + '</td></tr>' +
+      '<tr><td class="name"><b>合計</b></td><td><b>' +
+      fmtNum(j.concrete_m3.total, 3) + '</b></td><td></td></tr>' +
+      '</tbody></table>';
+
+    $('qty_out').innerHTML = h;
+    setMsg('qty_msg', '集計しました。 ' +
+      '<a href="' + j.xlsx.url + '">' + esc(j.xlsx.name) + ' をダウンロード</a>' +
+      openFolderBtn(j.out_dir), 'msg-ok');
+    if (j.skipped && j.skipped.length) {
+      const lines = j.skipped.map(s =>
+        (s.ele !== undefined ? '要素' + s.ele : '壁ID' + s.wall_id) +
+        ' (断面' + (s.sec_no || '') + '): ' + s.reason);
+      $('qty_msg').innerHTML += notesHtml(lines);
+    }
+  } catch (e) { setMsg('qty_msg', esc(e.message), 'msg-err'); }
+}

@@ -12,7 +12,7 @@ import logging
 import os
 import stat
 
-from . import paths
+from . import paths, safeio
 
 log = logging.getLogger(__name__)
 
@@ -44,16 +44,12 @@ def save_settings(name, api_key, config=None):
     if not api_key.startswith('sk-ant-'):
         raise ValueError('API キーの形式が正しくありません '
                          '(sk-ant- で始まる文字列を入力してください)。')
-    path = settings_path(config)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump({'name': name, 'anthropic_api_key': api_key}, f,
-                  ensure_ascii=False, indent=2)
-    try:
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 本人のみ読み書き
-    except OSError:
-        pass  # Windows では NTFS ACL に従う
-    return path
+    # 一時ファイル → 差し替えで保存する (書き込み中に落ちても API キーを
+    # 失わない)。本人のみ読み書き可の権限は一時ファイルを作る瞬間に当たる
+    return safeio.write_json(
+        settings_path(config),
+        {'name': name, 'anthropic_api_key': api_key}, indent=2,
+        mode=stat.S_IRUSR | stat.S_IWUSR)
 
 
 def api_key(config=None):
