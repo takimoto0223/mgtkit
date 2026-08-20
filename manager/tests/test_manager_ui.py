@@ -572,3 +572,54 @@ def test_the_running_beta_is_remembered_after_a_real_launch(monkeypatch):
     assert remembered == [_TRY_BETA['tag']]
     texts = _walk_texts(page.added[1], [])
     assert any('を起動しました' in t for t in texts)
+
+
+def test_launch_waits_for_an_install_instead_of_turning_the_user_away(
+        monkeypatch):
+    """裏で取り込み中に「起動」を押しても、断らずに待って続けること.
+
+    以前は「取り込み中です。完了までお待ちください。」と出して戻って
+    いたが、終わったことを誰も知らせないため、押した人は手を止めた
+    ままになる (画面は「起動」を押して待つよう案内している)。
+    """
+    from manager import updater
+
+    page, launched = _page_with_a_downloaded_update(monkeypatch)
+    waited = []
+    monkeypatch.setattr(updater, 'installing', lambda: True)
+    monkeypatch.setattr(
+        updater, 'install_if_needed',
+        lambda *a, **k: (waited.append(True), False)[1])
+
+    _launch_button(page).on_click(None)
+    _dialog_button(page.dialogs[-1], 'アプリを開く').on_click(None)
+    assert launched                       # 断られず、最後まで進んだ
+    texts = _walk_texts(page.added[1], [])
+    assert not any('完了までお待ちください' in t for t in texts)
+
+
+def test_auto_update_gives_up_while_an_install_is_running(monkeypatch):
+    """定期の自動更新は待たずに諦める (次の機会に回せばよい)."""
+    from manager import main as manager_main, updater
+
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NoThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+    monkeypatch.setattr(updater, 'installing', lambda: True)
+    monkeypatch.setattr(
+        updater, 'try_install_lock',
+        lambda: pytest.fail('取り込み中なのに錠を取りにいった'))
+    monkeypatch.setattr(
+        updater, 'install_release',
+        lambda *a, **k: pytest.fail('取り込み中なのに重ねて取り込んだ'))
+    monkeypatch.setattr(manager_main.updater, 'check_update',
+                        lambda *a, **k: {'has_update': True,
+                                         'latest': {'tag': 'v1.9',
+                                                    'prerelease': False,
+                                                    'notes': ''}})
+    monkeypatch.setattr(manager_main.launcher, 'port_in_use',
+                        lambda *a, **k: False)
+    page = _FakePage()
+    manager_main.main(page)               # 起動時の自動更新が走る
+
