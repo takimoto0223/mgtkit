@@ -63,9 +63,13 @@ def _replace_dir(src, install_dir, work_parent=None):
     別ドライブを渡されたときは既定に戻す。
     """
     parent = os.path.dirname(install_dir) or '.'
+    # 置き場所そのものを先に作る (初回のβ版などまだ無いことがある)。
+    # 作業フォルダを別の場所に作るときも、ここは必ず要る (付け替え先の
+    # 親が無いと os.rename が失敗する)
+    os.makedirs(parent, exist_ok=True)
     if work_parent and _same_drive(work_parent, install_dir):
         parent = work_parent
-    os.makedirs(parent, exist_ok=True)
+        os.makedirs(parent, exist_ok=True)
     work = tempfile.mkdtemp(prefix=SWAP_PREFIX, dir=parent)
     staging = os.path.join(work, 'new')
     backup = os.path.join(work, 'old')
@@ -76,6 +80,7 @@ def _replace_dir(src, install_dir, work_parent=None):
                 os.rename(install_dir, backup)
             os.rename(staging, install_dir)
         except OSError:
+            log.exception('フォルダの入れ替えに失敗しました: %s', install_dir)
             if not os.path.isdir(install_dir) and os.path.isdir(backup):
                 try:
                     os.rename(backup, install_dir)
