@@ -582,7 +582,7 @@ def test_launch_waits_for_an_install_instead_of_turning_the_user_away(
     いたが、終わったことを誰も知らせないため、押した人は手を止めた
     ままになる (画面は「起動」を押して待つよう案内している)。
     """
-    from manager import main as manager_main, updater
+    from manager import updater
 
     page, launched = _page_with_a_downloaded_update(monkeypatch)
     waited = []
