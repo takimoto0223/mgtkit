@@ -27,7 +27,8 @@ def app_url(port):
     return 'http://127.0.0.1:%d/' % port
 
 
-def launch_app(instance_dir, port, channel='stable', python=None):
+def launch_app(instance_dir, port, channel='stable', python=None,
+               config=None):
     """インストール済み mgtkit を起動しブラウザを開く.
 
     instance_dir は stable/ や beta/<version>/ のインスタンスフォルダ
@@ -48,7 +49,7 @@ def launch_app(instance_dir, port, channel='stable', python=None):
     env = dict(os.environ)
     env['MGTKIT_PORT'] = str(port)
     env['MGTKIT_CHANNEL'] = channel
-    env['MGTKIT_UPLOAD_DIR'] = upload_tmp_dir(instance_dir)
+    env['MGTKIT_UPLOAD_DIR'] = upload_tmp_dir(instance_dir, channel, config)
     # ブラウザは app.py 自身が 1.2 秒後に開く (MGTKIT_NO_BROWSER は設定しない)
 
     kw = {}

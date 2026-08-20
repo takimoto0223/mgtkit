@@ -15,6 +15,37 @@ def local_version_info(instance_dir):
     return versions.read_version_json(paths.app_dir(instance_dir))
 
 
+def prune_betas(keep_tags, config=None):
+    """一覧に残っていないβ版のフォルダを片付ける.
+
+    β版は試すたびに `<install_root>/beta/<版>/` が増える。正式版に
+    なったか取り下げられた版は GitHub 側でも prerelease が削除される
+    (.github/workflows/reject-cleanup.yml) ため、手元にだけ残っても
+    「β版を試す」から二度と起動できないゴミになる。判断の基準を
+    GitHub 側と同じ「いま一覧にあるβ版だけ残す」に揃える。
+
+    keep_tags: 残すβ版の版名 (いま一覧にある prerelease)。
+    戻り値: 片付けた版名の一覧 (使用中などで消せなかったものは含めない)。
+    """
+    root = paths.beta_root(config)
+    keep = set(keep_tags or ())
+    removed = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return removed          # まだ一度もβ版を試していない
+    for name in names:
+        path = os.path.join(root, name)
+        if name in keep or not os.path.isdir(path):
+            continue
+        if not safeio.rmtree(path):
+            # Windows では起動中のフォルダは消せない。次の機会に回す
+            log.warning('β版 %s を片付けられませんでした', name)
+            continue
+        removed.append(name)
+    return removed
+
+
 def check_update(repo, instance_dir, releases=None):
     """更新確認。戻り値: dict(local, latest, has_update, releases).
 

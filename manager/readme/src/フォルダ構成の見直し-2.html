@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<!--
+  mgtkit フォルダ構成の見直し 2 枚目 (A4 縦。図の補足)
+
+  1 枚目 (A3 横) は フォルダ構成の見直し.html。Chromium は 1 つの PDF に
+  複数の用紙サイズを混ぜられないため、別々に PDF 化してから
+  pdfunite でつなぐ:
+
+    python make_a3.py フォルダ構成の見直し.html   p1.pdf   (420x297mm)
+    python make_a4.py フォルダ構成の見直し-2.html p2.pdf   (A4 縦)
+    pdfunite p1.pdf p2.pdf ../フォルダ構成の見直し.pdf
+
+  - 用語・色は 1 枚目と同じ (群の番号と記号 ◎ △ × を必ず添える)
+  - パスは日本語 Windows の見え方 (円記号) に揃うよう和文等幅を先に置く
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>mgtkit フォルダ構成の見直し (案) 2/2</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 210mm; height: 297mm; padding: 13mm 15mm 11mm;
+    font-family: 'IPAPGothic', sans-serif;
+    color: #1f2937; font-size: 9.4pt; line-height: 1.65;
+    background: #ffffff;
+  }
+  .head { display: flex; align-items: baseline; gap: 3mm;
+          margin-bottom: 3mm; }
+  .mark { background: #16283c; color: #ffffff; border-radius: 4px;
+          padding: 1mm 2.6mm; display: inline-flex; gap: 2mm;
+          align-items: baseline; flex: none; }
+  .mark .logo { font-weight: bold; font-size: 9pt; }
+  .mark .t { color: #9fb3c8; font-size: 7pt; }
+  h1 { color: #1e3a5f; font-size: 12.5pt; margin: 0; }
+  .pg { margin-left: auto; color: #9ca3af; font-size: 8.5pt; flex: none; }
+  h2 { color: #1e3a5f; font-size: 11pt; margin: 5mm 0 2mm;
+       padding-bottom: 1.2mm; border-bottom: 2px solid #1e3a5f; }
+  p { margin: 1.6mm 0; }
+  code { font-family: 'IPAGothic', monospace; font-size: 8.6pt;
+         background: #f1f3f5; border-radius: 2px; padding: 0 1mm; }
+
+  table.mv { border-collapse: collapse; width: 100%; font-size: 8.4pt; }
+  table.mv th, table.mv td { border: 1px solid #d1d5db;
+    padding: 1.2mm 1.6mm; text-align: left; vertical-align: top;
+    line-height: 1.45; }
+  table.mv th { background: #f3f4f6; color: #374151; }
+  /* 「なぜ」が狭いと語中で折り返すので、パス列を詰めて右へ配る */
+  table.mv td.c, table.mv th.c { width: 17%; font-weight: bold; }
+  table.mv td.p, table.mv th.p { width: 25%; }
+  .t1 { color: #17456f; } .t2 { color: #1c6334; }
+  .t3 { color: #8f2d2d; } .t4 { color: #414c5c; }
+
+  .rule { border: 1px solid #e0a83c; background: #fefaed;
+          border-left: 4px solid #e0a83c; border-radius: 0 5px 5px 0;
+          padding: 2.6mm 3.2mm; margin: 2mm 0 0; }
+  .rule .h { font-weight: bold; color: #92400e; display: block;
+             margin-bottom: 1mm; font-size: 10.5pt; }
+  .card { border: 1px solid #e5e7eb; border-radius: 5px;
+          padding: 2.4mm 3mm; margin-top: 2mm; font-size: 9pt;
+          line-height: 1.6; }
+  .card .only { margin: 0 0 1.4mm; }
+  .card ul { margin: 1mm 0 0; padding-left: 5mm; }
+  .card li { margin: 0.8mm 0; }
+  .muted { color: #6b7280; }
+  .ask { border: 1px solid #5b8cc0; background: #f2f7fc;
+         border-left: 4px solid #5b8cc0; border-radius: 0 5px 5px 0;
+         padding: 2.6mm 3.2mm; margin-top: 2mm; }
+  .ask .h { font-weight: bold; color: #17456f; display: block;
+            margin-bottom: 1mm; font-size: 10.5pt; }
+  .ask p { margin: 1mm 0 0; }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <span class="mark"><span class="logo">mgtkit</span><span class="t">アプリマネージャー</span></span>
+  <h1>変更するにあたってのお願い事</h1>
+  <span class="pg">2 / 2</span>
+</div>
+
+<p>1 枚目の図のとおりフォルダ構成を整理したいと考えています。
+ふだんの操作 (起動・更新・β版の確認・提出) は変わりませんが、
+切り替えのときに<b>一度だけ</b>作業をお願いすることになります。</p>
+
+<h2>切り替えでお願いすること (見込み)</h2>
+
+<div class="card">
+  <p class="only"><b>お願いするのは 1 つだけです。</b>新しく配布する <code>setup.bat</code> を
+  もう一度ダブルクリックするだけです (5 分程度の見込みです)。あとは
+  マネージャーが引っ越しから後片付けまで自動で行います。
+  (新規でセットアップする方も同じ <code>setup.bat</code> を使用できます。)</p>
+  <ul>
+    <li>お名前・API キー・利用量は<b>そのまま引き継ぎます</b>。入力し直しは不要です。</li>
+    <li><b>以前のフォルダ (<code>C:\Users\(自分)\mgtkit\</code> と
+      <code>C:\Users\(自分)\AppData\Local\mgtkit\</code>) はご自分で消さないでください。</b>
+      引き継ぎに使います。済んだあとにマネージャーが自動で片付けます。</li>
+    <li>計算結果 (<code>mgtkit_out</code>) は今までどおり mgt ファイルと同じ場所です。<b>移動しません。</b></li>
+    <li>使い方ガイドに書かれているフォルダの場所 (1・2・4・8 章と付録) は、切り替えにあわせて改訂します。</li>
+  </ul>
+</div>
+
+<div class="ask">
+  <span class="h">ご意見のお願い</span>
+  <p>プログラムの置き場は <b><code>C:\mgtkit_appmanager\</code> (C ドライブの直下)</b>
+  にする案です。ふだん使うフォルダから離れ、パスも短くなります。
+  ご意見があればお知らせください。置き場所は今なら変えられます。</p>
+  <p class="muted">そのほか 1 枚目の図についてお気づきのことがあれば、あわせてお知らせください。
+  「特に問題なし」のご返信も助かります。</p>
+</div>
+
+</body>
+</html>

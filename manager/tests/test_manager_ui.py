@@ -91,10 +91,27 @@ def test_ui_updates_from_background_go_through_the_loop(monkeypatch):
     assert marker not in page.dialogs      # 開いて閉じたので残らない
 
 
+class _NoThread:
+    """裏の処理を走らせない (走る時機で結果が変わるのを断つ)."""
+
+    def __init__(self, target=None, daemon=None):
+        pass
+
+    def start(self):
+        pass
+
+
 def test_ui_updates_on_the_page_loop_are_direct(monkeypatch):
     """画面のループ上 (イベントハンドラ) からの更新は載せ替えないこと.
 
     毎回載せ替えると順序が狂い、押した瞬間の反応も 1 拍遅れる。
+
+    裏の処理は走らせない。起動時の確認 (新しい版・参加状態) は裏
+    スレッドで動き、終わったときに画面を更新する。その更新は
+    「ループ上ではない」ので run_task に載る = ここで数えている
+    tasks が 1 増える。いつ終わるかは gh の応答と CI の混み具合しだい
+    なので、走らせたままだと計測の窓に入るかどうかが運になり、
+    負荷の高いときだけ落ちるテストになる (実際に落ちた)。
     """
     import asyncio
     import types
@@ -102,6 +119,8 @@ def test_ui_updates_on_the_page_loop_are_direct(monkeypatch):
     from manager import main as manager_main
     monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
                         lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NoThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
     page = _FakePage()
     manager_main.main(page)
     loop = asyncio.new_event_loop()
@@ -124,7 +143,7 @@ def _walk_texts(control, out):
     value = getattr(control, 'value', None)
     if isinstance(value, str):
         out.append(value)
-    for name in ('content', 'label'):
+    for name in ('content', 'label', 'title'):
         child = getattr(control, name, None)
         if isinstance(child, str):
             out.append(child)
@@ -204,3 +223,222 @@ def test_opening_the_review_tab_refreshes_the_list(monkeypatch):
     page.added[1].on_change(types.SimpleNamespace(
         control=types.SimpleNamespace(selected_index=1)))
     assert called, '承認待ち一覧の取得が呼ばれていない'
+
+
+def _walk_controls(control, out):
+    """コントロール木を平らに集める (ボタンを名前で探すため)."""
+    out.append(control)
+    for name in ('content', 'label'):
+        child = getattr(control, name, None)
+        if child is not None and not isinstance(child, str):
+            _walk_controls(child, out)
+    for name in ('controls', 'tabs', 'actions'):
+        for child in getattr(control, name, None) or []:
+            _walk_controls(child, out)
+    return out
+
+
+def _dialog_button(dialog, label):
+    """ダイアログの操作ボタンを名前で取り出す."""
+    for c in dialog.actions or []:
+        if getattr(c, 'content', None) == label:
+            return c
+    raise AssertionError('「%s」ボタンが見つかりません' % label)
+
+
+def _launch_button(page):
+    for c in _walk_controls(page.added[1], []):
+        if getattr(c, 'content', None) == '起動' and getattr(c, 'on_click',
+                                                            None):
+            return c
+    raise AssertionError('「起動」ボタンが見つかりません')
+
+
+class _NowThread:
+    """裏の処理をその場で最後まで走らせる (取り込みの流れを見るため)."""
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+class _NoTimer:
+    """定期確認の予約はテストでは動かさない."""
+
+    def __init__(self, *a, **k):
+        self.daemon = False
+
+    def start(self):
+        pass
+
+
+def _page_with_a_downloaded_update(monkeypatch):
+    """更新版を自動で取り込み終えた直後の画面を作る (取得・起動は偽物).
+
+    戻り値: (page, launched)。launched にはアプリを開いた回数が入る。
+    """
+    from manager import main as manager_main
+
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+
+    snap = {'pending': [], 'releases': [], 'me': 'yamada-taro', 'merged': []}
+    monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviews, 'fork_memo', lambda *a, **k: {})
+    monkeypatch.setattr(manager_main.reviewcache, 'put',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviewcache, 'load_from_disk',
+                        lambda *a, **k: None)
+
+    latest = {'tag': 'v1.2', 'prerelease': False, 'notes': ''}
+    installed, launched = [], []
+    monkeypatch.setattr(manager_main.updater, 'check_update',
+                        lambda *a, **k: {'has_update': True,
+                                         'latest': latest})
+    monkeypatch.setattr(manager_main.updater, 'install_release',
+                        lambda *a, **k: installed.append(latest['tag']))
+    monkeypatch.setattr(manager_main.updater, 'local_version_info',
+                        lambda *a, **k: {'version': 'v1.2',
+                                         'distributed_at': '2026-08-18'})
+    monkeypatch.setattr(manager_main.launcher, 'port_in_use',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(
+        manager_main.launcher, 'launch_app',
+        lambda *a, **k: (launched.append(True),
+                         (None, 'http://127.0.0.1:8765/'))[1])
+
+    page = _FakePage()
+    manager_main.main(page)
+    assert installed == ['v1.2']          # 起動時に自動で取り込まれた
+    return page, launched
+
+
+def test_launch_after_an_update_tells_where_the_new_version_landed(
+        monkeypatch):
+    """更新版が届いたあと最初の「起動」で取り込み先を知らせること.
+
+    黄色いタグだけでは見落とすという管理者の指摘への対応。知らせを
+    読み終えて (ボタンを押して) からアプリを開き、同じ版で二度は
+    出さない。
+    """
+    from manager import paths
+
+    page, launched = _page_with_a_downloaded_update(monkeypatch)
+    before = len(page.dialogs)            # 初回登録ダイアログの分
+
+    _launch_button(page).on_click(None)
+    assert len(page.dialogs) == before + 1
+    assert not launched                   # 読み終えるまでブラウザは開かない
+    told = ' '.join(_walk_texts(page.dialogs[-1], []))
+    assert 'ダウンロード' in told
+    assert 'v1.2' in told
+    assert paths.app_dir(paths.stable_dir(paths.load_config())) in told
+
+    _dialog_button(page.dialogs[-1], 'アプリを開く').on_click(None)
+    assert launched                       # 読み終えてから開く
+    assert len(page.dialogs) == before     # 閉じてから札を下ろす
+
+    _launch_button(page).on_click(None)
+    assert len(page.dialogs) == before     # 同じ版で二度は出さない
+    assert len(launched) == 2
+
+
+def test_closing_the_update_notice_leaves_the_launch_button_usable(
+        monkeypatch):
+    """知らせをボタン以外で閉じても「起動」が押せなくならないこと.
+
+    閉じ方によっては (Esc など) ボタンが無効のまま固まり、マネージャーを
+    開き直すまで起動できなくなる。そのときは知らせを未読のまま残し、
+    次の「起動」でもう一度出す。
+    """
+    page, launched = _page_with_a_downloaded_update(monkeypatch)
+    before = len(page.dialogs)
+    button = _launch_button(page)
+
+    button.on_click(None)
+    dialog = page.dialogs[-1]
+    assert button.disabled                 # 知らせを出しているあいだは止める
+
+    page.pop_dialog()                      # ボタンを押さずに閉じられた
+    dialog.on_dismiss(None)
+    assert not button.disabled             # 押せる状態に戻る
+    assert not launched
+
+    button.on_click(None)                  # 未読なのでもう一度出す
+    assert len(page.dialogs) == before + 1
+    _dialog_button(page.dialogs[-1], 'アプリを開く').on_click(None)
+    assert launched
+
+
+def _open_review_tab(page):
+    """β版の確認と承認タブを開く (最新の取得が走る)."""
+    import types
+    page.added[1].on_change(types.SimpleNamespace(
+        control=types.SimpleNamespace(selected_index=1)))
+
+
+def _page_with_a_review_snapshot(monkeypatch, releases):
+    """一覧の取得が成功する画面を作る。戻り値: (page, pruned, manager_main).
+
+    pruned には片付けに渡された「残すβ版」の一覧が入る。
+    """
+    from manager import main as manager_main
+
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NoThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+    page = _FakePage()
+    manager_main.main(page)
+
+    snap = {'pending': [], 'releases': releases, 'me': 'yamada-taro',
+            'merged': []}
+    monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviews, 'fork_memo', lambda *a, **k: {})
+    monkeypatch.setattr(manager_main.reviewcache, 'put',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviewcache, 'load_from_disk',
+                        lambda *a, **k: None)
+
+    pruned = []
+    monkeypatch.setattr(manager_main.updater, 'prune_betas',
+                        lambda keep, config=None: pruned.append(list(keep)))
+    # 取得はその場で最後まで走らせる (片付けが呼ばれたか見るため)
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    return page, pruned, manager_main
+
+
+_BETA = {'tag': 'v1.2-beta.2', 'prerelease': True, 'notes': '',
+         'published_at': '2026-08-18', 'assets': []}
+_STABLE = {'tag': 'v1.1', 'prerelease': False, 'notes': '',
+           'published_at': '2026-08-14', 'assets': []}
+
+
+def test_fetching_the_list_tidies_up_old_betas(monkeypatch):
+    """一覧を取り直すたびに、一覧に無いβ版の置き場を片付けること.
+
+    β版は試すたびに増える。正式版になった版は GitHub 側でも消えるため、
+    手元に残っても起動できないゴミになる。
+    """
+    page, pruned, main = _page_with_a_review_snapshot(
+        monkeypatch, [_BETA, _STABLE])
+    monkeypatch.setattr(main.launcher, 'port_in_use', lambda *a, **k: False)
+
+    _open_review_tab(page)
+    # 残すのは「いま一覧にあるβ版」だけ (正式版は対象外)
+    assert pruned == [['v1.2-beta.2']]
+
+
+def test_no_tidying_while_a_beta_is_running(monkeypatch):
+    """β版を起動しているあいだは片付けない (使用中のフォルダを消さない)."""
+    page, pruned, main = _page_with_a_review_snapshot(monkeypatch, [_BETA])
+    monkeypatch.setattr(main.launcher, 'port_in_use', lambda *a, **k: True)
+
+    _open_review_tab(page)
+    assert pruned == []

@@ -175,6 +175,45 @@ class TestCheckUpdate:
         assert r['latest']['tag'] == 'v1.2'
 
 
+class TestPruneBetas:
+    """試すたびに増えるβ版の置き場を、一覧に合わせて片付ける."""
+
+    def _install_root(self, monkeypatch, tmp_path, *versions_):
+        monkeypatch.setattr(updater.paths, 'install_root',
+                            lambda config=None: str(tmp_path))
+        for v in versions_:
+            (tmp_path / 'beta' / v / 'mgtkit').mkdir(parents=True)
+        return tmp_path / 'beta'
+
+    def test_keeps_only_the_versions_still_listed(self, monkeypatch,
+                                                  tmp_path):
+        beta = self._install_root(monkeypatch, tmp_path,
+                                  'v1.2-beta.1', 'v1.2-beta.2', 'v1.1-beta.9')
+        removed = updater.prune_betas(['v1.2-beta.2'])
+        assert removed == ['v1.1-beta.9', 'v1.2-beta.1']
+        assert [p.name for p in sorted(beta.iterdir())] == ['v1.2-beta.2']
+
+    def test_removes_everything_when_nothing_is_listed(self, monkeypatch,
+                                                       tmp_path):
+        """正式版になって一覧から消えたら、手元の置き場も残さない."""
+        beta = self._install_root(monkeypatch, tmp_path, 'v1.2-beta.1')
+        assert updater.prune_betas([]) == ['v1.2-beta.1']
+        assert list(beta.iterdir()) == []
+
+    def test_no_beta_folder_yet(self, monkeypatch, tmp_path):
+        """一度もβ版を試していない PC でも落ちないこと."""
+        monkeypatch.setattr(updater.paths, 'install_root',
+                            lambda config=None: str(tmp_path))
+        assert updater.prune_betas(['v1.2-beta.1']) == []
+
+    def test_leaves_files_alone(self, monkeypatch, tmp_path):
+        """フォルダ以外 (置かれた覚えのないファイル) には触らない."""
+        beta = self._install_root(monkeypatch, tmp_path, 'v1.2-beta.1')
+        (beta / 'メモ.txt').write_text('x', encoding='utf-8')
+        assert updater.prune_betas([]) == ['v1.2-beta.1']
+        assert (beta / 'メモ.txt').exists()
+
+
 def test_manager_main_compiles():
     # flet は CI に入れないため import はせず、構文チェックのみ行う
     src_path = os.path.join(os.path.dirname(updater.__file__), 'main.py')

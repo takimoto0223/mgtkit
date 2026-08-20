@@ -17,7 +17,7 @@ import flet as ft
 import webbrowser
 
 from . import (autofix, conflicts, diffdialog, diffview, feedback, ghcli,
-               history, historyview, launcher, localstate, paths,
+               history, historyview, launcher, localstate, migrate, paths,
                reviewcache, reviews, rocketfx, safeio, selfupdate,
                settings, submit, uiguard, updater, usage)
 from .gitcli import GitError
@@ -420,7 +420,9 @@ def main(page: ft.Page):
     # installing: 自動更新の実行中 (二重実行と起動の衝突を防ぐ) /
     # pending: アプリ起動中などで取り込めなかった新しい正式版
     # (次回「起動」時に取り込む)
-    _update_state = {'installing': False, 'pending': None}
+    # downloaded: 取り込み済みでまだ本人に知らせていない版 (次の「起動」で
+    # ダイアログを出す)
+    _update_state = {'installing': False, 'pending': None, 'downloaded': None}
 
     # 空の案内 Text が行として残ると余白がガタつくため、描画のたびに
     # 空なら行ごと畳む (起動タブの案内は設定箇所が多いため一括処理)
@@ -518,11 +520,77 @@ def main(page: ft.Page):
         t1_update_tag.content.value = ('アプリを %s に更新しました。'
                                        'このまま「起動」してお使い'
                                        'いただけます。' % release['tag'])
+        _update_state['downloaded'] = release['tag']
         t1_update_tag.visible = True
         t1_preparing_tag.visible = False
         set_badge(launch_badge, 0)
         t1_notice.value = ''
         _refresh_current_notes()
+        page.update()
+
+    def _notify_downloaded(then_open):
+        """届いた更新版を、アプリを開く前に知らせる (管理者指示 2026-08).
+
+        黄色いタグだけでは見落とす人がいる。かといって知らせたそばから
+        ブラウザを前面に出すと、タグもダイアログもその陰に隠れて
+        「出したことにして消える」ことになる。そこで:
+
+        - まず版と保存先を出し、「アプリを開く」を押してから開く
+        - 札を下ろすのは**閉じたとき** (読まれてから消費する)。読まずに
+          隠れて消えることがなく、同じ版で二度も出ない
+        - 同じことを二度言わないよう、黄色いタグはここで畳む
+
+        then_open: 読み終えたあとに続ける処理 (アプリを開く)。
+        知らせるものが無ければそのまま呼ぶ。
+        """
+        tag = _update_state['downloaded']
+        if not tag:
+            then_open()
+            return
+
+        opened = {'done': False}   # 連打で二重に開かないための札
+
+        def on_open(_):
+            if opened['done']:
+                return
+            opened['done'] = True
+            _update_state['downloaded'] = None   # 読まれてから消す
+            page.pop_dialog()
+            t1_status.value = 'アプリを開いています...'
+            page.update()
+            run_bg(then_open)   # 開くのは時間がかかるので裏で
+
+        def on_dismiss(_):
+            """ボタン以外で閉じられたとき (Esc など) の後始末.
+
+            知らせは未読のまま (札は下ろさない) にして次の「起動」で
+            もう一度出し、押せる状態へ戻す。ここを戻さないと「起動」が
+            無効のまま固まり、マネージャーを開き直すまで起動できない。
+            """
+            if opened['done']:
+                return
+            t1_status.value = ''
+            t1_launch_btn.disabled = False
+            page.update()
+
+        t1_update_tag.visible = False
+        page.show_dialog(ft.AlertDialog(
+            modal=True, on_dismiss=on_dismiss,
+            title=ft.Text('更新版が自動でダウンロードされました'),
+            content=ft.Column([
+                ft.Text('最新の正式版 %s が、この PC の次のフォルダに'
+                        'ダウンロードされています。' % tag, size=13),
+                ft.Container(
+                    bgcolor='#f5f7fa', border_radius=6,
+                    padding=ft.Padding.symmetric(vertical=8, horizontal=10),
+                    content=ft.Text(paths.app_dir(stable), size=12,
+                                    selectable=True)),
+                ft.Text('ふだんの作業でこのフォルダを開く必要はありません。',
+                        size=12, color='#6b7280'),
+            ], tight=True, width=440, spacing=8),
+            actions=[ft.FilledButton('アプリを開く', on_click=on_open,
+                                     bgcolor=NAVY, color='#ffffff')],
+        ))
         page.update()
 
     def _auto_update(latest):
@@ -592,6 +660,20 @@ def main(page: ft.Page):
             def progress(msg):
                 t1_status.value = msg
                 page.update()
+
+            def open_app():
+                """ブラウザでアプリを開く (取り込みの知らせを読んだあと)."""
+                try:
+                    _, url = launcher.launch_app(
+                        stable, paths.stable_port(config), channel='stable',
+                        config=config)
+                    t1_status.value = 'ブラウザで開きます: %s' % url
+                except (launcher.LaunchError, Exception) as e:
+                    log.exception('起動に失敗しました')
+                    t1_status.value = str(e) or '起動に失敗しました。'
+                t1_launch_btn.disabled = False
+                page.update()
+
             try:
                 # 取り込み待ちの新しい正式版があれば起動前に取り込む
                 pending = _update_state['pending']
@@ -622,14 +704,14 @@ def main(page: ft.Page):
                                             on_progress=progress)
                     refresh_local_version(latest=True)
                     _refresh_current_notes()
-                _, url = launcher.launch_app(
-                    stable, paths.stable_port(config), channel='stable')
-                t1_status.value = 'ブラウザで開きます: %s' % url
             except (ghcli.GhError, launcher.LaunchError, Exception) as e:
                 log.exception('起動に失敗しました')
                 t1_status.value = str(e) or '起動に失敗しました。'
-            t1_launch_btn.disabled = False
-            page.update()
+                t1_launch_btn.disabled = False
+                page.update()
+                return
+            # 届いた更新版を先に知らせ、読み終えてからアプリを開く
+            _notify_downloaded(open_app)
         run_bg(work)
 
     def on_launch_stable(_):
@@ -1602,7 +1684,8 @@ def main(page: ft.Page):
                         updater.install_release(repo, release, beta,
                                                 on_progress=progress)
                     _, url = launcher.launch_app(
-                        beta, paths.beta_port(config), channel='beta')
+                        beta, paths.beta_port(config), channel='beta',
+                        config=config)
                     t5_status.value = ('β版 %s を起動しました (安定版とは'
                                        '別画面・別データ): %s'
                                        % (release['tag'], url))
@@ -2839,7 +2922,29 @@ def main(page: ft.Page):
         # 追い越されて捨てられた取得結果では先読みしない
         if data is not None:
             _prefetch_diffs(data['pending'])
+            _prune_old_betas(data)
         return data
+
+    def _prune_old_betas(data):
+        """一覧に無いβ版の置き場を片付ける (裏で静かに、失敗しても続ける).
+
+        正式版になった版・取り下げられた版は GitHub 側でもβ版が削除
+        されるため、手元にだけ残っても「β版を試す」から起動できない。
+        放っておくと試すたびに増え続けるので、取得のたびに掃除する。
+        起動中のβ版があるときは触らない (使用中のフォルダを中途半端に
+        消さないため。次の取得で片付く)。
+        """
+        try:
+            if launcher.port_in_use(paths.beta_port(config)):
+                return
+            keep = [b['tag'] for b in
+                    ghcli.prereleases(data.get('releases') or [])]
+            removed = updater.prune_betas(keep, config)
+        except Exception:
+            log.exception('古いβ版の片付けに失敗しました')
+            return
+        if removed:
+            log.info('古いβ版を片付けました: %s', ', '.join(removed))
 
     def on_refresh_reviews(_):
         """一覧の再描画。手元にある前回の取得結果を即座に表示し、
@@ -2887,8 +2992,9 @@ def main(page: ft.Page):
         ft.Container(height=_INTRO_H, content=ft.Column([
             ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
                     'ます。β版を確認したら承認してください。%d 人の'
-                    '承認がそろうと自動で正式版になり、みなさんの'
-                    'マネージャーに自動で取り込まれます。'
+                    '承認がそろうと自動で正式版になり、みなさんの PC に'
+                    '自動で届きます。次に「起動」を押したときから'
+                    '新しい版になります。'
                     '自分の提出は自分では承認できません。'
                     % reviews.required_approvals(config),
                     size=13, color='#555555'),
@@ -3086,6 +3192,35 @@ def main(page: ft.Page):
         run_bg(work)
 
     check_membership()
+
+    # ---- 引っ越しの後片付け ----
+    # フォルダ構成を切り替えたときだけ、以前のフォルダを消す札が置かれる。
+    # ふだんの起動でやることは「札が無いことを確かめる」だけ (ファイルが
+    # 1 つ無いのを見るだけなので、片付けが済めば負担は残らない)。
+
+    def cleanup_old_folders():
+        if migrate.read_marker(config) is None:
+            return                      # ふだんはここで終わり
+
+        def work():
+            try:
+                removed, left, gave_up = migrate.run_cleanup(config)
+            except Exception:
+                log.exception('以前のフォルダの片付けに失敗しました')
+                return
+            if removed:
+                log.info('以前のフォルダを片付けました: %s', '、'.join(removed))
+            if gave_up:
+                join_notice.value = (
+                    '以前のフォルダを自動で片付けられませんでした。'
+                    'お手数ですが手で削除してください: %s' % '、'.join(left))
+                page.update()
+            elif left:
+                log.info('片付けきれなかったので次回に回します: %s',
+                         '、'.join(left))
+        run_bg(work)
+
+    cleanup_old_folders()
 
     # キャッシュの事前取得は check_update_notice のスナップショット取得が
     # 兼ねる (ログイン名・メンバー一覧・一覧・リリース一覧が一度に温まる)
