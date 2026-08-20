@@ -113,6 +113,33 @@ class TestWriteJson:
                           mode=stat.S_IRUSR | stat.S_IWUSR)
         assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
+    def test_mode_is_set_when_the_file_is_created(self, tmp_path,
+                                                  monkeypatch):
+        """権限は一時ファイルを作る瞬間に当たること.
+
+        中身を書いてから chmod すると、その間だけ他人から読める窓が
+        残る。settings.json は API キーそのものなので、作成時に渡して
+        いることを直接確かめる。
+        """
+        seen = []
+        real_open = os.open
+
+        def spy(p, flags, mode=0o777, *a, **kw):
+            if str(p).endswith('.tmp'):
+                seen.append(mode)
+            return real_open(p, flags, mode, *a, **kw)
+
+        monkeypatch.setattr(os, 'open', spy)
+        safeio.write_json(str(tmp_path / 'a.json'), {'k': 'sk-ant-x'},
+                          mode=stat.S_IRUSR | stat.S_IWUSR)
+        assert seen == [0o600]
+
+    def test_mode_is_optional(self, tmp_path):
+        # mode を渡さない保存はふつうの権限のまま (usage.json など)
+        path = str(tmp_path / 'a.json')
+        safeio.write_json(path, {'x': 1})
+        assert os.path.isfile(path)
+
 
 class TestSettingsSurvivesCrash:
     """settings.json は API キー。失うと登録し直しになる。"""

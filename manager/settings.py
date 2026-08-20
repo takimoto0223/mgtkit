@@ -45,7 +45,7 @@ def save_settings(name, api_key, config=None):
         raise ValueError('API キーの形式が正しくありません '
                          '(sk-ant- で始まる文字列を入力してください)。')
     # 一時ファイル → 差し替えで保存する (書き込み中に落ちても API キーを
-    # 失わない)。本人のみ読み書き可のパーミッションは差し替え前に当たる
+    # 失わない)。本人のみ読み書き可の権限は一時ファイルを作る瞬間に当たる
     return safeio.write_json(
         settings_path(config),
         {'name': name, 'anthropic_api_key': api_key}, indent=2,

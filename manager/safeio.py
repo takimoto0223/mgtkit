@@ -56,9 +56,10 @@ def write_json(path, data, indent=None, mode=None):
     """JSON を書き潰さずに保存する (一時ファイル → ``os.replace``).
 
     indent: ``json.dump`` と同じ (None なら 1 行)。
-    mode: 保存後のパーミッション。差し替える**前**の一時ファイルに
-    当てるので、settings.json の中身が一瞬でも他人から読める状態に
-    ならない (Windows では NTFS の ACL に従うため効かない)。
+    mode: 保存後のパーミッション。一時ファイルを**作る瞬間**に当てる。
+    中身を書いてから ``chmod`` すると、その間だけ他人から読める窓が
+    残るため (settings.json は API キーそのもの)。Windows では NTFS の
+    ACL に従うので効かない。
 
     保存できたら path を返す。失敗したときは中途半端な一時ファイルを
     片付けたうえで例外をそのまま投げる (「保存できなかった」ことを
@@ -72,8 +73,13 @@ def write_json(path, data, indent=None, mode=None):
     # 2 窓開いていても一時名が交錯しないようプロセス番号を混ぜる
     # (diffcache.save と同じ流儀)
     tmp = '%s.%d.tmp' % (path, os.getpid())
+
+    def _create(name, flags):
+        # 作る瞬間から権限を当てる (書いてから chmod では手遅れ)
+        return os.open(name, flags, 0o666 if mode is None else mode)
+
     try:
-        with open(tmp, 'wb') as f:
+        with open(tmp, 'wb', opener=_create) as f:
             f.write(data_bytes)
             f.flush()
             try:
@@ -82,6 +88,8 @@ def write_json(path, data, indent=None, mode=None):
                 pass                    # 対応しない置き場所ではあきらめる
         if mode is not None:
             try:
+                # 前回の書きかけが残っていたときは作成時の権限が効かない
+                # ため、念のため当て直す (umask で削られた分もここで戻る)
                 os.chmod(tmp, mode)
             except OSError:
                 pass                    # Windows では NTFS ACL に従う
