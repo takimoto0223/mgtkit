@@ -27,7 +27,24 @@ def _load(config=None):
 
 
 def _save(data, config=None):
-    safeio.write_json(_path(config), data, indent=2)
+    """記録を保存する。失敗しても例外にしない (戻り値で成否を返す).
+
+    ここに入るのは「自分の画面でどれを畳んだか」だけで、失っても
+    畳み直せば済む。一方この保存は run_bg の中 (承認・却下の取り消し)
+    や、押した瞬間に走るハンドラ (畳む・一覧に戻す) から呼ばれる。
+    例外を投げるとスレッドやハンドラがそこで終わり、ボタンが無効な
+    まま戻らない・二重実行の札が下りないといった止まり方をするため、
+    ログに残して先へ進める (usage.record / reviewcache.put /
+    diffcache.save と同じ扱い)。
+    """
+    try:
+        safeio.write_json(_path(config), data, indent=2)
+        return True
+    except OSError:
+        log.warning('この PC の表示の記録を保存できませんでした '
+                    '(畳む・一覧に戻すが次の起動に残りません)',
+                    exc_info=True)
+        return False
 
 
 def hidden_prs(config=None):

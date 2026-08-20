@@ -58,3 +58,41 @@ class TestHiddenPrs:
         assert localstate.hidden_prs(cfg) == set()
         localstate.hide_pr(5, cfg)  # 壊れていても書き直せる
         assert localstate.hidden_prs(cfg) == {5}
+
+
+class TestSaveFailureDoesNotStopTheScreen:
+    """保存できなくても例外にしない (画面が止まらないこと).
+
+    この記録は「自分の画面でどれを畳んだか」だけで、失っても畳み直せば
+    済む。一方、保存は run_bg の中や押した瞬間のハンドラから呼ばれる
+    ため、例外を投げるとボタンが無効なまま戻らない止まり方をする。
+    """
+
+    def test_hide_pr_survives_a_write_failure(self, tmp_path, monkeypatch):
+        import os
+
+        cfg = _config(tmp_path)
+        localstate.hide_pr(31, cfg)
+
+        def boom(src, dst):
+            raise OSError('書き込めません (試験)')
+        monkeypatch.setattr(os, 'replace', boom)
+
+        localstate.hide_pr(33, cfg)          # 例外を投げない
+        localstate.unhide_pr(31, cfg)        # 逆向きも同じ
+        localstate.mark_auto_folded(33, cfg)
+        monkeypatch.undo()
+
+        # 保存できていないので中身は変わらないまま (次回また畳める)
+        assert localstate.hidden_prs(cfg) == {31}
+
+    def test_save_reports_success(self, tmp_path, monkeypatch):
+        import os
+
+        cfg = _config(tmp_path)
+        assert localstate._save({'hidden_prs': [1]}, cfg) is True
+
+        def boom(src, dst):
+            raise OSError('書き込めません (試験)')
+        monkeypatch.setattr(os, 'replace', boom)
+        assert localstate._save({'hidden_prs': [2]}, cfg) is False

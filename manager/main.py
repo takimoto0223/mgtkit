@@ -3110,6 +3110,16 @@ def main(page: ft.Page):
                 except ValueError as e:
                     dialog_error(save_btn, err_text, str(e))
                     return
+                except OSError:
+                    # 保存先を作れない・書けない (空き容量やアクセス権)。
+                    # 捕まえないと run_bg のスレッドが黙って死に、
+                    # 「登録しています...」のままボタンが戻らなくなる
+                    log.exception('設定を保存できませんでした')
+                    dialog_error(save_btn, err_text,
+                                 '設定を保存できませんでした。パソコンの'
+                                 '空き容量と、保存先を使う権限があるかを'
+                                 '確認して、もう一度お試しください。')
+                    return
                 page.pop_dialog()
                 page.update()
             run_bg(work)
