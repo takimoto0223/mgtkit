@@ -42,6 +42,15 @@ class TestExtractZip:
         assert not (dest / 'old.py').exists()
         assert (dest / 'app.py').exists()
 
+    def test_first_install_creates_missing_folders(self, tmp_path):
+        # β版の初回導入: 置き場も作業フォルダの置き場もまだ無い状態
+        z = tmp_path / 'a.zip'
+        _make_zip(str(z), {'app.py': 'x'})
+        dest = tmp_path / '.manager' / 'beta' / 'v1.5-beta.1' / 'mgtkit'
+        installer.extract_zip(str(z), str(dest),
+                              str(tmp_path / '.manager' / 'tmp'))
+        assert (dest / 'app.py').read_text() == 'x'
+
     def test_bad_zip_raises_friendly_error(self, tmp_path):
         bad = tmp_path / 'bad.zip'
         bad.write_bytes(b'not a zip')
@@ -322,6 +331,18 @@ class TestSwapLeftovers:
         # 見える側に残骸が出ていないこと
         assert not list((tmp_path / 'visible').glob(
             installer.SWAP_PREFIX + '*'))
+
+    def test_creates_the_install_parent_when_missing(self, tmp_path):
+        # 初めてβ版を試すときは beta/<版>/ がまだ無い。作業フォルダを
+        # 隠し側に作る指定でも、付け替え先の親は作られること
+        # (作られないと os.rename が失敗し「使用中」と誤って案内される)
+        src = tmp_path / 'src'
+        src.mkdir()
+        (src / 'app.py').write_text('# app', encoding='utf-8')
+        install_dir = tmp_path / '.manager' / 'beta' / 'v1.5-beta.1' / 'mgtkit'
+        work_parent = tmp_path / '.manager' / 'tmp'
+        installer._replace_dir(str(src), str(install_dir), str(work_parent))
+        assert (install_dir / 'app.py').is_file()
 
     def test_defaults_to_the_parent(self, tmp_path):
         src = tmp_path / 'src'
