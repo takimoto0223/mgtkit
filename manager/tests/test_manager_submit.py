@@ -424,42 +424,110 @@ class TestFullFlow:
     def test_reviewed_text_goes_into_pr(self, repo_env, tmp_path, gh_mock,
                                         monkeypatch):
         # 自動作成の結果を提出者が手直しすると、その文章が PR 本文に入る
-        monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
-                            lambda *a, **k: _AI_BODY)
+        _fake_ai(monkeypatch)
         z = _make_zip(tmp_path, _dist_files(
             repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
         prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
         seen = []
 
-        def review(update, limits):
-            seen.append((update, limits))
-            return ('- 手で直した更新内容', '- 手で直した制限事項')
+        def review(title, update, limits):
+            seen.append((title, update, limits))
+            return ('手で直したタイトル', '- 手で直した更新内容',
+                    '- 手で直した制限事項')
 
-        submit.finalize_submission(prep, [], 'msg', {}, use_ai=True,
+        submit.finalize_submission(prep, [], '', {}, use_ai=True,
                                    on_review=review)
-        assert seen == [('- 二丁山形鋼の断面算定に対応', '- 等辺のみ対応')]
+        assert seen == [('二丁山形鋼の断面算定に対応',
+                         '- 二丁山形鋼の断面算定に対応', '- 等辺のみ対応')]
         create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
         body = create[create.index('--body') + 1]
         assert '- 手で直した更新内容' in body
         assert '- 二丁山形鋼の断面算定に対応' not in body
 
+    def test_reviewed_title_becomes_the_pr_title(self, repo_env, tmp_path,
+                                                 gh_mock, monkeypatch):
+        # 手直ししたタイトルが PR の見出しとコミットメッセージになる
+        _fake_ai(monkeypatch)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        result = submit.finalize_submission(
+            prep, [], '', {}, use_ai=True,
+            on_review=lambda t, u, li: ('荷重分布図の PDF 書き出しに対応',
+                                        '- 荷重分布図を出せるようにした',
+                                        '- なし'))
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        assert (create[create.index('--title') + 1]
+                == '荷重分布図の PDF 書き出しに対応')
+        assert result['commit_message'].splitlines()[0] \
+            == '荷重分布図の PDF 書き出しに対応'
+        assert '- 荷重分布図を出せるようにした' in result['commit_message']
+
+    def test_blank_reviewed_title_falls_back_to_the_draft(
+            self, repo_env, tmp_path, gh_mock, monkeypatch):
+        # UI は空タイトルを赤枠で止める (main._review_ai_text)。ここは
+        # その裏の安全網: 万一空で通っても見出しが空の提出にはならない
+        _fake_ai(monkeypatch)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        submit.finalize_submission(
+            prep, [], '', {}, use_ai=True,
+            on_review=lambda t, u, li: ('   ', u, li))
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        assert (create[create.index('--title') + 1]
+                == '二丁山形鋼の断面算定に対応')
+
+    def test_ai_failure_stops_the_submission(self, repo_env, tmp_path,
+                                             gh_mock, monkeypatch):
+        # 自動作成が失敗したら、定型文で出さずに止める (管理者指示 2026-08)
+        def boom(*a, **k):
+            raise submit.claude_helper.ClaudeError('キーが無効です', 'HTTP 401')
+        monkeypatch.setattr(submit.claude_helper,
+                            'generate_pr_body', boom)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        with pytest.raises(submit.claude_helper.ClaudeError):
+            submit.finalize_submission(prep, [], '', {}, use_ai=True,
+                                       on_review=lambda t, u, li: (t, u, li))
+        heads = run_git(['ls-remote', '--heads', repo_env['origin']])
+        assert 'feature/' not in heads
+        assert not any(c[:2] == ['pr', 'create'] for c in gh_mock)
+
     def test_review_cancel_leaves_nothing_pushed(self, repo_env, tmp_path,
                                                  gh_mock, monkeypatch):
         # 確認画面で取り消したら、ブランチも PR も残らない
-        monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
-                            lambda *a, **k: _AI_BODY)
+        _fake_ai(monkeypatch)
         z = _make_zip(tmp_path, _dist_files(
             repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
         prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
         with pytest.raises(submit.SubmitCancelled):
-            submit.finalize_submission(prep, [], 'msg', {}, use_ai=True,
-                                       on_review=lambda u, li: None)
+            submit.finalize_submission(prep, [], '', {}, use_ai=True,
+                                       on_review=lambda t, u, li: None)
         heads = run_git(['ls-remote', '--heads', repo_env['origin']])
         assert 'feature/' not in heads
         assert not any(c[:2] == ['pr', 'create'] for c in gh_mock)
 
 
-_AI_BODY = '''## 更新内容
+def _fake_ai(monkeypatch):
+    """Claude の下書き (1 行目 = タイトルの本文) を返す差し替え.
+
+    タイトル生成の API は呼ばれない (提出 1 回 = 呼び出し 1 回の約束)。
+    呼ばれたら失敗させて見張る。
+    """
+    def boom(*a, **k):
+        raise AssertionError('提出で generate_commit_message が呼ばれた '
+                             '(API 呼び出しは generate_pr_body の 1 回だけ)')
+    monkeypatch.setattr(submit.claude_helper, 'generate_commit_message',
+                        boom)
+    monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
+                        lambda *a, **k: _AI_BODY)
+
+
+_AI_BODY = '''# 二丁山形鋼の断面算定に対応
+
+## 更新内容
 
 - 二丁山形鋼の断面算定に対応
 
@@ -586,6 +654,92 @@ class TestReviewAiText:
         assert '- 二丁山形鋼(2L)に対応しました' in notes
         assert '- 不等辺は未対応' in notes
         assert '影響範囲' not in notes
+
+
+class TestSplitBodyTitle:
+    """generate_pr_body の 1 行目 (# タイトル) を本文から切り出す."""
+
+    def test_title_is_split_off(self):
+        title, rest = submit.split_body_title(
+            '# 荷重分布図の PDF 書き出しに対応\n\n## 更新内容\n\n- 1 図')
+        assert title == '荷重分布図の PDF 書き出しに対応'
+        assert rest.startswith('## 更新内容')
+
+    def test_no_title_line(self):
+        title, rest = submit.split_body_title('## 更新内容\n\n- 改善')
+        assert title == ''
+        assert rest == '## 更新内容\n\n- 改善'
+
+    def test_empty(self):
+        assert submit.split_body_title('') == ('', '')
+        assert submit.split_body_title(None) == ('', '')
+
+
+class TestTitleLine:
+    """PR タイトル (一覧の見出し・リリースノートの 1 行目) の作り方."""
+
+    def test_first_line_is_used(self):
+        assert submit.title_line('断面算定に対応\n\n- 詳細') == '断面算定に対応'
+
+    def test_bullet_marks_are_dropped(self):
+        # 手入力の「更新内容」は箇条書きで書かれる。記号は見出しに残さない
+        assert submit.title_line('・二丁溝形鋼(2C)の断面算定に対応') \
+            == '二丁溝形鋼(2C)の断面算定に対応'
+        assert submit.title_line('- 計算書の文章出力を改善') \
+            == '計算書の文章出力を改善'
+
+    def test_a_leading_minus_in_a_word_is_kept(self):
+        assert submit.title_line('-30% の短縮') == '-30% の短縮'
+
+    def test_blank_lines_are_skipped(self):
+        assert submit.title_line('\n\n  \n本題\n') == '本題'
+
+    def test_length_is_capped(self):
+        assert len(submit.title_line('あ' * 200)) == submit.TITLE_MAX
+
+    def test_empty_is_empty(self):
+        assert submit.title_line('') == ''
+        assert submit.title_line(None) == ''
+
+
+class TestClaudeHelperStrict:
+    """提出の自動作成ルート (strict) は失敗の理由を持って止まる."""
+
+    def test_no_api_key_raises(self, monkeypatch):
+        from manager import claude_helper
+        monkeypatch.setattr(claude_helper.settings, 'api_key',
+                            lambda *a, **k: None)
+        with pytest.raises(claude_helper.ClaudeError, match='API キー'):
+            claude_helper._generate('x', strict=True)
+
+    def test_refusal_keeps_its_own_message(self, monkeypatch):
+        # try の中で送出した ClaudeError が「予期しないエラー」に
+        # 化けないこと (except Exception に飲まれない)
+        from manager import claude_helper
+
+        class _Resp:
+            stop_reason = 'refusal'
+            content = []
+            usage = None
+
+        class _Messages:
+            def create(self, **k):
+                return _Resp()
+
+        class _Client:
+            messages = _Messages()
+
+        monkeypatch.setattr(claude_helper, '_client',
+                            lambda strict=False: _Client())
+        with pytest.raises(claude_helper.ClaudeError, match='辞退'):
+            claude_helper._generate('x', strict=True)
+
+    def test_status_hints_are_user_facing(self):
+        from manager import claude_helper
+        err = claude_helper._status_error(401)
+        assert '設定タブ' in str(err) and err.detail == 'HTTP 401'
+        assert '管理者' in str(claude_helper._status_error(400))
+        assert '待って' in str(claude_helper._status_error(500))
 
 
 class TestClaudeHelperFallback:

@@ -41,6 +41,7 @@ autofix.list_my_submissions = lambda *a, **k: []
 # 「Claude で自動作成する」の確認ダイアログ用。git 操作も API 呼び出しも
 # せず、確認画面 (on_review) だけ本物の UI に通す
 _FAKE_AI_TEXT = (
+    '二丁山形鋼の断面算定に対応',
     '- 二丁山形鋼(2L)の断面算定に対応しました\n'
     '- 柱脚の検定比一覧に軸力の欄を追加しました',
     '- 二丁山形鋼は等辺のみ対応です (不等辺はエラーで停止します)')
@@ -48,7 +49,7 @@ _FAKE_AI_TEXT = (
 
 def _fake_finalize(prep, deletions, commit_message='', config=None,
                    on_progress=None, existing_branch=None, limitations='',
-                   use_ai=False, on_review=None):
+                   use_ai=False, on_review=None, title=''):
     if use_ai and on_review and on_review(*_FAKE_AI_TEXT) is None:
         raise submit.SubmitCancelled('提出を取り消しました。')
     return {'pr_url': 'https://github.com/o/r/pull/42',
