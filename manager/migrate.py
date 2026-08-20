@@ -8,19 +8,20 @@
 
 方針 (manager/docs/decisions.md):
 
-- **旧フォルダは読むだけ。この場では消さない。** 消してよいのは「新しい方が
-  実際に動いた」と分かってからなので、片付けの札 (cleanup_pending.json) を
-  置くにとどめ、実際に消すのはマネージャーの次回起動時にする
+- **旧フォルダを消すのはいちばん最後**。引き継ぎ・確認・入口づくりが全部
+  済んでから消すので、途中で失敗すれば旧フォルダは無傷のまま残る
 - **何度実行しても同じ結果になる** (すでに運び終えたものは飛ばす)。途中で
   失敗しても、もう一度 setup.bat を実行すれば続きから進む
-- **引き継げたことを確かめてから札を置く**。settings.json と usage.json は
+- **引き継げたことを確かめてから消す**。settings.json と usage.json は
   失うと痛い (API キーの入れ直し・利用額の再計算不能) ので、新しい側で
-  実際に読めることを確認してからでないと片付けを予約しない
+  実際に読めることを確認してからでないと消さない
+- **消せなかったものは札 (cleanup_pending.json) に残す**。使用中などで
+  消えないことがあるので、マネージャーの次回起動で消し直す
 
 試験モード (管理者が配布前に自分の PC で確かめるため):
 
 - ``--dry-run``    何をするかを表示するだけで 1 バイトも書かない
-- ``--no-cleanup`` 引っ越しはするが片付けの札を置かない
+- ``--no-cleanup`` 引っ越しはするが以前のフォルダを消さない
                    (旧環境をそのまま残したまま新しい方を試せる)
 """
 import argparse
@@ -302,7 +303,12 @@ def copy_guide(home, clone, dry_run=False):
 
 
 # ---------------------------------------------------------------------------
-# 片付けの札 (実際に消すのはマネージャーの次回起動時)
+# 旧フォルダの片付け
+#
+# 引っ越しの最後にここで消す (setup.bat 一発で終わらせるため)。消せなかった
+# ものだけを札 (cleanup_pending.json) に残し、マネージャーの次回起動で消し
+# 直す。札が無ければ、ふだんの起動でやることは「ファイルが 1 つ無いことを
+# 確かめる」だけ。
 # ---------------------------------------------------------------------------
 
 def marker_path(config=None, install_root=None):
@@ -311,14 +317,11 @@ def marker_path(config=None, install_root=None):
 
 
 def write_marker(home, targets):
-    """片付ける対象を書き留める。実際に消すのはマネージャー."""
+    """消しきれなかった対象を書き留める (次回の起動で消し直す)."""
     path = os.path.join(home, paths.MANAGER_DIR_NAME, MARKER_NAME)
     safeio.write_json(path, {
         'targets': [t for t in targets if t],
         'attempts': 0,
-        # setup.bat はこのあとマネージャーを起動する。その 1 回目では
-        # 消さず、印を付けるだけにする (下記 run_cleanup)
-        'launched': False,
         'created_at': datetime.datetime.now().isoformat(timespec='seconds'),
     }, indent=2)
     return path
@@ -346,36 +349,32 @@ def drop_marker(config=None, install_root=None):
         pass
 
 
-def run_cleanup(config=None, install_root=None):
-    """札があれば旧フォルダを片付ける (マネージャーの起動時に裏で呼ぶ).
+def remove_old(targets):
+    """旧フォルダを消す。(消せた場所, 残った場所) を返す.
 
+    git は Windows でクローンの中身に読み取り専用属性を付けるため、
+    素の削除では必ず途中で止まる (safeio.rmtree が属性を落として消す)。
+    """
+    removed, left = [], []
+    for target in targets:
+        if not target or not os.path.exists(target):
+            removed.append(target)
+            continue
+        (removed if safeio.rmtree(target) else left).append(target)
+    return removed, left
+
+
+def run_cleanup(config=None, install_root=None):
+    """札があれば消し直す (マネージャーの起動時に裏で呼ぶ).
+
+    札に載るのは「引っ越しのときに消しきれなかったもの」だけ。
     戻り値: (片付けた場所, 消せずに残った場所, 諦めたか)。
     札が無ければ ([], [], False) — ふだんの起動はここで終わる。
     """
     data = read_marker(config, install_root)
     if not data:
         return [], [], False
-    if not data.get('launched'):
-        # **1 回目は消さない。** setup.bat は引っ越しの直後にマネージャーを
-        # 起動するので、そこで消すと「新しい方が実際に動いたと分かってから
-        # 消す」が成り立たない (実機で、引っ越し直後に旧フォルダが消えた)。
-        # 印だけ付けて、利用者が次に入口から開いたときに消す
-        data['launched'] = True
-        try:
-            safeio.write_json(marker_path(config, install_root), data,
-                              indent=2)
-        except OSError:
-            log.warning('片付けの記録を更新できませんでした', exc_info=True)
-        return [], [], False
-    removed, left = [], []
-    for target in data['targets']:
-        if not os.path.exists(target):
-            removed.append(target)
-            continue
-        if safeio.rmtree(target):
-            removed.append(target)
-        else:
-            left.append(target)
+    removed, left = remove_old(data['targets'])
     if not left:
         drop_marker(config, install_root)
         return removed, [], False
@@ -412,7 +411,7 @@ def migrate(home, clone=None, dry_run=False, no_cleanup=False,
     found_clone, found_root = find_old(old_clone, old_root)
     say('置き場所: %s' % home)
     result = {'moved': [], 'entry': None, 'hidden': False, 'guide': False,
-              'marker': None, 'stopped': [],
+              'marker': None, 'stopped': [], 'removed': [],
               'new_install': not (found_clone or found_root)}
 
     if result['new_install']:
@@ -440,15 +439,20 @@ def migrate(home, clone=None, dry_run=False, no_cleanup=False,
     result['entry'] = make_shortcut(home, clone, dry_run=dry_run)
     result['guide'] = copy_guide(home, clone, dry_run=dry_run)
 
+    # 片付けは**いちばん最後**。ここまで来ていれば引き継ぎも確認も入口も
+    # 済んでいる。途中で失敗していれば旧フォルダは無傷で残る
     targets = [p for p in (found_clone, found_root) if p]
     if dry_run:
         if targets and not no_cleanup:
-            say('片付けを予約します (実際に消すのは次回の起動時): %s'
-                % '、'.join(targets))
+            say('以前のフォルダを片付けます: %s' % '、'.join(targets))
     elif targets and not no_cleanup:
-        result['marker'] = write_marker(home, targets)
-        say('以前のフォルダの片付けを予約しました '
-            '(次にマネージャーを起動したときに消えます)。')
+        result['removed'], left = remove_old(targets)
+        if result['removed']:
+            say('以前のフォルダを片付けました。')
+        if left:
+            result['marker'] = write_marker(home, left)
+            say('片付けきれなかったフォルダがあります。次にマネージャーを'
+                '起動したときに消し直します: %s' % '、'.join(left))
     elif targets:
         say('※ 試験モードのため、以前のフォルダはそのまま残します。')
     return result

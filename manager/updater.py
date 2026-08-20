@@ -71,8 +71,34 @@ def check_update(repo, instance_dir, releases=None):
             'has_update': has_update, 'releases': releases}
 
 
+def swap_work_dir(config=None):
+    """入れ替えの作業フォルダを作る場所 (マネージャーの持ち物の中).
+
+    既定では install_dir の親に作られるが、新しい配置ではそこが
+    利用者に見える <home>/stable なので、更新のたびに mgtkit_swap_XXXX が
+    一瞬見えてしまう。隠している側に寄せる。
+    """
+    return os.path.join(paths.install_root(config), 'tmp')
+
+
+def sweep_leftovers(config=None):
+    """前回の入れ替えが途中で終わったときの残骸を掃く (起動時に一度).
+
+    作業フォルダの置き場のほか、以前の版が使っていた「インスタンスの
+    親」も見る (安定版と、試用中のβ版それぞれ)。
+    """
+    dirs = [swap_work_dir(config), paths.stable_dir(config)]
+    beta_root = paths.beta_root(config)
+    try:
+        dirs += [os.path.join(beta_root, name)
+                 for name in sorted(os.listdir(beta_root))]
+    except OSError:
+        pass                            # β版を試したことが無い
+    return installer.sweep_swap_leftovers(*dirs)
+
+
 def install_release(repo, release, instance_dir, python=None,
-                    on_progress=None):
+                    on_progress=None, config=None):
     """リリースを取得してインスタンスへ展開・依存インストールする.
 
     version.json が配布物に無い場合 (CI 整備前のソースアーカイブ) は
@@ -92,7 +118,7 @@ def install_release(repo, release, instance_dir, python=None,
 
         progress('展開中...')
         app_d = paths.app_dir(instance_dir)
-        installer.extract_zip(zip_path, app_d)
+        installer.extract_zip(zip_path, app_d, swap_work_dir(config))
 
         if versions.read_version_json(app_d) is None:
             commit = ''

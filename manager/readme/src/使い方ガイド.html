@@ -12,6 +12,9 @@
     PDF 内の文字が壊れた (空白が制御文字になり、一部の漢字が康熙部首に
     化けて Ctrl+F 検索が効かなくなる)。フルセットの TTF が用意できない
     なら fonts/ は置かないこと
+  - PDF 化はスクリプトがある: manager/scripts/readme_build/make_guide.py
+    (この原稿と現行 PDF が 1 ピクセル差なく一致することを確認済み)。
+    設定は下記のとおり:
   - PDF 化: Chromium (Playwright) で page.goto(この HTML) →
     page.pdf(format='A4', print_background=True,
              display_header_footer=True, header_template='<div></div>',
@@ -70,7 +73,7 @@
   table.trouble th { background: #f3f4f6; color: #374151; width: 34%; }
   .toc { border: 1px solid #e5e7eb; border-radius: 6px; padding: 4mm 6mm; }
   .toc div { display: flex; margin: 1.2mm 0; }
-  .toc .n { color: #1e3a5f; font-weight: bold; width: 10mm; flex: none; }
+  .toc .n { color: #1e3a5f; font-weight: bold; width: 14mm; flex: none; }
   .toc .d { color: #6b7280; font-size: 9pt; margin-left: 3mm; }
   .toc .p { color: #1e3a5f; margin-left: auto; flex: none; }
   .pb { page-break-before: always; }
@@ -141,6 +144,51 @@
       margin: 0.5mm auto; }
   .card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 3mm 4mm;
           margin: 2.5mm 0; }
+
+  /* ---- 付録 B: フォルダ構成の図 ----
+     資料「フォルダ構成の見直し」と同じ描き方。枝 (├ └ │) は等幅で
+     桁を合わせるため、行の前半は必ず ASCII と罫線文字だけにする
+     (日本語は説明の側にだけ置く)。フォントを変えると枝がずれる */
+  /* 枠 (.box::before) は文字の並びの外へはみ出して描くので、その分の
+     余白を左に確保する。無いと紙の余白へはみ出して**枠の左側が
+     印刷されない** (管理者の指摘 2026-08) */
+  .ftree { font-family: 'DejaVu Sans Mono', monospace; font-size: 8.6pt;
+           line-height: 1.55; margin: 4mm 0 0; padding-left: 4mm; }
+  .ftree .ln { white-space: pre; position: relative; padding-left: 5mm; }
+  .ftree .br { color: #9aa5b1; }
+  .ftree .nm { font-weight: bold; }
+  .ftree .ds { font-family: 'Noto Sans JP', 'IPAPGothic', sans-serif;
+               font-size: 8pt; color: #5b6572; font-weight: normal; }
+  .ftree .mk { position: absolute; left: 1.2mm; top: 0; font-weight: bold;
+               font-size: 9pt; color: #374151; }
+  .ftree .box { position: relative; background: #ffffff;
+                padding: 1.8mm 1.4mm 2.2mm 0; margin: 2mm 0; }
+  .ftree .box::before { content: ''; position: absolute; top: 0; bottom: 0;
+                left: -3mm; right: 0; border: 1.6px solid #6b7280;
+                border-radius: 5px; }
+  .ftree .box .box::before { left: -1.5mm;
+                border: 1.3px dashed #a3adb9; }
+  .ftree .grp { position: relative; border-radius: 0 5px 5px 0;
+                padding: 1.4mm 1mm 1.4mm 0; margin: 1.6mm 0; }
+  .ftree .grp::before { content: ''; position: absolute; left: 0; top: 0;
+                bottom: 0; width: 3px; border-radius: 2px 0 0 2px; }
+  .ftree .c1 { background: #f2f7fc; } .ftree .c1::before { background: #5b8cc0; }
+  .ftree .c2 { background: #f1faf3; } .ftree .c2::before { background: #5aa571; }
+  .ftree .c3 { background: #fdf3f3; } .ftree .c3::before { background: #c47575; }
+  .ftree .c4 { background: #f5f7f9; } .ftree .c4::before { background: #8d99ab; }
+  .ftree .t1 { color: #17456f; } .ftree .t2 { color: #1c6334; }
+  .ftree .t3 { color: #8f2d2d; } .ftree .t4 { color: #414c5c; }
+  .ftree .root { font-weight: bold; color: #374151; }
+  .ftree .star { color: #b45309; font-weight: bold; }
+  .flegend { display: flex; flex-wrap: wrap; gap: 2.5mm; margin-top: 4mm; }
+  .flg { flex: 1 1 46%; border: 1px solid; border-left-width: 3.5px;
+         border-radius: 4px; padding: 1.8mm 2.6mm; font-size: 8.6pt;
+         line-height: 1.5; }
+  .flg b { display: block; font-size: 9.4pt; margin-bottom: 0.4mm; }
+  .fg1 { background: #e8f1fb; border-color: #5b8cc0; color: #17456f; }
+  .fg2 { background: #e3f4e7; border-color: #5aa571; color: #1c6334; }
+  .fg3 { background: #fbe6e6; border-color: #c47575; color: #8f2d2d; }
+  .fg4 { background: #eaedf2; border-color: #8d99ab; color: #414c5c; }
   .whitebox { background: #ffffff; border-radius: 6px; padding: 3mm 3.6mm; }
 </style>
 </head>
@@ -153,7 +201,7 @@
   <h1>mgtkit アプリマネージャー<br>使い方ガイド</h1>
   <div class="cover-rule"></div>
   <div class="cover-sub">Git や GitHub の知識は不要です。<br>すべてマネージャーの画面から操作できます。</div>
-  <div class="cover-date">2026-08 版 (第 2 版)</div>
+  <div class="cover-date">2026-08 版 (第 3 版)</div>
 </div>
 
 <h3 class="toc-head">目次</h3>
@@ -166,17 +214,19 @@
   <div><span class="n">6</span><span>差分ビューワ — 変更内容をくわしく確認する</span><span class="d">画面の中で確認・ブラウザでも表示・確認用データの保存</span><span class="p">11</span></div>
   <div><span class="n">7</span><span>API の利用量を確認する</span><span class="d">右上の棒グラフから料金の目安を表示</span><span class="p">13</span></div>
   <div><span class="n">8</span><span>困ったとき</span><span class="d">よくある症状と対処</span><span class="p">14</span></div>
-  <div><span class="n">付録</span><span>Claude API キーの取得方法</span><span class="d">Claude Console での発行手順 (4 ステップ)</span><span class="p">15</span></div>
+  <div><span class="n">付録 A</span><span>Claude API キーの取得方法</span><span class="d">Claude Console での発行手順 (4 ステップ)</span><span class="p">15</span></div>
+  <div><span class="n">付録 B</span><span>フォルダ構成</span><span class="d">C:\mgtkit_appmanager の中身と、さわってよいもの</span><span class="p">16</span></div>
 </div>
 
 <h2>1. はじめての準備 (最初の 1 回だけ)</h2>
 <ol>
   <li>配布された <code>setup.bat</code> をダブルクリックします (置き場所はどこでも構いません)。<br>
-      → 必要なツール (Git / GitHub CLI / Python) の導入と mgtkit の取得が自動で行われます。</li>
+      → 必要なツール (Git / GitHub CLI / Python) の導入と mgtkit の取得が自動で行われます。<br>
+      すでに以前の版を使っていた方は、このとき<b>お名前・API キー・利用量がそのまま引き継がれ</b>、以前のフォルダは自動で片付きます。</li>
   <li>途中でブラウザが開いたら、画面の指示に従って GitHub にログインします (初回のみ)。</li>
   <li>マネージャーが起動すると、下の登録画面が表示されます。名前と自分の Claude API キーを入力して「登録してはじめる」を押します。</li>
 </ol>
-<p class="note">mgtkit 本体は <code>C:\Users\(自分)\mgtkit</code> に自動で取得されます。ここがバージョン管理の置き場所になるため、このフォルダを移動・改名しないでください (マネージャーの起動・更新・提出はすべてこの場所を前提に動きます)。開発せずにアプリを実行するだけなら、原則としてここで作業して OK です (ふだんの業務はこれだけで完結します)。もし機能追加の作業をするときは (まれなケースです)、このフォルダを直接いじらず、別の場所にコピーしてから作業してください (4 章のとおり、取得した版のコピーで作業します)。</p>
+<p class="note">mgtkit 関係のファイルはすべて <code>C:\mgtkit_appmanager</code> (C ドライブの直下) にまとまります。開いて見えるのは <b>3 つだけ</b>です — 起動用のショートカット・この使い方ガイド・アプリ本体の <code>stable\mgtkit</code>。<b>このフォルダを移動・改名しないでください</b> (マネージャーの起動・更新・提出はすべてこの場所を前提に動きます)。もし機能追加の作業をするときは (まれなケースです)、<code>stable\mgtkit</code> を<b>フォルダの外へコピーしてから</b>作業してください (4 章のとおり、取得した版のコピーで作業します)。くわしい中身は<b>巻末の付録 B</b>を参照してください。</p>
 <p class="note">参加申請は自動です — 初回起動時に「参加申請」が自動送信され、管理者が承認すると提出・承認に参加できるようになります (承認までの間も、起動・更新・β版の試用・フィードバックはそのまま使えます)。承認されたあとも特別な操作は不要で、マネージャーを起動するだけで参加が完了します。</p>
 
 <div class="figure">
@@ -184,10 +234,10 @@
   <div class="figcap">初回起動時の登録画面 (実画面)。キーは自分の PC の中にだけ保存され、外部には送られません。</div>
 </div>
 
-<div class="callout">Claude API キー (sk-ant- で始まる文字列) は、提出時に「自動作成」を選んだときの説明文の作成と、検証失敗時の自動修正に「本人のキー」として使われます。どちらも本人が選んだ操作のときだけ使われ、黙って課金されることはありません (費用の目安は 4 章)。取得方法は<b>巻末の付録</b>を参照してください。</div>
+<div class="callout">Claude API キー (sk-ant- で始まる文字列) は、提出時に「自動作成」を選んだときの説明文の作成と、検証失敗時の自動修正に「本人のキー」として使われます。どちらも本人が選んだ操作のときだけ使われ、黙って課金されることはありません (費用の目安は 4 章)。取得方法は<b>巻末の付録 A</b>を参照してください。</div>
 
 <h2>2. アプリを使う (起動タブ)</h2>
-<p>2 回目からは <code>C:\Users\(自分)\mgtkit\manager\マネージャー起動.bat</code> をダブルクリックするだけです。起動のたびにマネージャー自体も自動で最新の状態に更新されます。「起動」ボタンで mgtkit がブラウザで開きます。</p>
+<p>2 回目からは <code>C:\mgtkit_appmanager</code> の中の<b>「mgtkit アプリマネージャー」</b>をダブルクリックするだけです (このショートカットは<b>デスクトップにコピーしても使えます</b>)。起動のたびにマネージャー自体も自動で最新の状態に更新されます。「起動」ボタンで mgtkit がブラウザで開きます。</p>
 
 <div class="figure">
   <img src="img/real_launch.png" alt="">
@@ -210,7 +260,7 @@
 <h2>4. 更新版を提出する (更新版を提出タブ)</h2>
 <ol>
   <li>マネージャーで取得した版 (<code>version.json</code> が入ったフォルダ) を基に改造します。<br>
-      <span class="note">場所: <code>C:\Users\(自分)\AppData\Local\mgtkit\stable\mgtkit</code> のコピーなど。</span></li>
+      <span class="note">場所: <code>C:\mgtkit_appmanager\stable\mgtkit</code> を<b>フォルダの外へコピー</b>したもの。</span></li>
   <li><b>「更新内容」と「ご利用にあたっての制限事項」を記入します</b> (薄いグレーの例のように書きます)。<br>
       <span class="note">ここに書いた内容は、そのまま正式版のリリースノート (起動タブの「更新内容」) として全員に表示されます。制限事項には「使えない条件・エラーで止まるケース・未対応の機能」を書いてください。</span></li>
   <li>作業後、フォルダを丸ごと ZIP にします (右クリック → 圧縮)。</li>
@@ -251,7 +301,7 @@
 </ul>
 <div class="callout"><b>費用の目安</b>: Claude API (本人のキー) が使われるのは、<b>自分で選んだときだけ</b>です。<br>
 ・確認画面で「Claude で自動作成する」を選んだとき — 1 回数十円程度 (変更の大きさで前後)<br>
-・検証失敗時に「自動修正を試す」を押したとき — 3 回まで動いた場合でおおむね 10〜20 万トークン・150〜300 円程度<br>
+・検証失敗時 (稀なケース) に「自動修正を試す」を押したとき — 3 回まで動いた場合でもおおむね 10〜20 万トークン・150〜300 円程度<br>
 確認画面で「自分で入力する」を選べば無料です。正式版のリリースノートは提出時の記入・自動作成の内容がそのまま使われるため、リリース時に追加の費用はかかりません。実際に使った量と料金は、画面右上の棒グラフのマークからいつでも確認できます (7 章)。</div>
 
 <h2>5. β版を確認して承認する (β版の確認と承認タブ)</h2>
@@ -312,13 +362,13 @@
   <tr><th>症状</th><th>対処</th></tr>
   <tr><td>「GitHub へのログインが必要です」と表示される</td><td>コマンドプロンプトで <code>gh auth login</code> を実行してログインし直す</td></tr>
   <tr><td>マネージャーが起動しない</td><td>配布された <code>setup.bat</code> をもう一度実行する (不足ツールを再導入します)</td></tr>
-  <tr><td>マネージャーが使えないが、いますぐアプリを動かしたい</td><td>非常用: <code>C:\Users\(自分)\mgtkit\起動.bat</code> をダブルクリック (手元のアプリを直接起動)</td></tr>
+  <tr><td>マネージャーが使えないが、いますぐアプリを動かしたい</td><td>非常用: <code>C:\mgtkit_appmanager\stable\mgtkit\起動.bat</code> をダブルクリック (いま入っているアプリを直接起動)</td></tr>
   <tr><td>検証が自動修正でも通らない</td><td>提出に問題がある可能性があります。表示される要約を確認のうえ管理者に相談</td></tr>
-  <tr><td>起動時に「直接変更を退避しました」と表示された</td><td><code>C:\Users\(自分)\mgtkit</code> 内のファイルを直接編集した跡があったため、<code>mgtkit\stash\日時\</code> に退避して最新版に更新されました。「詳細」で差分を確認でき、退避フォルダから内容を回収できます</td></tr>
+  <tr><td>起動時に「直接変更を退避しました」と表示された</td><td>マネージャーが使うファイルを直接編集した跡があったため、退避して最新版に更新されました。「詳細」に退避先が表示され、そこから内容を回収できます (差分も確認できます)</td></tr>
 </table>
 
 <div style="page-break-inside: avoid">
-<h2>付録. Claude API キーの取得方法</h2>
+<h2>付録 A. Claude API キーの取得方法</h2>
 <p>マネージャーの初回登録で入力する Claude API キー (<code>sk-ant-</code> で始まる文字列) は、Anthropic の開発者向け管理画面「Claude Console」で発行します。手順は 4 ステップです。</p>
 <ol>
   <li><b>Claude Console にアクセス</b> — ブラウザで <code>https://console.anthropic.com</code> を開き、Anthropic アカウントでログインします (初回はアカウント作成と支払い設定が必要です。API の利用料は claude.ai の Pro / Max プランとは別の従量課金です)。</li>
@@ -329,7 +379,58 @@
 </div>
 <p class="note">Claude Console は Anthropic の画面で、この資料では図を載せていません (実物と食い違う絵を載せないため)。画面の文言が変わっていても、「API キー」→「キーを作成」の流れは同じです。</p>
 <p>発行されたキーは発行直後の画面でしか表示されません。その場でコピーして、マネージャーの初回登録画面に貼り付けてください。キーは自分の PC 内にのみ保存され、提出データには含まれません。</p>
-<p class="note"><b>期限が切れたとき (キーの再登録)</b>: 同じ手順で新しいキーを発行し、<code>C:\Users\(自分)\AppData\Local\mgtkit\settings.json</code> を削除してからマネージャーを起動し直すと、登録画面が再表示されるので新しいキーを入力してください。</p>
+<p class="note"><b>期限が切れたとき (キーの再登録)</b>: 同じ手順で新しいキーを発行し、<code>C:\mgtkit_appmanager\.manager\settings.json</code> を削除してからマネージャーを起動し直すと、登録画面が再表示されるので新しいキーを入力してください (<code>.manager</code> は通常は非表示です。エクスプローラーの「表示」→「隠しファイル」で見えます)。</p>
+
+<h2>付録 B. フォルダ構成</h2>
+<p>mgtkit 関係のファイルは <code>C:\mgtkit_appmanager</code> (C ドライブの直下) の
+1 つにまとまっています。<b>開いて見えるのは 3 つだけ</b>です。</p>
+
+<div class="ftree">
+  <div class="ln root">C:\</div>
+
+  <div class="box">
+    <div class="ln"><span class="br">└─ </span><span class="nm">mgtkit_appmanager\</span><span class="ds">   mgtkit 関係はここ 1 つだけ</span></div>
+
+    <div class="grp c1">
+      <div class="ln"><span class="mk">◎</span><span class="br">   ├─ </span><span class="nm t1">mgtkit アプリマネージャー</span><span class="ds">   起動用のショートカット <b>(デスクトップにコピーしても使えます)</b></span></div>
+      <div class="ln"><span class="br">   ├─ </span><span class="nm t1">アプリマネージャー使い方ガイド.pdf</span><span class="ds">   この資料</span></div>
+    </div>
+
+    <div class="grp c2">
+      <div class="ln"><span class="mk">△</span><span class="br">   ├─ </span><span class="nm t2">stable\mgtkit\</span><span class="ds">   <span class="star">★アプリマネージャーから起動されるアプリ。改造するときはこれをフォルダの外へコピー</span></span></div>
+      <div class="ln"><span class="br">   │  ├─ </span>app.py  s_check.py <span class="ds">…  (配布版。tests や manager のフォルダは入っていない)</span></div>
+      <div class="ln"><span class="br">   │  ├─ </span>version.json<span class="ds">   どの版か・どこから直したかの目印</span></div>
+      <div class="ln"><span class="br">   │  └─ </span>起動.bat<span class="ds">   非常用。このアプリを直接動かす (8 章)</span></div>
+    </div>
+
+    <div class="box">
+      <div class="ln"><span class="mk">×</span><span class="br">   └─ </span><span class="nm">.manager\</span><span class="ds">   <b>ここから下はマネージャーの持ち物。開かないでください</b> (通常は非表示)</span></div>
+
+      <div class="grp c3">
+        <div class="ln"><span class="br">      ├─ </span><span class="nm t3">mgtkit\</span><span class="ds">   アプリマネージャーが動くためのファイル一式</span></div>
+      </div>
+
+      <div class="grp c4">
+        <div class="ln"><span class="mk">×</span><span class="br">      ├─ </span><span class="nm t4">beta\</span><span class="ds">   試用中のβ版 (自動で片付きます)</span></div>
+        <div class="ln"><span class="br">      ├─ </span>workrepo\   diffcache\   tmp\<span class="ds">   作業データ・一時置き場</span></div>
+        <div class="ln"><span class="br">      └─ </span>settings.json   usage.json<span class="ds">   お名前・API キー・利用量</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="flegend">
+  <div class="flg fg1"><b>◎ 入口</b>
+    普段はここから起動します。移動・コピーは自由です。</div>
+  <div class="flg fg2"><b>△ リリースされた最新版のアプリ</b>
+    見る・コピーは自由。改造はこれをコピーして行います。</div>
+  <div class="flg fg3"><b>× 道具</b>
+    アプリマネージャーが動くための一式。さわらないでください。</div>
+  <div class="flg fg4"><b>× 置き場</b>
+    β版・作業データ・設定。自動で作られ、自動で片付きます。</div>
+</div>
+
+<p class="note">計算結果 (<code>mgtkit_out</code>) は今までどおり mgt ファイルと同じ場所に出ます。このフォルダの中には入りません。</p>
 
 </body>
 </html>
