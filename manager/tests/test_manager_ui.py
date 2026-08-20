@@ -689,3 +689,84 @@ def test_auto_update_failure_keeps_the_real_reason(monkeypatch):
     assert any('空き容量' in t for t in texts)
     assert not any('ネットワーク接続を確認してください' in t for t in texts)
 
+
+def _page_without_settings(monkeypatch, name=None):
+    """名前が未登録 (初回起動) の画面を作る。戻り値: (page, main, 送信記録)."""
+    from manager import main as manager_main
+
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+    snap = {'pending': [], 'releases': [], 'me': 'yamada', 'merged': []}
+    monkeypatch.setattr(manager_main.reviews, 'fetch_snapshot',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviews, 'fork_memo', lambda *a, **k: {})
+    monkeypatch.setattr(manager_main.reviewcache, 'put',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(manager_main.reviewcache, 'load_from_disk',
+                        lambda *a, **k: None)
+    monkeypatch.setattr(manager_main.updater, 'check_update',
+                        lambda *a, **k: {'has_update': False,
+                                         'latest': None})
+    monkeypatch.setattr(manager_main.settings, 'user_name',
+                        lambda config=None: name)
+    monkeypatch.setattr(manager_main.settings, 'load_settings',
+                        lambda config=None: (
+                            {'name': name} if name else None))
+    monkeypatch.setattr(manager_main.ghcli, 'accept_repo_invitation',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(manager_main.ghcli, 'has_push_access',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(manager_main.ghcli, 'find_my_join_request',
+                        lambda *a, **k: None)
+    sent = []
+    monkeypatch.setattr(manager_main.ghcli, 'create_join_request',
+                        lambda repo, n: sent.append(n))
+    return manager_main, sent
+
+
+def test_join_request_waits_for_the_registered_name(monkeypatch):
+    """名前を登録する前に参加申請を送らないこと (#10).
+
+    以前は起動と同時に裏で送っていたため、初回登録の画面に名前を打ち
+    終える前に「名前: (未登録)」の申請が飛んでいた。
+    """
+    manager_main, sent = _page_without_settings(monkeypatch, name=None)
+    manager_main.main(_FakePage())
+    assert sent == []                     # まだ送らない
+
+
+def test_join_request_is_sent_once_the_name_is_registered(monkeypatch):
+    """登録済みの PC では、これまでどおり起動時に送ること."""
+    manager_main, sent = _page_without_settings(monkeypatch, name='山田太郎')
+    manager_main.main(_FakePage())
+    assert sent == ['山田太郎']
+
+
+def test_registering_a_name_sends_the_request_right_away(monkeypatch):
+    """登録の保存が済んだら、その場で申請を送ること (次回起動まで待たない)."""
+    manager_main, sent = _page_without_settings(monkeypatch, name=None)
+    saved = {}
+
+    def fake_save(name, key, config=None):
+        saved['name'] = name
+        # 保存後は名前が読めるようになる (実物と同じ振る舞い)
+        monkeypatch.setattr(manager_main.settings, 'user_name',
+                            lambda config=None: name)
+        return 'settings.json'
+    monkeypatch.setattr(manager_main.settings, 'save_settings', fake_save)
+
+    page = _FakePage()
+    manager_main.main(page)
+    assert sent == []                     # 登録前は送っていない
+
+    dialog = page.dialogs[-1]             # 初回登録ダイアログ
+    fields = [c for c in _walk_controls(dialog, [])
+              if type(c).__name__ == 'TextField']
+    fields[0].value = '山田太郎'
+    fields[1].value = 'sk-ant-api03-dummy'
+    _dialog_button(dialog, '登録してはじめる').on_click(None)
+    assert saved['name'] == '山田太郎'
+    assert sent == ['山田太郎']           # 登録直後に送られた
+
