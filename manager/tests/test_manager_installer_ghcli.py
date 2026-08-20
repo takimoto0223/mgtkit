@@ -297,6 +297,81 @@ class TestInstallRelease:
                         'distributed_at': '2026-08-18'}
 
 
+class TestInstallLock:
+    """取り込みは同時に 2 本走らせない (置き換えと pip がぶつかる).
+
+    初回起動では、画面の案内どおり「起動」を押した人と起動時の自動更新が
+    ちょうどぶつかる。負けた側は置き換えに失敗し、まだ一度も起動して
+    いないのに「フォルダが使用中です…再起動を」と案内されていた。
+    """
+
+    def test_two_installs_never_overlap(self):
+        import threading
+        import time
+        inside, overlapped = [], []
+
+        def work():
+            with updater.install_lock():
+                inside.append(1)
+                if len(inside) > 1:
+                    overlapped.append(1)
+                time.sleep(0.01)
+                inside.pop()
+
+        threads = [threading.Thread(target=work) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert overlapped == []
+
+    def test_try_lock_gives_up_when_busy(self):
+        with updater.install_lock():
+            assert updater.try_install_lock() is None
+            assert updater.installing() is True
+        assert updater.installing() is False
+        held = updater.try_install_lock()
+        assert held is not None
+        with held:
+            assert updater.installing() is True
+
+    def test_waiting_side_skips_an_install_that_already_happened(
+            self, monkeypatch, tmp_path):
+        """待っている間に同じ版が入ったら、取り込みも停止もしないこと."""
+        installed, prepared = [], []
+        monkeypatch.setattr(updater, 'install_release',
+                            lambda *a, **k: installed.append(1))
+        monkeypatch.setattr(updater, 'local_version_info',
+                            lambda d: {'version': 'v1.4'})
+        took = updater.install_if_needed(
+            'o/r', {'tag': 'v1.4'}, str(tmp_path),
+            prepare=lambda: prepared.append(1))
+        assert took is False
+        assert installed == [] and prepared == []
+
+    def test_a_different_version_is_installed(self, monkeypatch, tmp_path):
+        installed, prepared = [], []
+        monkeypatch.setattr(updater, 'install_release',
+                            lambda *a, **k: installed.append(1))
+        monkeypatch.setattr(updater, 'local_version_info',
+                            lambda d: {'version': 'v1.3'})
+        took = updater.install_if_needed(
+            'o/r', {'tag': 'v1.4'}, str(tmp_path),
+            prepare=lambda: prepared.append(1))
+        assert took is True
+        assert installed == [1] and prepared == [1]
+
+    def test_the_lock_is_released_even_when_install_fails(self, monkeypatch,
+                                                          tmp_path):
+        def boom(*a, **k):
+            raise installer.InstallError('失敗')
+        monkeypatch.setattr(updater, 'install_release', boom)
+        monkeypatch.setattr(updater, 'local_version_info', lambda d: None)
+        with pytest.raises(installer.InstallError):
+            updater.install_if_needed('o/r', {'tag': 'v1.4'}, str(tmp_path))
+        assert updater.installing() is False   # 次の取り込みが詰まらない
+
+
 def test_manager_main_compiles():
     # flet は CI に入れないため import はせず、構文チェックのみ行う
     src_path = os.path.join(os.path.dirname(updater.__file__), 'main.py')

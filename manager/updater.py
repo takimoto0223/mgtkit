@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """更新チェックと取得・インストールの一連の流れ (UI 非依存)."""
+import contextlib
 import datetime
 import logging
 import os
 import tempfile
+import threading
 
 from . import ghcli, installer, paths, safeio, versions
 
@@ -95,6 +97,76 @@ def sweep_leftovers(config=None):
     except OSError:
         pass                            # β版を試したことが無い
     return installer.sweep_swap_leftovers(*dirs)
+
+
+# --- 取り込みの直列化 ------------------------------------------------------
+#
+# 取り込みは「フォルダの置き換え + 同じ Python 環境への pip install」で、
+# **同時に 2 本走らせてはいけない**。負けた側は置き換えに失敗して
+# 「フォルダが使用中」と誤った案内になり、pip も同じ環境で衝突する。
+# 初回起動では、画面の案内どおり「起動」を押した人と起動時の自動更新が
+# ちょうどぶつかる (実測で数 % 再現)。起動・自動更新・β版のすべての
+# 取得はこの錠を通す。
+
+_INSTALL_LOCK = threading.Lock()
+
+
+def installing():
+    """いま取り込みが走っているか (待つ前の案内表示用)."""
+    return _INSTALL_LOCK.locked()
+
+
+@contextlib.contextmanager
+def install_lock():
+    """取り込みの錠 (with で使う)。先客がいれば終わるまで待つ."""
+    _INSTALL_LOCK.acquire()
+    try:
+        yield
+    finally:
+        _INSTALL_LOCK.release()
+
+
+@contextlib.contextmanager
+def _held_lock():
+    try:
+        yield
+    finally:
+        _INSTALL_LOCK.release()
+
+
+def try_install_lock():
+    """待たない版。先客がいれば None、取れたら with で使える錠.
+
+    定期の自動更新が使う (先客がいるなら次の機会に回せばよく、
+    待って重ねて取り込む意味がない)。
+    """
+    if not _INSTALL_LOCK.acquire(blocking=False):
+        return None
+    return _held_lock()
+
+
+def install_if_needed(repo, release, instance_dir, python=None,
+                      on_progress=None, config=None, prepare=None):
+    """錠を取り、まだ入っていなければ取り込む (待つ側の共通形).
+
+    先客を待っている間に同じ版が入っていたら取り込みを飛ばす
+    (同じ ZIP をもう一度落として入れ直すだけの無駄になるため)。
+    prepare: 実際に取り込むときだけ、取り込みの直前に呼ぶ
+    (起動中アプリの終了など、飛ばすときにはしたくない処理)。
+    戻り値: 取り込んだら True / すでに入っていて飛ばしたら False。
+
+    注意: 錠を持つのは取り込みの間だけにする。リリース一覧の取得などの
+    ネットワーク呼び出しは、この関数の**外**で済ませてから渡すこと。
+    """
+    with install_lock():
+        local = local_version_info(instance_dir)
+        if local is not None and local.get('version') == release['tag']:
+            return False                # 待っている間に済んでいた
+        if prepare is not None:
+            prepare()
+        install_release(repo, release, instance_dir, python=python,
+                        on_progress=on_progress, config=config)
+        return True
 
 
 def _take_version_json(app_dir):

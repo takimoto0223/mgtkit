@@ -426,12 +426,12 @@ def main(page: ft.Page):
             t1_notes_body, t1_notes_ai_box], spacing=6))
     t1_launch_btn = ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
                                     bgcolor=NAVY, color='#ffffff')
-    # installing: 自動更新の実行中 (二重実行と起動の衝突を防ぐ) /
+    # 取り込みの二重実行は updater の錠で防ぐ (updater.install_lock)。
     # pending: アプリ起動中などで取り込めなかった新しい正式版
     # (次回「起動」時に取り込む)
     # downloaded: 取り込み済みでまだ本人に知らせていない版 (次の「起動」で
     # ダイアログを出す)
-    _update_state = {'installing': False, 'pending': None, 'downloaded': None}
+    _update_state = {'pending': None, 'downloaded': None}
 
     # 空の案内 Text が行として残ると余白がガタつくため、描画のたびに
     # 空なら行ごと畳む (起動タブの案内は設定箇所が多いため一括処理)
@@ -618,8 +618,8 @@ def main(page: ft.Page):
         本人は使っていないつもりなのに使用中と言われて戸惑う。言えるのは
         「更新版を開くには、もう一度「起動」を押す」という次の一手だけ。
         """
-        if _update_state['installing'] or latest is None:
-            return False
+        if latest is None or updater.installing():
+            return False        # 取り込み中 (次の定期チェックに回す)
         if launcher.port_in_use(paths.stable_port(config)):
             _update_state['pending'] = latest
             t1_preparing_tag.visible = False  # 公開待ちは終わった
@@ -629,7 +629,9 @@ def main(page: ft.Page):
                                'ください。' % latest['tag'])
             page.update()
             return False
-        _update_state['installing'] = True
+        held = updater.try_install_lock()
+        if held is None:
+            return False        # ぎりぎりで先客が入った
         t1_launch_btn.disabled = True
         page.update()
         try:
@@ -637,9 +639,10 @@ def main(page: ft.Page):
                 t1_status.value = ('新しい版 %s を取り込んでいます... %s'
                                    % (latest['tag'], msg))
                 page.update()
-            updater.install_release(repo, latest, stable,
-                                    on_progress=progress,
-                                    config=config)
+            with held:
+                updater.install_release(repo, latest, stable,
+                                        on_progress=progress,
+                                        config=config)
             _update_state['pending'] = None
             t1_status.value = ''
             refresh_local_version(latest=True)
@@ -653,18 +656,17 @@ def main(page: ft.Page):
                                '試します)。')
             _update_state['pending'] = latest
             ok = False
-        _update_state['installing'] = False
         t1_launch_btn.disabled = False
         page.update()
         return ok
 
     def _launch(update_first=True):
-        """起動する。update_first=True なら取り込み待ちの版を先に取り込む."""
-        if _update_state['installing']:
-            t1_status.value = ('新しい版の取り込み中です。'
-                               '完了までお待ちください。')
-            page.update()
-            return
+        """起動する。update_first=True なら取り込み待ちの版を先に取り込む.
+
+        裏で取り込みが走っていても**押した人を止めない** (裏で待って
+        から続ける)。ここで断ると、終わったことを誰も知らせないまま
+        もう一度押させることになる。
+        """
         t1_update_tag.visible = False   # 更新完了の通知は一度見たら畳む
         t1_status.value = '起動しています...'
         t1_launch_btn.disabled = True   # 取り込み中の二度押しを防ぐ
@@ -692,17 +694,26 @@ def main(page: ft.Page):
                 # 取り込み待ちの新しい正式版があれば起動前に取り込む
                 pending = _update_state['pending']
                 if update_first and pending is not None:
-                    progress('新しい版 %s に更新しています...'
-                             % pending['tag'])
-                    launcher.stop_app(paths.stable_port(config))
-                    updater.install_release(repo, pending, stable,
-                                            on_progress=progress,
-                                            config=config)
+                    if updater.installing():
+                        progress('先に始まった取り込みの完了を'
+                                 '待っています...')
+                    else:
+                        progress('新しい版 %s に更新しています...'
+                                 % pending['tag'])
+                    took = updater.install_if_needed(
+                        repo, pending, stable, on_progress=progress,
+                        config=config,
+                        # 置き換えの直前に止める (飛ばすときは止めない)
+                        prepare=lambda: launcher.stop_app(
+                            paths.stable_port(config)))
                     _update_state['pending'] = None
                     refresh_local_version(latest=True)
-                    _show_updated(pending)
+                    if took:
+                        _show_updated(pending)
                 if updater.local_version_info(stable) is None:
                     # 初回: 最新の正式版を自動で取得してから起動する
+                    # (画面の案内どおり押した人と、起動時の自動更新が
+                    #  ちょうどぶつかる場面。取り込みは錠で直列化する)
                     progress('最新の版を確認しています...')
                     latest = ghcli.latest_stable(
                         ghcli.fetch_releases(repo))
@@ -712,12 +723,16 @@ def main(page: ft.Page):
                         t1_launch_btn.disabled = False
                         page.update()
                         return
-                    # 前回の残骸のサーバーが動いているとフォルダを
-                    # 置き換えられないため、先に終了させる
-                    launcher.stop_app(paths.stable_port(config))
-                    updater.install_release(repo, latest, stable,
-                                            on_progress=progress,
-                                            config=config)
+                    if updater.installing():
+                        progress('先に始まった取り込みの完了を'
+                                 '待っています...')
+                    updater.install_if_needed(
+                        repo, latest, stable, on_progress=progress,
+                        config=config,
+                        # 前回の残骸のサーバーが動いているとフォルダを
+                        # 置き換えられないため、先に終了させる
+                        prepare=lambda: launcher.stop_app(
+                            paths.stable_port(config)))
                     refresh_local_version(latest=True)
                     _refresh_current_notes()
             except (ghcli.GhError, launcher.LaunchError, Exception) as e:
@@ -1802,11 +1817,16 @@ def main(page: ft.Page):
                     if launcher.stop_other_beta(tag, port, config):
                         progress('動いていた別のβ版を終了しました')
                     if updater.local_version_info(beta) is None:
-                        launcher.stop_app(port)   # 置き換え前に念のため
-                        launcher.remember_beta(None, config)
-                        updater.install_release(repo, release, beta,
-                                                on_progress=progress,
-                                                config=config)
+                        if updater.installing():
+                            progress('先に始まった取り込みの完了を'
+                                     '待っています...')
+
+                        def _stop_beta():
+                            launcher.stop_app(port)  # 置き換え前に念のため
+                            launcher.remember_beta(None, config)
+                        updater.install_if_needed(
+                            repo, release, beta, on_progress=progress,
+                            config=config, prepare=_stop_beta)
                     proc, url = launcher.launch_app(
                         beta, port, channel='beta', config=config)
                     if proc is None:
