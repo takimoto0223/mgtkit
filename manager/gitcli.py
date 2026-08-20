@@ -41,12 +41,25 @@ def run_git(args, cwd=None, timeout=120):
         proc = subprocess.run(
             cmd, cwd=cwd, capture_output=True, text=True, encoding='utf-8',
             errors='replace', timeout=timeout, **_popen_kwargs())
-    except FileNotFoundError:
-        raise GitError('git コマンドが見つかりません。セットアップ (setup.bat) を'
-                       '実行するか、https://git-scm.com/ から導入してください。')
-    except subprocess.TimeoutExpired:
+    except OSError as e:
+        # FileNotFoundError は「git が無い」とは限らない。cwd に指定した
+        # 作業フォルダが消えていても同じ例外になる (Windows では
+        # NotADirectoryError)。git の導入を疑わせる案内はしない
+        log.exception('git を実行できませんでした (cwd=%s)', cwd)
+        if cwd and not os.path.isdir(cwd):
+            raise GitError('作業用のデータが見つかりませんでした。'
+                           'もう一度やり直してください。') from e
+        if isinstance(e, FileNotFoundError):
+            raise GitError(
+                'git コマンドが見つかりません。セットアップ (setup.bat) を'
+                '実行するか、https://git-scm.com/ から導入してください。'
+            ) from e
+        raise GitError('git を実行できませんでした。ログ (manager.log) を'
+                       '管理者にお知らせください。') from e
+    except subprocess.TimeoutExpired as e:
+        log.warning('git がタイムアウトしました: %s', args)
         raise GitError('処理がタイムアウトしました。'
-                       'ネットワーク接続を確認してください。')
+                       'ネットワーク接続を確認してください。') from e
     if proc.returncode != 0:
         log.error('git %s failed (%d): %s', args, proc.returncode,
                   proc.stderr)

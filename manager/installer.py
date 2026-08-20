@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """配布 ZIP の展開と依存インストール."""
+import errno
 import logging
 import os
 import shutil
@@ -48,6 +49,36 @@ def sweep_swap_leftovers(*dirs):
     return removed
 
 
+# 入れ替えが失敗する原因は「使用中」だけではない。原因を名指しする文言は
+# errno で分かる分だけにする (分からないものに「再起動してください」と
+# 書くと、直らない操作を延々させることになる)
+_ENOSPC = (errno.ENOSPC, errno.EDQUOT) if hasattr(errno, 'EDQUOT') else (
+    errno.ENOSPC,)
+_EBUSY = (errno.EACCES, errno.EPERM, errno.EBUSY, errno.ENOTEMPTY,
+          errno.EEXIST)
+
+
+def _replace_message(exc):
+    """入れ替え失敗の原因ごとの案内 (分からないときは決め打ちしない)."""
+    code = getattr(exc, 'winerror', None) or exc.errno
+    if exc.errno in _ENOSPC:
+        return ('パソコンの空き容量が足りないため、新しい版に'
+                '置き換えられませんでした。空き容量を増やしてから'
+                'お試しください。')
+    if exc.errno == errno.ENOENT:
+        return ('アプリの置き場所が見つからないため、新しい版に'
+                '置き換えられませんでした。マネージャーを開き直して'
+                'お試しください。')
+    if exc.errno in _EBUSY:
+        return ('アプリのフォルダが使用中のため、新しい版に'
+                '置き換えられませんでした。アプリの画面を'
+                '閉じて再試行し、直らない場合はパソコンを'
+                '再起動してからお試しください。')
+    return ('新しい版に置き換えられませんでした (%s)。'
+            'もう一度お試しください。直らない場合は、'
+            'ログ (manager.log) を管理者にお知らせください。' % code)
+
+
 def _replace_dir(src, install_dir, work_parent=None):
     """src の内容で install_dir を置き換える (失敗しても元の内容を残す).
 
@@ -79,17 +110,14 @@ def _replace_dir(src, install_dir, work_parent=None):
             if os.path.isdir(install_dir):
                 os.rename(install_dir, backup)
             os.rename(staging, install_dir)
-        except OSError:
+        except OSError as e:
             log.exception('フォルダの入れ替えに失敗しました: %s', install_dir)
             if not os.path.isdir(install_dir) and os.path.isdir(backup):
                 try:
                     os.rename(backup, install_dir)
                 except OSError:
                     pass
-            raise InstallError('アプリのフォルダが使用中のため、新しい版に'
-                               '置き換えられませんでした。アプリの画面を'
-                               '閉じて再試行し、直らない場合はパソコンを'
-                               '再起動してからお試しください。')
+            raise InstallError(_replace_message(e)) from e
     finally:
         safeio.rmtree(work)   # 中身は入れ替え前のフォルダ (読み取り専用あり)
 
@@ -105,9 +133,19 @@ def extract_zip(zip_path, install_dir, work_parent=None):
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmp)
-        except (zipfile.BadZipFile, OSError):
-            raise InstallError('取得した ZIP を展開できませんでした。'
-                               '再度お試しください。')
+        except zipfile.BadZipFile as e:
+            log.exception('ZIP が壊れています: %s', zip_path)
+            raise InstallError('ZIP ファイルが壊れているため開けません'
+                               'でした。作り直してからお試しください。') from e
+        except OSError as e:
+            # 空き容量・パスの長さ・ドライブが外れた等。やり直しても
+            # 直らないものが多いので「再度お試しください」とは言わない
+            log.exception('ZIP を展開できませんでした: %s', zip_path)
+            raise InstallError(
+                'ZIP を展開できませんでした (%s)。パソコンの空き容量と、'
+                'ファイルの置き場所 (フォルダ名が長すぎないか) を'
+                '確認してください。'
+                % (getattr(e, 'winerror', None) or e.errno)) from e
         entries = [e for e in os.listdir(tmp) if e != '__MACOSX']
         if len(entries) == 1 and os.path.isdir(os.path.join(tmp, entries[0])):
             src = os.path.join(tmp, entries[0])
@@ -132,5 +170,7 @@ def install_requirements(install_dir, python=None):
     if proc.returncode != 0:
         log.error('pip install failed: %s', proc.stderr)
         raise InstallError('必要ライブラリのインストールに失敗しました。'
-                           'ネットワーク接続を確認して再試行してください。')
+                           'ネットワーク接続を確認して再試行してください。'
+                           '直らない場合は、ログ (manager.log) を管理者に'
+                           'お知らせください。')
     return True
