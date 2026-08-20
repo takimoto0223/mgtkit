@@ -354,5 +354,7 @@ class TestManagerAlwaysUsesTheHelper:
         assert offenders == [], (
             'manager/ では safeio.rmtree() を使ってください。素の '
             'shutil.rmtree は読み取り専用のファイル (git がクローンに'
-            '付ける) を消せず、消え残りも分かりません: '
+            '付ける) を消せず、消え残りも分かりません。safeio.rmtree は '
+            '消えたかどうかを True/False で返すので、消したあとの '
+            'os.path.exists による確認も不要になります。該当箇所: '
             + '、'.join(offenders))
