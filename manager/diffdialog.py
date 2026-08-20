@@ -243,7 +243,7 @@ def _user_summary_box(model):
         return None
     rows = [ft.Text('提出時に書かれた内容です。正式版になったときに'
                     '「更新内容」「ご利用にあたっての制限事項」として'
-                    'そのまま全員に表示されます。',
+                    'そのまま表示されます。',
                     size=12, color='#6b7280')]
     n_lines = 1
     for label, text in (('更新内容', update),

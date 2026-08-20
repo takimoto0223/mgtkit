@@ -786,7 +786,7 @@ def _user_summary_html(model):
     parts = ['<div class="card usum">',
              '<p class="note">提出時に書かれた内容です。正式版になった'
              'ときに「更新内容」「ご利用にあたっての制限事項」として'
-             'そのまま全員に表示されます。</p>']
+             'そのまま表示されます。</p>']
     if update:
         parts.append('<h3>更新内容</h3><pre>%s</pre>' % html.escape(update))
     if limits:
