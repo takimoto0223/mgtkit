@@ -23,7 +23,8 @@ import shutil
 import tempfile
 
 from . import claude_helper, ghcli, installer, paths, safeio, versions
-from .gitcli import GitError, ensure_work_repo, run_git
+from .gitcli import (GitError, ensure_work_repo,
+                     reset_work_tree, run_git)
 
 log = logging.getLogger(__name__)
 
@@ -530,6 +531,9 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
                    if d in changes['deleted']]
     try:
         progress('提出用の作業場所を準備しています...')
+        # 前回の強制終了の残骸 (index.lock・半端な作業ツリー) が残って
+        # いると checkout -B が拒否される。書き込みを始める前に戻す
+        reset_work_tree(workrepo)
         user = ghcli.run_gh(['api', 'user', '--jq', '.login']).strip()
         if existing_branch:
             branch = existing_branch

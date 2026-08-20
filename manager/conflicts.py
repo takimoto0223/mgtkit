@@ -18,7 +18,8 @@ import sys
 
 from . import claude_helper, ghcli, paths
 from .autofix import _PROTECTED_PREFIXES
-from .gitcli import GitError, ensure_work_repo, run_git
+from .gitcli import (GitError, ensure_work_repo,
+                     reset_work_tree, run_git)
 from .submit import workrepo_dir
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ def _start_merge(workrepo, branch, base):
     戻り値: 衝突ファイルの相対パスリスト (空 = 衝突なしで取り込み完了、
     コミットは未実施)。
     """
+    reset_work_tree(workrepo)   # 前回の強制終了の残骸で checkout が拒否されないように
     run_git(['fetch', 'origin', branch, base], cwd=workrepo, timeout=300)
     run_git(['checkout', '-B', branch, 'origin/%s' % branch], cwd=workrepo)
     # git 個人設定が無い環境でも動くよう merge 時の識別情報を明示する

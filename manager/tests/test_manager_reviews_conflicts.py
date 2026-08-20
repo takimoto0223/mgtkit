@@ -1,4 +1,5 @@
 """manager/reviews.py・conflicts.py のテスト (gh はモック、git は実操作)。"""
+import os
 import subprocess
 
 import pytest
@@ -1074,3 +1075,20 @@ class TestConflicts:
         status = run_git(['status', '--porcelain'],
                          cwd=conflict_env['workrepo'])
         assert 'UU' not in status
+
+
+class TestConflictAfterKilledCheckout:
+    """強制終了の残骸が残った作業クローンでも統合を始められること."""
+
+    def test_analyze_recovers_from_residue(self, conflict_env):
+        wr = conflict_env['workrepo']
+        # チェックアウト中に落ちた残骸: index.lock + 未追跡扱いの半端なファイル
+        _git(['rm', '--cached', 'app.py'], cwd=wr)
+        with open(os.path.join(wr, 'app.py'), 'w', encoding='utf-8') as f:
+            f.write('half checked out\n')
+        open(os.path.join(wr, '.git', 'index.lock'), 'w').close()
+
+        analysis = conflicts.analyze('feature/x-1', {})
+        assert analysis['conflicted'] == ['app.py']   # 本来の衝突が見える
+        conflicts.abort(analysis)
+
