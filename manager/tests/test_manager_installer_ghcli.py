@@ -503,6 +503,61 @@ class TestJoinRequest:
         assert '@o さんへ' in body
 
 
+class TestJoinRequestNameRepair:
+    """名前を登録する前に送ってしまった申請を、あとから直せること.
+
+    以前は起動と同時に申請が飛び、初回登録に名前を打ち終える前に
+    「名前: (未登録)」で送られていた。しかも close 済みも含めて既存を
+    探すため二度と作り直されず、直す口も無かった。
+    """
+
+    def _gh(self, monkeypatch, calls):
+        def fake_run_gh(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'user']:
+                return 'yamada\n'
+            return ''
+        monkeypatch.setattr(ghcli, 'run_gh', fake_run_gh)
+
+    def test_open_request_gets_the_registered_name(self, monkeypatch):
+        calls = []
+        self._gh(monkeypatch, calls)
+        issue = {'number': 7, 'title': '参加申請: yamada (@yamada)',
+                 'state': 'OPEN'}
+        assert ghcli.update_join_request_name('o/r', issue, '山田太郎')
+        edit = calls[-1]
+        assert edit[:4] == ['issue', 'edit', '7', '--repo']
+        assert (edit[edit.index('--title') + 1]
+                == '参加申請: 山田太郎 (@yamada)')
+        assert '- 名前: 山田太郎' in edit[edit.index('--body') + 1]
+
+    def test_closed_request_is_left_alone(self, monkeypatch):
+        """承認・却下が済んだ申請は直しても意味がない (API の無駄打ち)."""
+        calls = []
+        self._gh(monkeypatch, calls)
+        issue = {'number': 7, 'title': '参加申請: yamada (@yamada)',
+                 'state': 'CLOSED'}
+        assert ghcli.update_join_request_name('o/r', issue, '山田太郎') is False
+        assert calls == []
+
+    def test_already_correct_is_not_rewritten(self, monkeypatch):
+        """起動のたびに同じ内容で edit を打たないこと."""
+        calls = []
+        self._gh(monkeypatch, calls)
+        issue = {'number': 7, 'title': '参加申請: 山田太郎 (@yamada)',
+                 'state': 'OPEN'}
+        assert ghcli.update_join_request_name('o/r', issue, '山田太郎') is False
+        assert calls == []
+
+    def test_no_name_yet_does_nothing(self, monkeypatch):
+        calls = []
+        self._gh(monkeypatch, calls)
+        issue = {'number': 7, 'title': '参加申請: yamada (@yamada)',
+                 'state': 'OPEN'}
+        assert ghcli.update_join_request_name('o/r', issue, '') is False
+        assert calls == []
+
+
 class TestCollaboratorInvitation:
     def test_accept_matching_invitation(self, monkeypatch):
         calls = []

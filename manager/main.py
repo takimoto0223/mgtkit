@@ -3342,6 +3342,16 @@ def main(page: ft.Page):
     #    (オーナーに通知メールが届き、「承認」の返信で自動招待される)
 
     def check_membership():
+        """招待の自動承諾と参加申請 (**名前の登録が済んでから**).
+
+        以前は起動と同時に走らせていたため、初回登録の画面に名前を
+        打ち終える前に申請が飛び、管理者に届く Issue が
+        「名前: (未登録)」になっていた (裏で gh を叩くだけなので数秒で
+        終わる)。しかも close 済みも含めて既存申請を探す作りのため、
+        二度と作り直されず直しようがなかった。
+        """
+        name = (settings.user_name(config) or '').strip()
+
         def work():
             try:
                 if ghcli.accept_repo_invitation(repo):
@@ -3349,20 +3359,26 @@ def main(page: ft.Page):
                     return
                 if ghcli.has_push_access(repo):
                     return
-                if ghcli.find_my_join_request(repo) is None:
-                    name = settings.user_name(config) or ''
+                existing = ghcli.find_my_join_request(repo)
+                if existing is None:
+                    if not name:
+                        return          # 登録が済んだら送る (下記)
                     ghcli.create_join_request(repo, name)
                     join_notice.value = ('参加申請を送信しました。管理者の'
                                          '承認後に提出・承認へ参加できます '
                                          '(起動・β版の試用は承認前でも'
                                          '使えます)。')
                 else:
+                    # 名前を登録する前に送ってしまった申請を直す
+                    ghcli.update_join_request_name(repo, existing, name)
                     join_notice.value = ('参加申請は送信済みです。管理者の'
                                          '承認をお待ちください (起動・'
                                          'β版の試用はそのまま使えます)。')
                 page.update()
+            except ghcli.GhError as e:
+                log.info('参加状態を確認できませんでした: %s', e)
             except Exception:
-                log.info('参加状態の確認をスキップしました (オフライン等)')
+                log.exception('参加状態の確認に失敗しました')
         run_bg(work)
 
     check_membership()
@@ -3446,6 +3462,9 @@ def main(page: ft.Page):
                     return
                 page.pop_dialog()
                 page.update()
+                # 登録が済んだのでここで参加申請を送る (起動と同時に
+                # 送ると「名前: (未登録)」になっていた)
+                check_membership()
             run_bg(work)
 
         save_btn = ft.FilledButton('登録してはじめる', on_click=on_save,

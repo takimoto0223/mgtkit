@@ -172,9 +172,20 @@ def create_join_request(repo, display_name):
 
     オーナーには GitHub から通知メールが届き、「承認」と返信 (コメント) すると
     .github/workflows/join-request.yml が自動で collaborator 招待を送る。
+
+    display_name は**登録済みの名前**を渡すこと。空のまま送ると
+    「名前: (未登録)」の申請になり、日本語の名前で人を見分ける運用と
+    噛み合わない (呼び出し側が登録を待つ)。
     """
     login = run_gh(['api', 'user', '--jq', '.login']).strip()
-    owner = repo.split('/')[0]
+    title, body = _join_request_texts(login, display_name,
+                                      repo.split('/')[0])
+    run_gh(['issue', 'create', '--repo', repo,
+            '--title', title, '--body', body])
+
+
+def _join_request_texts(login, display_name, owner):
+    """参加申請 Issue のタイトルと本文."""
     title = '%s: %s (@%s)' % (JOIN_REQUEST_TITLE, display_name or login,
                               login)
     # オーナーを @メンション する (Watch 設定によらず通知メールを確実に届ける)
@@ -185,8 +196,32 @@ def create_join_request(repo, display_name):
             'の返信でも可)、自動で collaborator 招待が送られます。'
             '承認しない場合はコメントせずにクローズしてください。'
             % (login, display_name or '(未登録)', owner))
-    run_gh(['issue', 'create', '--repo', repo,
-            '--title', title, '--body', body])
+    return title, body
+
+
+def update_join_request_name(repo, issue, display_name):
+    """送信済みの参加申請に、あとから登録された名前を反映する.
+
+    名前を登録する前に申請が飛んでしまった人の救済 (以前は
+    「名前: (未登録)」のまま二度と直せなかった)。
+
+    直すのは **open の申請だけ**。close 済みは承認・却下が済んでいて
+    直しても意味がなく、起動のたびに API を無駄打ちすることになる。
+    戻り値: 直したら True。
+    """
+    display_name = str(display_name or '').strip()
+    if not display_name or (issue or {}).get('state', '').upper() != 'OPEN':
+        return False
+    title = issue.get('title') or ''
+    if title.startswith('%s: %s ' % (JOIN_REQUEST_TITLE, display_name)):
+        return False                    # すでにこの名前で出ている
+    login = run_gh(['api', 'user', '--jq', '.login']).strip()
+    new_title, new_body = _join_request_texts(
+        login, display_name, repo.split('/')[0])
+    run_gh(['issue', 'edit', str(issue['number']), '--repo', repo,
+            '--title', new_title, '--body', new_body])
+    log.info('参加申請 #%s の名前を更新しました', issue['number'])
+    return True
 
 
 def accept_repo_invitation(repo):
