@@ -86,7 +86,7 @@
   #p2 .tcard .gloss { font-size: 7.3pt; margin-top: 1px; }
   #p2 .tcard .usage { font-size: 7.5pt; margin-top: 1px; }
   #p2 table { font-size: 8.2pt; margin: 4px 0; }
-  #p2 th, #p2 td { padding: 3px 7px; }
+  #p2 th, #p2 td { padding: 2px 7px; }
   #p2 .fig { margin: 3px 0 1px; }
   #p2 .fig svg { width: 600px; height: 141px; }
   .cols { display: flex; gap: 10px; }
@@ -271,7 +271,7 @@
       <path d="M21 2 v7 m-3.5 -3.5 l3.5 3.5 l3.5 -3.5" stroke="#0d9488"
             stroke-width="1.8" fill="none"/></svg>
     <span class="tt">プル</span> <span class="te">pull</span>
-    <p>リポジトリの最新の内容を、自分の PC の mgtkit フォルダ (C:\Users\(自分)\mgtkit) へ取り込む<span class="usage">用例:「最新をプルする」</span></p>
+    <p>リポジトリの最新の内容を、自分の PC の複製 (C:\mgtkit_appmanager\.manager\mgtkit) へ取り込む<span class="usage">用例:「最新をプルする」</span></p>
   </div>
   <div class="tcard">
     <svg width="40" height="26" viewBox="0 0 40 26">
@@ -313,17 +313,17 @@
 <p>メンバーが Git を直接触ることはありません。ボタンの裏で走っているのが下の操作です。</p>
 <table>
 <tr><th style="width:30%">マネージャーの操作</th><th>裏で走る Git / GitHub 操作</th></tr>
-<tr><td>setup.bat (初回)</td><td><code>git clone</code> (= <span class="term">クローン</span>) — リポジトリ全体を <code>C:\Users\(自分)\mgtkit</code> へ複製</td></tr>
-<tr><td>マネージャー起動.bat</td><td><code>git pull</code> (= <span class="term">プル</span>) — 起動のたびに最新の内容を <code>C:\Users\(自分)\mgtkit</code> へ取り込む</td></tr>
+<tr><td>setup.bat (初回)</td><td><code>git clone</code> (= <span class="term">クローン</span>) — リポジトリ全体を <code>C:\mgtkit_appmanager\.manager\mgtkit</code> へ複製 (<code>.manager</code> は通常は非表示)</td></tr>
+<tr><td>マネージャーの起動<br><span style="font-size:7.6pt; color:#64748b">(ショートカット「mgtkit アプリマネージャー」)</span></td><td><code>git pull</code> (= <span class="term">プル</span>) — 起動のたびに最新の内容を <code>C:\mgtkit_appmanager\.manager\mgtkit</code> へ取り込む</td></tr>
 <tr><td>起動 / 更新</td><td>Releases から ZIP 取得 + <code>version.json</code> に基点<span class="term">コミット</span> SHA を記録 (スナップショット。クローンではない)</td></tr>
 <tr><td>更新版を提出</td><td>基点 SHA から<span class="term">ブランチ</span> <code>feature/名前-日付-連番</code> 作成 → 差分を<span class="term">コミット</span> → <span class="term">プッシュ</span> → <span class="term">プルリクエスト</span>作成 → CI が自動で走る (メインブランチに入れても安全かの検査)</td></tr>
 <tr><td>承認 / 却下</td><td>PR レビュー (Approve / Request changes)。2 回目のクリック = 自分のレビューを取り消し (dismiss)</td></tr>
-<tr><td>リリース</td><td>squash <span class="term">マージ</span> → バージョンタグ → Release 発行 → β版 (prerelease) 削除</td></tr>
-<tr><td>最新版と統合<br><span style="font-size:7.6pt; color:#64748b">(先行してメインブランチにマージされたβ版と衝突すると、GitHub が自動検出して表示)</span></td><td>最新の内容を<span class="term">プル</span> → <code>git merge main</code> (= <span class="term">マージ</span>) で自分の枝に取り込み → <span class="term">衝突</span>部分を解消 (<code>--ours</code> 自分優先 / <code>--theirs</code> 最新版優先 / AI 両立マージ 両方の機能を残す) → <span class="term">コミット</span> → <span class="term">プッシュ</span></td></tr>
+<tr><td>リリース<br><span style="font-size:7.6pt; color:#64748b">(2 人の承認がそろうと自動で実行)</span></td><td>squash <span class="term">マージ</span> → バージョンタグ → Release 発行 → β版 (prerelease) 削除</td></tr>
+<tr><td>最新版と統合<br><span style="font-size:7.6pt; color:#64748b">(先行してメインブランチにマージされたβ版と衝突すると、GitHub が自動検出して表示)</span></td><td>最新の内容を<span class="term">プル</span> → <code>git merge main</code> (= <span class="term">マージ</span>) で自分の枝に取り込み → <span class="term">衝突</span>部分を解消 (<code>--ours</code> 提出者優先 / <code>--theirs</code> 最新版優先 / AI 両立マージ 両方の機能を残す) → <span class="term">コミット</span> → <span class="term">プッシュ</span></td></tr>
 </table>
 <p class="cap" style="text-align:left; margin:2px 0 0">※ 提出時に CI を通っていても衝突は起こり得ます (CI = その時点の幹に入れて安全かの検査 / 衝突 = その後に幹が進んで同じ箇所が重なった状態。「最新版と統合」で解消)。</p>
 
-<h3 style="margin-top:8px">2.3 版のライフサイクル — 取得からリリースまで</h3>
+<h3 style="margin-top:5px">2.3 版のライフサイクル — 取得からリリースまで</h3>
 <div class="fig">
 <svg width="640" height="150" viewBox="0 0 640 150" font-family="IPAPGothic, sans-serif">
   <defs><marker id="m2" viewBox="0 0 10 10" refX="8" refY="5"
@@ -365,9 +365,9 @@
   <rect x="336" y="92" width="140" height="40" rx="6" fill="#fff"
         stroke="#059669" stroke-width="1.3"/>
   <text x="406" y="109" font-size="9" text-anchor="middle"
-        font-weight="bold" fill="#059669">⑥ リリース</text>
+        font-weight="bold" fill="#059669">⑥ リリース (自動)</text>
   <text x="406" y="123" font-size="7.8" text-anchor="middle"
-        fill="#475569">squash マージ + タグ</text>
+        fill="#475569">承認がそろうと squash マージ + タグ</text>
   <rect x="176" y="92" width="140" height="40" rx="6" fill="#fff"
         stroke="#059669" stroke-width="1.3"/>
   <text x="246" y="109" font-size="9" text-anchor="middle"
@@ -580,7 +580,7 @@
   <rect x="250" y="150" width="140" height="30" rx="5" fill="#fffbeb"
         stroke="#b45309"/>
   <text x="320" y="163" font-size="8.2" text-anchor="middle"
-        fill="#92400e">自分の機能を優先</text>
+        fill="#92400e">提出者の機能を優先</text>
   <text x="320" y="175" font-size="7.5" text-anchor="middle"
         fill="#64748b">git checkout --ours</text>
   <rect x="410" y="150" width="140" height="30" rx="5" fill="#eff6ff"
