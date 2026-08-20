@@ -1675,24 +1675,37 @@ def main(page: ft.Page):
             page.update()
 
             def work():
+                tag = release['tag']
+                port = paths.beta_port(config)
+
                 def progress(msg):
-                    t5_status.value = '%s: %s' % (release['tag'], msg)
+                    t5_status.value = '%s: %s' % (tag, msg)
                     page.update()
-                beta = paths.beta_dir(release['tag'], config)
+                beta = paths.beta_dir(tag, config)
                 try:
+                    # 別のβ版が動いているとポートが塞がり、置き換えも
+                    # 新しい版の起動もできない (前の版の画面が開く)。
+                    # 取得済みかどうかにかかわらず先に終了させる
+                    if launcher.stop_other_beta(tag, port, config):
+                        progress('動いていた別のβ版を終了しました')
                     if updater.local_version_info(beta) is None:
-                        # 別のβ版が起動中だとフォルダの置き換えや
-                        # 新しい版の起動ができないため先に終了する
-                        launcher.stop_app(paths.beta_port(config))
+                        launcher.stop_app(port)   # 置き換え前に念のため
+                        launcher.remember_beta(None, config)
                         updater.install_release(repo, release, beta,
                                                 on_progress=progress,
                                                 config=config)
-                    _, url = launcher.launch_app(
-                        beta, paths.beta_port(config), channel='beta',
-                        config=config)
-                    t5_status.value = ('β版 %s を起動しました (安定版とは'
-                                       '別画面・別データ): %s'
-                                       % (release['tag'], url))
+                    proc, url = launcher.launch_app(
+                        beta, port, channel='beta', config=config)
+                    if proc is None:
+                        # 同じ版が動いていた (上で別の版は止めてある)
+                        t5_status.value = ('すでに起動しているβ版 %s の'
+                                           '画面を開きました: %s'
+                                           % (tag, url))
+                    else:
+                        launcher.remember_beta(tag, config)
+                        t5_status.value = ('β版 %s を起動しました (安定版とは'
+                                           '別画面・別データ): %s'
+                                           % (tag, url))
                 except (ghcli.GhError, launcher.LaunchError,
                         Exception) as e:
                     log.exception('β版の起動に失敗しました')

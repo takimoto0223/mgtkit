@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """mgtkit (Flask アプリ) の起動・停止とブラウザ表示."""
+import json
 import logging
 import os
 import socket
@@ -8,6 +9,7 @@ import sys
 import time
 import webbrowser
 
+from . import paths, safeio
 from .paths import app_dir, upload_tmp_dir
 
 log = logging.getLogger(__name__)
@@ -161,3 +163,70 @@ def stop_app(port, timeout=10.0):
         time.sleep(0.2)
     raise LaunchError('起動中のアプリを終了できませんでした。'
                       'パソコンを再起動してからもう一度お試しください。')
+
+
+# --- いま動かしているβ版 -------------------------------------------------
+#
+# β版は版ごとに別フォルダだが、**ポートは 1 つ**しかない。画面にも版名は
+# 出ないため、どの版を動かしているかはマネージャーしか知らない。控えて
+# おかないと ``stop_other_beta`` が「今回の版かどうか」を判断できない。
+
+RUNNING_BETA_NAME = 'running.json'
+
+
+def _running_beta_path(config=None):
+    return os.path.join(paths.beta_root(config), RUNNING_BETA_NAME)
+
+
+def running_beta(config=None):
+    """いまβ版ポートで動かしている版名。分からなければ None.
+
+    分からないときは None を返し、呼び出し側は「別の版かもしれない」
+    ものとして扱う (止めてから起動し直す方が安全なため)。
+    """
+    try:
+        with open(_running_beta_path(config), encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    tag = data.get('tag') if isinstance(data, dict) else None
+    return str(tag) if tag else None
+
+
+def remember_beta(tag, config=None):
+    """動かしている版を控える (tag=None で忘れる).
+
+    控えられなくても起動そのものは成功しているので、例外にはしない
+    (次に試すときへの影響は「別の版とみなして止め直す」だけ)。
+    """
+    path = _running_beta_path(config)
+    try:
+        if tag is None:
+            if os.path.exists(path):
+                os.remove(path)
+        else:
+            safeio.write_json(path, {'tag': str(tag)}, indent=2)
+    except OSError:
+        log.info('動かしているβ版を控えられませんでした: %s', path,
+                 exc_info=True)
+
+
+def stop_other_beta(tag, port, config=None):
+    """β版ポートで動いているのが tag 以外なら終了する (止めたら True).
+
+    取得済みの版は入れ替えが要らないので、以前はここを素通りしていた。
+    しかし別のβ版が動いたままだとポートが塞がっており、``launch_app``
+    は新しく起動せず**前の版の画面**を開く。画面に版名が出ないため、
+    利用者は違う版を見たまま気づかず、フィードバックも見ていない版の
+    提出に付いてしまう。
+
+    どの版が動いているか分からないときも止める (取り違えるより安全)。
+    止められないときは ``stop_app`` が LaunchError を投げる。
+    """
+    if not port_in_use(port):
+        return False
+    if running_beta(config) == str(tag):
+        return False            # 同じ版が動いている (開き直すだけでよい)
+    stopped = stop_app(port)
+    remember_beta(None, config)
+    return stopped
