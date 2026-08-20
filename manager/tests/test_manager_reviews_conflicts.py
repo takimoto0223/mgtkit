@@ -957,6 +957,19 @@ class TestReleaseNotesFromPr:
         assert '- 改善。' in notes
         assert '影響範囲' not in notes
 
+    def test_title_becomes_the_headline(self):
+        # 提出のタイトルが先頭の見出しになる (起動タブの 1 行目)
+        notes = reviews.release_notes_from_pr(
+            self.BODY, 'v1.2', '組立断面 (2C・2L) に対応')
+        assert notes.startswith('# 組立断面 (2C・2L) に対応\n')
+        assert 'リリースノート' not in notes
+        assert '### 1. 組立断面への対応' in notes
+
+    def test_without_a_title_keeps_the_version_headline(self):
+        # タイトルの無い古い提出は従来どおり版名の見出し
+        notes = reviews.release_notes_from_pr(self.BODY, 'v1.2', '  ')
+        assert notes.startswith('# mgtkit v1.2 リリースノート')
+
     def test_no_update_section_returns_none(self):
         # 様式に沿わない本文 (手書き等) は呼び出し側の定型文に任せる
         assert reviews.release_notes_from_pr('自由記述の本文', 'v1.2') is None

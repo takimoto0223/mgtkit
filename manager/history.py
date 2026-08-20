@@ -258,6 +258,22 @@ def _assign_lanes(chips, today, base_dates):
         placed.setdefault(lane, []).append(span)
 
 
+def split_title(notes):
+    """リリースノートを (見出し, 残り) に分ける.
+
+    提出のタイトルは先頭の「# 〜」1 行として入っている
+    (reviews.release_notes_from_pr)。起動タブはこれを太字の 1 行目に出す。
+    版名だけの古い見出し (「# mgtkit v1.4 リリースノート」) は呼び出し前に
+    落としてある前提なので、ここでは残った先頭の # 行をそのまま採る。
+    見出しが無ければ (None, 全文)。
+    """
+    lines = (notes or '').strip().splitlines()
+    if lines and lines[0].startswith('# '):
+        return (lines[0][2:].strip() or None,
+                '\n'.join(lines[1:]).strip())
+    return None, (notes or '').strip()
+
+
 _AI_HEAD = re.compile(r'^#{0,6}\s*AI が自動で調整した箇所\s*$')
 
 

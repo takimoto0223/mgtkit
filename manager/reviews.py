@@ -849,18 +849,23 @@ def next_stable_version(config=None):
 _NOTES_NO_LIMITS = re.compile(r'^[-*・]?\s*(特に)?(なし|ありません)[。.]?$')
 
 
-def release_notes_from_pr(pr_body, version):
+def release_notes_from_pr(pr_body, version, title=''):
     """PR 本文の様式から利用者向けリリースノートを組み立てる (API 不使用).
 
     提出時に自動生成される「## 更新内容」「## ご利用にあたっての制限事項」を
     そのまま転載する。レビュー担当者向けの節 (影響範囲・変更ファイルの説明・
     注意・提出時の警告) は載せない。制限事項が「- なし」だけなら節ごと省く。
     「## 更新内容」が見つからなければ None (呼び出し側が定型文へ戻す)。
+
+    title (提出のタイトル) があれば見出し (先頭の # 行) にする。起動タブは
+    この行を「現行版の更新内容」の 1 行目に太字で出す (history.split_title)。
     """
     content, limits = user_sections(pr_body)
     if not content:
         return None
-    parts = ['# mgtkit %s リリースノート' % version, '',
+    head = ('# %s' % title.strip() if (title or '').strip()
+            else '# mgtkit %s リリースノート' % version)
+    parts = [head, '',
              '## %s' % submit.UPDATE_KEY, '', content]
     if limits and not _NOTES_NO_LIMITS.match(limits):
         parts += ['', '## %s' % submit.LIMITS_KEY_FULL, '', limits]
@@ -902,7 +907,8 @@ def release(pr_number, config=None, on_progress=None):
     # 提出時に用意済みの PR 本文から転載する (ここでは API を使わない)。
     # 更新内容が書かれていない提出 (空欄のまま提出) は空欄でリリースする
     # (管理者の指示 2026-08。Releases 側は「vX.Y リリース」だけになる)
-    notes = release_notes_from_pr(detail.get('body', ''), version) or ''
+    notes = release_notes_from_pr(detail.get('body', ''), version,
+                                  detail.get('title', '')) or ''
 
     progress('%s のリリースを開始しています...' % version)
     ghcli.run_gh(['workflow', 'run', 'release.yml', '--repo',
