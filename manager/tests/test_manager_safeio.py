@@ -324,3 +324,35 @@ class TestRmtree:
         import inspect
         params = inspect.signature(real).parameters
         assert safeio._RMTREE_HANDLER in params
+
+
+class TestManagerAlwaysUsesTheHelper:
+    """manager/ の後片付けは safeio.rmtree に寄せる (2026-08 の決定).
+
+    素の shutil.rmtree は読み取り専用のファイルを消せず、
+    ignore_errors=True を付けると消え残ったことすら分からない。
+    新しく書くと Windows のクローン配下で必ず詰まる。
+
+    このガードは「別のブランチで書かれた shutil.rmtree が、import を
+    消した変更と静かに合流して NameError になる」事故も止める
+    (実際に起きた。manager/docs/decisions.md 参照)。
+    """
+
+    def test_no_bare_shutil_rmtree_in_manager(self):
+        import pathlib
+
+        manager_dir = pathlib.Path(safeio.__file__).resolve().parent
+        offenders = []
+        for py in sorted(manager_dir.rglob('*.py')):
+            if py.name == 'safeio.py' or 'tests' in py.parts:
+                continue        # 本体と、対で固定しているテストは対象外
+            lines = py.read_text(encoding='utf-8').splitlines()
+            for i, line in enumerate(lines, 1):
+                if 'shutil.rmtree' in line:
+                    offenders.append('%s:%d' % (
+                        py.relative_to(manager_dir), i))
+        assert offenders == [], (
+            'manager/ では safeio.rmtree() を使ってください。素の '
+            'shutil.rmtree は読み取り専用のファイル (git がクローンに'
+            '付ける) を消せず、消え残りも分かりません: '
+            + '、'.join(offenders))

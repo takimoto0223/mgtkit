@@ -1926,6 +1926,17 @@ https://platform.claude.com/settings/workspaces/default/keys
 動いている Python に合わせて渡す (第 3 引数の中身が違うだけで、ここでは
 使わないので処理は同じ)。
 
+**ガードを足した理由 (2026-08, レビューで判明した実例)。** `updater.py`
+から使わなくなった `import shutil` を消したところ、別ブランチが同じ
+ファイルに追加していた `prune_betas()` (中で `shutil.rmtree` を使用) と
+**git がコンフリクトを出さずに合流し**、import が無いのに呼ぶ
+`NameError` になった。テストが捕まえるので実機までは行かないが、
+落ち方が原因から遠い。そこで「`manager/` に素の `shutil.rmtree` を
+書かない」をテストで固定し、落ちたときに**何をすればよいか**が
+メッセージに出るようにした。`prune_betas` 側は `safeio.rmtree(path)` に
+置き換えれば、いま書いてある `os.path.exists` の二度手間もそのまま消える
+(戻り値が成否を返すため)。
+
 固定の仕方: 読み取り専用の中身を含むフォルダ (git のクローンを模した形)
 を作り、消せることを確かめる。あわせて**素の `shutil.rmtree` では
 `ignore_errors=True` でも消え残ること**を対にして固定した (この対処が
