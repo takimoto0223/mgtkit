@@ -18,8 +18,8 @@ import webbrowser
 
 from . import (autofix, claude_helper, conflicts, diffdialog, diffview,
                feedback, ghcli,
-               history, historyview, launcher, localstate, migrate, paths,
-               reviewcache, reviews, rocketfx, safeio, selfupdate,
+               history, historyview, launcher, localstate, logsetup, migrate,
+               paths, reviewcache, reviews, rocketfx, safeio, selfupdate,
                settings, submit, uiguard, updater, usage)
 from .gitcli import GitError
 
@@ -105,6 +105,7 @@ async def save_path_dialog(picker, file_name,
 
 
 def main(page: ft.Page):
+    logsetup.setup(paths.load_config())   # 以後のログをファイルにも残す
     page.title = 'mgtkit アプリマネージャー'
     # OS のダークモード設定に追従させず、ガイドと同じ見た目に固定する
     page.theme_mode = ft.ThemeMode.LIGHT
