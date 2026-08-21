@@ -14,8 +14,6 @@
 処理を分割している: prepare_submission() → (UI で確認) → finalize_submission()
 """
 import datetime
-import fnmatch
-import json
 import logging
 import os
 import re

@@ -11,7 +11,6 @@
 - **引き継ぎを確認できないときは消さない**
 """
 import json
-import os
 
 import pytest
 

@@ -5,7 +5,6 @@ import subprocess
 import pytest
 
 from manager import selfupdate
-from manager.gitcli import run_git
 
 
 def _git(args, cwd):
