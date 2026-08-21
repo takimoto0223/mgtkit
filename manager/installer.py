@@ -164,9 +164,15 @@ def install_requirements(install_dir, python=None):
         log.warning('requirements.txt が見つかりません: %s', install_dir)
         return False
     python = python or sys.executable
+    # pip は BOM の無い requirements.txt を OS の既定の文字コード (日本語
+    # Windows では cp932) で読むため、UTF-8 の日本語コメントが入っていると
+    # UnicodeDecodeError で pip ごと失敗する。PYTHONUTF8=1 で pip 側の
+    # 既定を UTF-8 に固定する (配布物の requirements.txt は UTF-8 前提)
+    env = dict(os.environ, PYTHONUTF8='1')
     proc = subprocess.run(
         [python, '-m', 'pip', 'install', '-r', req],
-        capture_output=True, text=True, encoding='utf-8', errors='replace')
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        env=env)
     if proc.returncode != 0:
         log.error('pip install failed: %s', proc.stderr)
         raise InstallError('必要ライブラリのインストールに失敗しました。'

@@ -2629,3 +2629,25 @@ user_sections で取り出してモデルに載せ、アプリ内ダイアログ
   リリースノートのレビューを兼ねていることを分かるようにする)
 - 旧様式・空欄の提出では箱ごと出さない (誤って空の節を見せない)
 - β版タブのカード側には出さない (カードは一覧性優先。詳細は差分で)
+
+## 取り込み時の pip は UTF-8 で requirements.txt を読ませる (2026-08, 実機で発生)
+
+v1.5 の自動取り込みが日本語 Windows で失敗した。pip は BOM の無い
+requirements.txt を OS の既定の文字コード (日本語 Windows では cp932)
+で読むため、本体の requirements.txt に足した UTF-8 の日本語コメント
+(「# mgtkit 実行時依存 …」) が `UnicodeDecodeError` になり、
+インストールごと失敗していた (画面の案内は「ネットワーク接続を確認」
+と出るが、原因は通信ではない)。
+
+- 直し方: `installer.install_requirements` が pip を起動するときに
+  環境変数 `PYTHONUTF8=1` を渡す。pip は文字コードが判別できないとき
+  Python の既定 (`locale.getpreferredencoding`) に落ちるので、これで
+  requirements.txt を UTF-8 として読む (配布物のテキストは UTF-8 前提)
+- requirements.txt から日本語コメントを消す案は採らなかった:
+  すでに公開済みの v1.5 の ZIP は直せないため、マネージャー側で
+  受け止めないと既存リリースの取り込みが直らない。また「コメントに
+  日本語を書いたら全員の取り込みが壊れる」という地雷が残る
+- BOM (utf-8-sig) や `# -*- coding: utf-8 -*-` を requirements.txt に
+  足す案も同じ理由 (公開済みの版に効かない) で採らなかった
+- 環境変数は `os.environ` ごと引き継いだ上に足す (pip はプロキシ設定
+  などを環境から読むため、置き換えではなく追加)

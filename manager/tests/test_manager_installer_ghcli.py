@@ -83,6 +83,50 @@ class TestExtractZip:
         assert os.listdir(str(tmp_path / 'inst')) == ['mgtkit']
 
 
+class TestInstallRequirements:
+    """pip の起動のしかたのテスト (pip 自体は動かさない)."""
+
+    def _capture_pip(self, monkeypatch, returncode=0):
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen['cmd'] = cmd
+            seen['kwargs'] = kwargs
+            class Proc:
+                pass
+            proc = Proc()
+            proc.returncode = returncode
+            proc.stderr = 'UnicodeDecodeError: cp932 ...'
+            return proc
+        monkeypatch.setattr(installer.subprocess, 'run', fake_run)
+        return seen
+
+    def test_pip_reads_requirements_as_utf8(self, monkeypatch, tmp_path):
+        # 日本語 Windows の pip は BOM の無い requirements.txt を cp932 で
+        # 読み、UTF-8 の日本語コメントがあると UnicodeDecodeError で落ちる
+        # (v1.5 取り込みの実機障害)。PYTHONUTF8=1 で UTF-8 に固定すること
+        (tmp_path / 'requirements.txt').write_text(
+            '# 実行時依存 (日本語コメント)\nflask\n', encoding='utf-8')
+        seen = self._capture_pip(monkeypatch)
+        assert installer.install_requirements(str(tmp_path)) is True
+        env = seen['kwargs']['env']
+        assert env['PYTHONUTF8'] == '1'
+        # 既存の環境変数ごと渡す (pip はプロキシ設定などを環境から読む)
+        assert len(env) >= len(os.environ)
+
+    def test_no_requirements_file_is_skipped(self, monkeypatch, tmp_path):
+        seen = self._capture_pip(monkeypatch)
+        assert installer.install_requirements(str(tmp_path)) is False
+        assert seen == {}       # pip を起動しない
+
+    def test_pip_failure_raises_friendly_error(self, monkeypatch, tmp_path):
+        (tmp_path / 'requirements.txt').write_text('flask\n',
+                                                   encoding='utf-8')
+        self._capture_pip(monkeypatch, returncode=1)
+        with pytest.raises(installer.InstallError, match='必要ライブラリ'):
+            installer.install_requirements(str(tmp_path))
+
+
 RELEASES_JSON = [
     {'tag_name': 'v1.3-beta.2', 'name': 'beta 2', 'prerelease': True,
      'body': 'beta notes', 'published_at': '2026-08-01T00:00:00Z',
