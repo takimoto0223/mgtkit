@@ -103,6 +103,36 @@ jobs:
           print('ガード OK')
           EOF
 
+      # 資料が古い置き場所を案内したままにならないようにする。
+      # 引っ越し (#144, #145) のあと、ルート README だけが消えるフォルダ
+      # (C:\Users\(自分)\mgtkit) を入口として案内し続けていた。
+      # 「気をつけて更新する」という申し合わせでは止まらないので検査する。
+      - name: 古い置き場所の案内ガード
+        run: |
+          python3 - <<'EOF'
+          import re, sys
+          # 引っ越し前の置き場所 (いまは存在しない)
+          OLD = re.compile(r'Users\\\(自分\)\\mgtkit'
+                           r'|AppData\\Local\\mgtkit')
+          TARGETS = ['README.md', 'manager/README.md']
+          bad = []
+          for path in TARGETS:
+              try:
+                  with open(path, encoding='utf-8') as f:
+                      for n, line in enumerate(f, 1):
+                          if OLD.search(line):
+                              bad.append('%s:%d: %s' % (path, n,
+                                                        line.strip()[:70]))
+              except FileNotFoundError:
+                  continue
+          if bad:
+              print('引っ越し前の置き場所を案内しています '
+                    '(現在は C:\\mgtkit_appmanager):')
+              print('\n'.join(bad))
+              sys.exit(1)
+          print('ガード OK')
+          EOF
+
       # マネージャー本体を更新する PR では、API の単価と為替レートを
       # 公式料金表で確認し直したか (config.json rates_updated_at) を見る。
       # ネットには一切つながず、リポジトリの中身だけで判定する。

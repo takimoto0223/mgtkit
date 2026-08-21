@@ -22,8 +22,9 @@ import re
 import shutil
 import tempfile
 
-from . import claude_helper, ghcli, installer, paths, versions
-from .gitcli import GitError, ensure_work_repo, run_git
+from . import claude_helper, ghcli, installer, paths, safeio, versions
+from .gitcli import (GitError, ensure_work_repo,
+                     reset_work_tree, run_git)
 
 log = logging.getLogger(__name__)
 
@@ -150,26 +151,29 @@ def inspect_zip(zip_path):
     """ZIP を展開し version.json から基点を特定する.
 
     戻り値: dict(tmp, extract_dir, base_version, base_commit)
-    呼び出し側は使用後に shutil.rmtree(tmp) すること。
+    呼び出し側は使用後に cleanup() すること。
     """
     tmp = tempfile.mkdtemp(prefix='mgtkit_submit_')
     extract_dir = os.path.join(tmp, 'zip')
     try:
         installer.extract_zip(zip_path, extract_dir)
     except installer.InstallError as e:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise SubmitError(str(e))
+        safeio.rmtree(tmp)
+        # 提出は利用者が選んだ ZIP なので「取得した ZIP」とは言わない。
+        # 原因 (空き容量・パスの長さ等) は installer が文言に入れている
+        log.exception('提出 ZIP を開けませんでした: %s', zip_path)
+        raise SubmitError(str(e)) from e
 
     info = versions.read_version_json(extract_dir)
     if info is None:
-        shutil.rmtree(tmp, ignore_errors=True)
+        safeio.rmtree(tmp)
         raise SubmitError(
             'この ZIP には版の情報 (version.json) が含まれていないか、'
             '壊れています。マネージャーで取得した版のフォルダを丸ごと ZIP に'
             'して提出してください。')
     commit = str(info.get('commit') or '').strip()
     if not commit:
-        shutil.rmtree(tmp, ignore_errors=True)
+        safeio.rmtree(tmp)
         raise SubmitError(
             '版の情報 (version.json) に基点の記録がありません。'
             'マネージャーで取得した版を基に作業してください。')
@@ -332,7 +336,13 @@ def prepare_submission(zip_path, config=None, workrepo=None,
 
 
 def cleanup(prep):
-    shutil.rmtree(prep.get('tmp', ''), ignore_errors=True)
+    """展開に使った一時フォルダを片付ける (消えたら True).
+
+    提出者の ZIP をそのまま展開した中身なので、クローン (.git) が
+    混ざっていることがある。git は Windows でクローンの中身に読み取り
+    専用属性を付けるため、素の rmtree では消しきれない。
+    """
+    return safeio.rmtree(prep.get('tmp', ''))
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +405,43 @@ def pr_body_sections(body):
     return sections
 
 
+# PR タイトルの最大長 (GitHub の一覧で切れずに読める範囲)。承認タブの
+# 見出しと、正式版のリリースノートの 1 行目に出る
+TITLE_MAX = 70
+
+# タイトルに使う行の頭から落とす箇条書きの記号 ("-30%" のような書き出しを
+# 壊さないよう、ハイフン・アスタリスクは後ろに空白がある場合だけ落とす)
+_BULLET = re.compile(r'^\s*(?:[-*]\s+|[・･]\s*)')
+
+
+def title_line(text):
+    """複数行の文章から PR タイトル用の 1 行を作る.
+
+    最初の中身のある行を採り、箇条書きの記号を落として TITLE_MAX で切る。
+    空文字なら '' (呼び出し側が既定のタイトルへ落とす)。
+    """
+    for line in (text or '').splitlines():
+        line = _BULLET.sub('', line).strip()
+        if line:
+            return line[:TITLE_MAX]
+    return ''
+
+
+def split_body_title(body):
+    """本文の先頭にある「# タイトル」行を (タイトル, 残り) に分ける.
+
+    generate_pr_body は 1 行目にタイトルを書く (API 呼び出しを提出
+    1 回につき 1 回にするため、タイトル専用の生成はしない)。PR 本文には
+    タイトル欄が別にあるので、本文からはこの行を抜いて使う。
+    無ければ ('', 全文)。
+    """
+    lines = (body or '').lstrip().splitlines()
+    if lines and lines[0].startswith('# '):
+        return (lines[0][2:].strip(),
+                '\n'.join(lines[1:]).lstrip('\n'))
+    return '', (body or '')
+
+
 def user_sections(body):
     """PR 本文から利用者向けの 2 項目 (更新内容, 制限事項) を取り出す.
 
@@ -451,7 +498,8 @@ def fallback_pr_body(update_text, limitations, base_version, summary):
 
 def finalize_submission(prep, intentional_deletions, commit_message='',
                         config=None, on_progress=None, existing_branch=None,
-                        limitations='', use_ai=False, on_review=None):
+                        limitations='', use_ai=False, on_review=None,
+                        title=''):
     """準備済みの提出を確定する.
 
     intentional_deletions: 「意図的な削除」とユーザーが確認したファイル。
@@ -462,11 +510,17 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
     use_ai: True なら提出のまとめ (コミットメッセージ・PR 本文) を Claude で
     自動生成する (API 使用料は提出者負担のため、UI で本人が選んだときのみ
     True にする)。False なら手書きの内容から API を使わず組み立てる。
-    on_review: 自動生成した「更新内容」「制限事項」を提出者に見せて直させる
-    ための関数 (update, limits) -> (update, limits) / None。この 2 項目は
-    そのまま正式版のリリースノートになるため、本人が一度も読まないまま
-    公開されないようにする (管理者の指示 2026-08)。None を返したら
-    SubmitCancelled を送出する (まだ push していないので副作用は残らない)。
+    on_review: 自動生成した「タイトル」「更新内容」「制限事項」を提出者に
+    見せて直させるための関数 (title, update, limits) -> 同じ 3 つ組 / None。
+    この 3 項目はそのまま正式版のリリースノートになるため、本人が一度も
+    読まないまま公開されないようにする (管理者の指示 2026-08)。None を
+    返したら SubmitCancelled を送出する (まだ push していないので副作用は
+    残らない)。
+    title: 提出者が書いたタイトル (任意)。空なら更新内容の 1 行目を使い、
+    それも無ければ「vX.Y を基点とした機能追加の提出」に落とす。
+    use_ai のときは自動生成が失敗した時点で claude_helper.ClaudeError を
+    そのまま上げる (黙って定型文で提出すると、更新内容が空のまま正式版まで
+    進んでしまうため。管理者の指示 2026-08)。
     戻り値: dict(pr_url, branch, commit_message)
     """
     def progress(msg):
@@ -480,6 +534,9 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
                    if d in changes['deleted']]
     try:
         progress('提出用の作業場所を準備しています...')
+        # 前回の強制終了の残骸 (index.lock・半端な作業ツリー) が残って
+        # いると checkout -B が拒否される。書き込みを始める前に戻す
+        reset_work_tree(workrepo)
         user = ghcli.run_gh(['api', 'user', '--jq', '.login']).strip()
         if existing_branch:
             branch = existing_branch
@@ -510,32 +567,34 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         summary = _diff_summary(changes, intentional)
         diff_text = run_git(['diff', '--cached'], cwd=workrepo)
 
-        message = (commit_message or '').strip()
-        if not message and use_ai:
-            progress('コミットメッセージを自動生成しています...')
-            message = claude_helper.generate_commit_message(
-                summary, diff_text) or ''
-        if not message:
-            message = '%s を基点とした機能追加の提出' % prep['base_version']
-
         notes = ''
         if prep['safety']['warnings']:
             notes = ('# 提出時の警告 (承認時に確認)\n- '
                      + '\n- '.join(prep['safety']['warnings']))
-        # 本文は送信の前に作る。自動作成のときは提出者に見せて直させるので、
-        # ここで取り消されても push 済みのブランチが残らない
+        # タイトルも本文も送信の前に用意する。自動作成のときは提出者に
+        # 見せて直させるので、ここで取り消されても push 済みのブランチが
+        # 残らない
+        update_text = (commit_message or '').strip()
+        title_text = title_line(title) or title_line(update_text)
         body = None
         if use_ai:
+            # API 呼び出しは提出 1 回につきこの 1 回だけ。タイトルも
+            # 本文の 1 行目 (# 行) としてまとめて書かせて取り出す
             progress('提出内容のまとめを作成しています...')
             body = claude_helper.generate_pr_body(
-                summary, diff_text, prep['base_version'], notes)
-            if body and on_review:
-                reviewed = on_review(*user_sections(body))
+                summary, diff_text, prep['base_version'], notes, strict=True)
+            drafted, body = split_body_title(body)
+            title_text = title_line(drafted) or title_text
+            update_text, limits_text = user_sections(body)
+            if on_review:
+                reviewed = on_review(title_text, update_text, limits_text)
                 if reviewed is None:
                     raise SubmitCancelled('提出を取り消しました。')
-                body = body_with_user_sections(body, *reviewed)
+                title_text = title_line(reviewed[0]) or title_text
+                update_text, limits_text = reviewed[1], reviewed[2]
+                body = body_with_user_sections(body, update_text, limits_text)
         if not body:
-            body = fallback_pr_body(commit_message, limitations,
+            body = fallback_pr_body(update_text, limitations,
                                     prep['base_version'], summary)
         # 提出の基点 (提出者が取得した版) を機械可読で残す。過去の更新ログの
         # 図はこれを読む。自動生成した本文には版名が入る保証がないため、
@@ -544,7 +603,11 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
                                                 prep['base_commit']), body)
         if notes:
             body += '\n\n' + notes
-        title = message.splitlines()[0][:70]
+        # タイトルは PR の見出し (承認タブ) と正式版のリリースノートの
+        # 1 行目になる。コミットメッセージは「タイトル + 空行 + 更新内容」
+        title = title_text or ('%s を基点とした機能追加の提出'
+                               % prep['base_version'])
+        message = '%s\n\n%s' % (title, update_text) if update_text else title
 
         progress('変更を記録しています...')
         run_git(['-c', 'user.name=%s' % user,

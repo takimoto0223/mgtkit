@@ -16,10 +16,11 @@ import flet as ft
 
 import webbrowser
 
-from . import (autofix, conflicts, diffdialog, diffview, feedback, ghcli,
-               history, historyview, launcher, localstate, paths,
-               reviewcache, reviews, rocketfx, selfupdate, settings,
-               submit, uiguard, updater, usage)
+from . import (autofix, claude_helper, conflicts, diffdialog, diffview,
+               feedback, ghcli,
+               history, historyview, installer, launcher, localstate,
+               logsetup, migrate, paths, reviewcache, reviews, rocketfx,
+               safeio, selfupdate, settings, submit, uiguard, updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -104,6 +105,7 @@ async def save_path_dialog(picker, file_name,
 
 
 def main(page: ft.Page):
+    logsetup.setup(paths.load_config())   # 以後のログをファイルにも残す
     page.title = 'mgtkit アプリマネージャー'
     # OS のダークモード設定に追従させず、ガイドと同じ見た目に固定する
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -254,6 +256,8 @@ def main(page: ft.Page):
         updated = usage.rates_updated_text(config)
         model = usage.model_name(config)
         price_url = usage.pricing_url(config)
+        console_url = ('https://platform.claude.com/settings/'
+                       'workspaces/default/keys')
 
         def usd(v):
             return '$%.2f' % v if (v >= 0.005 or v == 0) else '$%.3f' % v
@@ -336,6 +340,15 @@ def main(page: ft.Page):
                 ft.Text('正確な請求額は Claude Console で確認してください。'
                         '他の PC や他のアプリでの利用は含みません。',
                         size=11, color='#6b7280'),
+                ft.Text(spans=[
+                    ft.TextSpan(
+                        console_url,
+                        ft.TextStyle(
+                            color=NAVY,
+                            decoration=ft.TextDecoration.UNDERLINE),
+                        url=console_url,
+                        tooltip='ブラウザで Claude Console を開きます'),
+                ], size=11, color='#6b7280'),
             ], tight=True, width=620),
             actions=[ft.TextButton('閉じる',
                                    on_click=lambda _: page.pop_dialog())]))
@@ -387,6 +400,10 @@ def main(page: ft.Page):
     # 現行版の更新内容 (常設。何が入っている版かを後から確認できる)
     t1_notes_head = ft.Text('', size=13, weight=ft.FontWeight.BOLD,
                             color='#374151')
+    # 提出のタイトル (リリースノートの先頭 # 行)。版名の見出しの下に
+    # 太字で 1 行だけ出す。無い版 (v1.4 以前) では欄ごと隠す
+    t1_notes_title = ft.Text('', size=16.5, weight=ft.FontWeight.BOLD,
+                             color='#1f2937', selectable=True, visible=False)
     t1_notes_body = ft.Text('', size=13, selectable=True, color='#374151')
     # AI が自動で調整した箇所は琥珀色の枠で色分けして見せる
     t1_notes_ai_body = ft.Text('', size=12.5, selectable=True,
@@ -402,14 +419,19 @@ def main(page: ft.Page):
         ], spacing=6, tight=True))
     t1_notes_box = ft.Container(
         visible=False, bgcolor='#f5f7fa', border_radius=6, padding=12,
-        content=ft.Column([t1_notes_head, t1_notes_body, t1_notes_ai_box],
-                          spacing=6))
+        content=ft.Column([
+            t1_notes_head,
+            # 見出しと本文が同列に見えないよう、下だけ余白を足す
+            ft.Container(t1_notes_title, margin=ft.Margin(0, 0, 0, 4)),
+            t1_notes_body, t1_notes_ai_box], spacing=6))
     t1_launch_btn = ft.FilledButton('起動', icon=ft.Icons.PLAY_ARROW,
                                     bgcolor=NAVY, color='#ffffff')
-    # installing: 自動更新の実行中 (二重実行と起動の衝突を防ぐ) /
+    # 取り込みの二重実行は updater の錠で防ぐ (updater.install_lock)。
     # pending: アプリ起動中などで取り込めなかった新しい正式版
     # (次回「起動」時に取り込む)
-    _update_state = {'installing': False, 'pending': None}
+    # downloaded: 取り込み済みでまだ本人に知らせていない版 (次の「起動」で
+    # ダイアログを出す)
+    _update_state = {'pending': None, 'downloaded': None}
 
     # 空の案内 Text が行として残ると余白がガタつくため、描画のたびに
     # 空なら行ごと畳む (起動タブの案内は設定箇所が多いため一括処理)
@@ -489,13 +511,17 @@ def main(page: ft.Page):
             t1_notes_box.visible = False
         else:
             t1_notes_head.value = '現行版 (%s) の更新内容' % rel['tag']
-            normal, ai = history.split_ai_note(
+            headline, rest = history.split_title(
                 _clean_notes(rel['tag'], rel.get('notes')))
+            normal, ai = history.split_ai_note(rest)
+            t1_notes_title.value = headline or ''
+            t1_notes_title.visible = bool(headline)
             t1_notes_body.value = normal or '(更新内容の記載はありません)'
             t1_notes_ai_body.value = ai or ''
             t1_notes_ai_box.visible = bool(ai)
             t1_notes_box.visible = True
-            _fit_window_to_notes(t1_notes_body.value)
+            _fit_window_to_notes('\n'.join(
+                x for x in (headline, t1_notes_body.value) if x))
         page.update()
 
     def _show_updated(release):
@@ -507,11 +533,77 @@ def main(page: ft.Page):
         t1_update_tag.content.value = ('アプリを %s に更新しました。'
                                        'このまま「起動」してお使い'
                                        'いただけます。' % release['tag'])
+        _update_state['downloaded'] = release['tag']
         t1_update_tag.visible = True
         t1_preparing_tag.visible = False
         set_badge(launch_badge, 0)
         t1_notice.value = ''
         _refresh_current_notes()
+        page.update()
+
+    def _notify_downloaded(then_open):
+        """届いた更新版を、アプリを開く前に知らせる (管理者指示 2026-08).
+
+        黄色いタグだけでは見落とす人がいる。かといって知らせたそばから
+        ブラウザを前面に出すと、タグもダイアログもその陰に隠れて
+        「出したことにして消える」ことになる。そこで:
+
+        - まず版と保存先を出し、「アプリを開く」を押してから開く
+        - 札を下ろすのは**閉じたとき** (読まれてから消費する)。読まずに
+          隠れて消えることがなく、同じ版で二度も出ない
+        - 同じことを二度言わないよう、黄色いタグはここで畳む
+
+        then_open: 読み終えたあとに続ける処理 (アプリを開く)。
+        知らせるものが無ければそのまま呼ぶ。
+        """
+        tag = _update_state['downloaded']
+        if not tag:
+            then_open()
+            return
+
+        opened = {'done': False}   # 連打で二重に開かないための札
+
+        def on_open(_):
+            if opened['done']:
+                return
+            opened['done'] = True
+            _update_state['downloaded'] = None   # 読まれてから消す
+            page.pop_dialog()
+            t1_status.value = 'アプリを開いています...'
+            page.update()
+            run_bg(then_open)   # 開くのは時間がかかるので裏で
+
+        def on_dismiss(_):
+            """ボタン以外で閉じられたとき (Esc など) の後始末.
+
+            知らせは未読のまま (札は下ろさない) にして次の「起動」で
+            もう一度出し、押せる状態へ戻す。ここを戻さないと「起動」が
+            無効のまま固まり、マネージャーを開き直すまで起動できない。
+            """
+            if opened['done']:
+                return
+            t1_status.value = ''
+            t1_launch_btn.disabled = False
+            page.update()
+
+        t1_update_tag.visible = False
+        page.show_dialog(ft.AlertDialog(
+            modal=True, on_dismiss=on_dismiss,
+            title=ft.Text('更新版が自動でダウンロードされました'),
+            content=ft.Column([
+                ft.Text('最新の正式版 %s が、この PC の次のフォルダに'
+                        'ダウンロードされています。' % tag, size=13),
+                ft.Container(
+                    bgcolor='#f5f7fa', border_radius=6,
+                    padding=ft.Padding.symmetric(vertical=8, horizontal=10),
+                    content=ft.Text(paths.app_dir(stable), size=12,
+                                    selectable=True)),
+                ft.Text('ふだんの作業でこのフォルダを開く必要はありません。',
+                        size=12, color='#6b7280'),
+            ], tight=True, width=440, spacing=8),
+            actions=[ft.FilledButton('アプリを開く', on_click=on_open,
+                                     bgcolor=NAVY, color='#ffffff')],
+        ))
         page.update()
 
     def _auto_update(latest):
@@ -526,8 +618,8 @@ def main(page: ft.Page):
         本人は使っていないつもりなのに使用中と言われて戸惑う。言えるのは
         「更新版を開くには、もう一度「起動」を押す」という次の一手だけ。
         """
-        if _update_state['installing'] or latest is None:
-            return False
+        if latest is None or updater.installing():
+            return False        # 取り込み中 (次の定期チェックに回す)
         if launcher.port_in_use(paths.stable_port(config)):
             _update_state['pending'] = latest
             t1_preparing_tag.visible = False  # 公開待ちは終わった
@@ -537,7 +629,9 @@ def main(page: ft.Page):
                                'ください。' % latest['tag'])
             page.update()
             return False
-        _update_state['installing'] = True
+        held = updater.try_install_lock()
+        if held is None:
+            return False        # ぎりぎりで先客が入った
         t1_launch_btn.disabled = True
         page.update()
         try:
@@ -545,33 +639,44 @@ def main(page: ft.Page):
                 t1_status.value = ('新しい版 %s を取り込んでいます... %s'
                                    % (latest['tag'], msg))
                 page.update()
-            updater.install_release(repo, latest, stable,
-                                    on_progress=progress)
+            with held:
+                updater.install_release(repo, latest, stable,
+                                        on_progress=progress,
+                                        config=config)
             _update_state['pending'] = None
             t1_status.value = ''
             refresh_local_version(latest=True)
             _show_updated(latest)
             ok = True
+        except (installer.InstallError, ghcli.GhError) as e:
+            # 文言を持っている例外は、その理由をそのまま見せる
+            # (置き場が一杯・使用中などをネットワークのせいにしない)
+            log.exception('自動更新に失敗しました')
+            t1_preparing_tag.visible = False
+            t1_notice.value = ('%s (次回の起動時にもう一度試します)'
+                               % str(e))
+            _update_state['pending'] = latest
+            ok = False
         except Exception:
             log.exception('自動更新に失敗しました')
             t1_preparing_tag.visible = False
-            t1_notice.value = ('自動更新に失敗しました。ネットワーク接続を'
-                               '確認してください (次回の起動時にもう一度'
-                               '試します)。')
+            t1_notice.value = ('自動更新に失敗しました (次回の起動時に'
+                               'もう一度試します)。繰り返す場合は、'
+                               'ログ (manager.log) を管理者にお知らせ'
+                               'ください。')
             _update_state['pending'] = latest
             ok = False
-        _update_state['installing'] = False
         t1_launch_btn.disabled = False
         page.update()
         return ok
 
     def _launch(update_first=True):
-        """起動する。update_first=True なら取り込み待ちの版を先に取り込む."""
-        if _update_state['installing']:
-            t1_status.value = ('新しい版の取り込み中です。'
-                               '完了までお待ちください。')
-            page.update()
-            return
+        """起動する。update_first=True なら取り込み待ちの版を先に取り込む.
+
+        裏で取り込みが走っていても**押した人を止めない** (裏で待って
+        から続ける)。ここで断ると、終わったことを誰も知らせないまま
+        もう一度押させることになる。
+        """
         t1_update_tag.visible = False   # 更新完了の通知は一度見たら畳む
         t1_status.value = '起動しています...'
         t1_launch_btn.disabled = True   # 取り込み中の二度押しを防ぐ
@@ -581,20 +686,44 @@ def main(page: ft.Page):
             def progress(msg):
                 t1_status.value = msg
                 page.update()
+
+            def open_app():
+                """ブラウザでアプリを開く (取り込みの知らせを読んだあと)."""
+                try:
+                    _, url = launcher.launch_app(
+                        stable, paths.stable_port(config), channel='stable',
+                        config=config)
+                    t1_status.value = 'ブラウザで開きます: %s' % url
+                except (launcher.LaunchError, Exception) as e:
+                    log.exception('起動に失敗しました')
+                    t1_status.value = str(e) or '起動に失敗しました。'
+                t1_launch_btn.disabled = False
+                page.update()
+
             try:
                 # 取り込み待ちの新しい正式版があれば起動前に取り込む
                 pending = _update_state['pending']
                 if update_first and pending is not None:
-                    progress('新しい版 %s に更新しています...'
-                             % pending['tag'])
-                    launcher.stop_app(paths.stable_port(config))
-                    updater.install_release(repo, pending, stable,
-                                            on_progress=progress)
+                    if updater.installing():
+                        progress('先に始まった取り込みの完了を'
+                                 '待っています...')
+                    else:
+                        progress('新しい版 %s に更新しています...'
+                                 % pending['tag'])
+                    took = updater.install_if_needed(
+                        repo, pending, stable, on_progress=progress,
+                        config=config,
+                        # 置き換えの直前に止める (飛ばすときは止めない)
+                        prepare=lambda: launcher.stop_app(
+                            paths.stable_port(config)))
                     _update_state['pending'] = None
                     refresh_local_version(latest=True)
-                    _show_updated(pending)
+                    if took:
+                        _show_updated(pending)
                 if updater.local_version_info(stable) is None:
                     # 初回: 最新の正式版を自動で取得してから起動する
+                    # (画面の案内どおり押した人と、起動時の自動更新が
+                    #  ちょうどぶつかる場面。取り込みは錠で直列化する)
                     progress('最新の版を確認しています...')
                     latest = ghcli.latest_stable(
                         ghcli.fetch_releases(repo))
@@ -604,21 +733,26 @@ def main(page: ft.Page):
                         t1_launch_btn.disabled = False
                         page.update()
                         return
-                    # 前回の残骸のサーバーが動いているとフォルダを
-                    # 置き換えられないため、先に終了させる
-                    launcher.stop_app(paths.stable_port(config))
-                    updater.install_release(repo, latest, stable,
-                                            on_progress=progress)
+                    if updater.installing():
+                        progress('先に始まった取り込みの完了を'
+                                 '待っています...')
+                    updater.install_if_needed(
+                        repo, latest, stable, on_progress=progress,
+                        config=config,
+                        # 前回の残骸のサーバーが動いているとフォルダを
+                        # 置き換えられないため、先に終了させる
+                        prepare=lambda: launcher.stop_app(
+                            paths.stable_port(config)))
                     refresh_local_version(latest=True)
                     _refresh_current_notes()
-                _, url = launcher.launch_app(
-                    stable, paths.stable_port(config), channel='stable')
-                t1_status.value = 'ブラウザで開きます: %s' % url
             except (ghcli.GhError, launcher.LaunchError, Exception) as e:
                 log.exception('起動に失敗しました')
                 t1_status.value = str(e) or '起動に失敗しました。'
-            t1_launch_btn.disabled = False
-            page.update()
+                t1_launch_btn.disabled = False
+                page.update()
+                return
+            # 届いた更新版を先に知らせ、読み終えてからアプリを開く
+            _notify_downloaded(open_app)
         run_bg(work)
 
     def on_launch_stable(_):
@@ -690,7 +824,7 @@ def main(page: ft.Page):
                     dlg_status.value = (str(e2)
                                         or 'ダウンロードに失敗しました。')
                 finally:
-                    shutil.rmtree(tmp, ignore_errors=True)
+                    safeio.rmtree(tmp)
                     btn.disabled = False
                     page.update()
             run_bg(work)
@@ -706,7 +840,11 @@ def main(page: ft.Page):
             return s['pr'].get('title') or ''
         note = _clean_notes(s['tag'],
                             (s['release'].get('notes') or '')) or ''
-        first = note.strip().splitlines()
+        # 先頭が提出のタイトル (# 行) ならそのまま概要に使う
+        headline, rest = history.split_title(note)
+        if headline:
+            return headline
+        first = rest.strip().splitlines()
         return (first[0].lstrip('-· ').strip() if first else '') or '配布'
 
     # 過去の更新ログの「図へ戻る」用 (開いている図と一覧への参照)
@@ -1191,24 +1329,42 @@ def main(page: ft.Page):
         t4_status.value = msg
         page.update()
 
-    def _review_ai_text(update, limits):
+    def _review_ai_text(title, update, limits):
         """自動作成の結果を提出者に見せて直させる (裏の処理から呼ばれる).
 
-        この 2 項目はそのまま正式版のリリースノートになるため、本人が
+        この 3 項目はそのまま正式版のリリースノートになるため、本人が
         一度も読まないまま全員に公開されないようにする (管理者指示
-        2026-08)。戻り値: (更新内容, 制限事項) / 取り消しなら None。
+        2026-08)。タイトルは承認タブの見出しにもなる。
+        戻り値: (タイトル, 更新内容, 制限事項) / 取り消しなら None。
         呼び出し元は run_bg の中なので、答えが出るまでここで待つ。
         """
         done = threading.Event()
         answer = {}
+        # 入力欄はダイアログ面 (薄グレー) と同化しないよう白で塗る
+        # (「直してください」と促す画面なので、編集できる場所を立たせる)
+        _box = dict(width=500, border_color='#6b7280',
+                    focused_border_color=NAVY, filled=True,
+                    fill_color='#ffffff', focused_bgcolor='#ffffff',
+                    hover_color='#ffffff')   # hover で灰色に変えない
+        ttl = ft.TextField(value=title, max_length=submit.TITLE_MAX, **_box)
+        # 空のまま提出させない (無題だと承認側が何の提出か分からない)。
+        # 灰色のボタンにはせず、押した瞬間に理由を欄の直下へ出す
+        ttl_err = ft.Text('', size=12, color=RED, visible=False)
+
+        def _ttl_clear(_=None):
+            # 文字が入った瞬間に赤枠と理由を消す (その場で・通信なし)
+            if ttl_err.visible:
+                ttl_err.visible = False
+                ttl.border_color = '#6b7280'
+                ttl.focused_border_color = NAVY
+                page.update()
+        ttl.on_change = _ttl_clear
         # 行数の上限は既定ウィンドウ (760x640) に収まる範囲で決める
         # (超える分は欄の中がスクロールする)
         upd = ft.TextField(value=update, min_lines=4, max_lines=7,
-                           multiline=True, width=500, border_color='#6b7280',
-                           focused_border_color=NAVY)
+                           multiline=True, **_box)
         lim = ft.TextField(value=limits, min_lines=2, max_lines=4,
-                           multiline=True, width=500, border_color='#6b7280',
-                           focused_border_color=NAVY)
+                           multiline=True, **_box)
 
         def finish(value):
             answer['v'] = value
@@ -1217,26 +1373,53 @@ def main(page: ft.Page):
                                '提出を取り消しています...')
             page.update()
             done.set()
+
+        def submit_reviewed(_):
+            if not (ttl.value or '').strip():
+                ttl_err.value = ('未記入です。何の提出か分かるタイトルを'
+                                 '入力してください。')
+                ttl_err.visible = True
+                ttl.border_color = RED
+                ttl.focused_border_color = RED
+                page.update()
+                ttl.focus()
+                return
+            finish((ttl.value, upd.value, lim.value))
         dlg = ft.AlertDialog(
             modal=True, title=ft.Text('この内容で提出します'),
             content=ft.Column([
                 ft.Text('Claude が下書きしました。おかしなところがあれば'
-                        '直してください。この文章は、正式版になったときの'
-                        '「更新内容」としてそのまま全員に表示されます。',
+                        '直してください。ここに書かれた内容は、正式版に'
+                        'なったときの「更新内容」としてそのまま'
+                        '表示されます。',
                         size=12.5, color='#4b5563'),
-                ft.Text('更新内容', size=13, weight=ft.FontWeight.BOLD,
-                        color='#374151'),
+                # 補足は「更新内容」という欄名を使わずに行き先を言う
+                # (すぐ下に同名の欄があり、自動転記と誤読されるため)
+                ft.Row([ft.Text('タイトル', size=13,
+                                weight=ft.FontWeight.BOLD, color='#374151'),
+                        ft.Text('承認画面の見出しと、リリース時の文頭の'
+                                '1 行になります', size=12, color='#4b5563')],
+                       spacing=8,
+                       vertical_alignment=ft.CrossAxisAlignment.END),
+                ttl,
+                ttl_err,
+                # 欄のかたまりが近接で読めるよう、項目名の上だけ空ける
+                ft.Container(
+                    ft.Text('更新内容', size=13, weight=ft.FontWeight.BOLD,
+                            color='#374151'),
+                    margin=ft.Margin(0, 6, 0, 0)),
                 upd,
-                ft.Text('ご利用にあたっての制限事項', size=13,
-                        weight=ft.FontWeight.BOLD, color='#374151'),
+                ft.Container(
+                    ft.Text('ご利用にあたっての制限事項', size=13,
+                            weight=ft.FontWeight.BOLD, color='#374151'),
+                    margin=ft.Margin(0, 6, 0, 0)),
                 lim,
             ], tight=True, width=520, spacing=5),
             actions=[
                 ft.TextButton('取り消す', on_click=lambda _: finish(None)),
                 ft.FilledButton('この内容で提出する', bgcolor=NAVY,
                                 color='#ffffff',
-                                on_click=lambda _: finish((upd.value,
-                                                           lim.value)))])
+                                on_click=submit_reviewed)])
         try:
             page.show_dialog(dlg)
             page.update()
@@ -1247,6 +1430,52 @@ def main(page: ft.Page):
             return None
         done.wait()
         return answer.get('v')
+
+    def _show_ai_error(err):
+        """自動作成の失敗を提出者に知らせる (提出は行われていない).
+
+        黙って定型文で提出すると、更新内容が空のまま正式版のリリースノート
+        まで進んでしまう。止めた理由をその場で見せる (管理者の指示 2026-08)。
+        """
+        def close_err(_=None):
+            page.pop_dialog()
+            page.update()
+
+        def retry(_=None):
+            # 同じ ZIP は選び直してもらう (提出の作業場所は片付け済み)。
+            # ファイル選択からの既存フローをそのまま使い回す
+            page.pop_dialog()
+            page.update()
+            page.run_task(on_submit, None)
+        items = [
+            ft.Text(str(err), size=13.5, color='#374151', selectable=True),
+            ft.Text('提出は行われていません (まだ何も送られていません)。',
+                    size=12.5, color='#4b5563'),
+            ft.Text('「自分で入力する」を選べば Claude を使わずに'
+                    '提出できます。', size=12.5, color='#4b5563'),
+        ]
+        if getattr(err, 'detail', ''):
+            # 管理者へ伝えるときの手がかり (英数字のまま小さく出す)
+            items.append(ft.Text('詳細: %s' % err.detail, size=12,
+                                 color='#4b5563', selectable=True))
+        try:
+            page.show_dialog(ft.AlertDialog(
+                modal=True,
+                title=ft.Row([
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=AMBER,
+                            size=22),
+                    ft.Text('自動作成できませんでした'),
+                ], spacing=8),
+                content=ft.Column(items, tight=True, width=460, spacing=8),
+                actions=[
+                    ft.TextButton('閉じる', on_click=close_err),
+                    ft.FilledButton('もう一度 ZIP を選ぶ', bgcolor=NAVY,
+                                    color='#ffffff', on_click=retry),
+                ]))
+            page.update()
+        except Exception:
+            log.exception('自動作成の失敗ダイアログを表示できませんでした')
+            t4_status.value = '自動作成できませんでした: %s' % err
 
     def _do_finalize(prep, deletions, existing_branch=None, use_ai=False):
         # ダイアログを閉じた直後に反応を見せる (裏の処理は数十秒かかる)
@@ -1268,7 +1497,13 @@ def main(page: ft.Page):
                     '提出内容: %s' % result['pr_url'])
                 t4_commit_msg.value = ''
                 t4_limits.value = ''
+            except claude_helper.ClaudeError as e:
+                # 定型文へ落とさず提出を止める。理由はダイアログで見せる
+                log.warning('自動作成に失敗しました: %s (%s)', e, e.detail)
+                t4_status.value = ''
+                _show_ai_error(e)
             except (submit.SubmitError, ghcli.GhError, GitError) as e:
+                log.info('提出を中断しました: %s', e)
                 t4_status.value = str(e)
             except Exception as e:
                 log.exception('finalize_submission failed')
@@ -1352,7 +1587,7 @@ def main(page: ft.Page):
                 ft.Text('更新内容は誰が書きますか?', size=13,
                         weight=ft.FontWeight.BOLD),
                 ft.Text('ここで書かれた内容は、正式版になったときの'
-                        '「更新内容」としてそのまま全員に表示されます。',
+                        '「更新内容」としてそのまま表示されます。',
                         size=12, color='#4b5563'),
                 gen_rg,
             ], spacing=4)))
@@ -1429,6 +1664,7 @@ def main(page: ft.Page):
                 submit.prepare_submission, zip_path, config,
                 None, _submit_progress)
         except (submit.SubmitError, ghcli.GhError, GitError) as e:
+            log.info('提出を中断しました: %s', e)
             t4_status.value = str(e)
             t4_submit_btn.disabled = False
             page.update()
@@ -1579,22 +1815,42 @@ def main(page: ft.Page):
             page.update()
 
             def work():
+                tag = release['tag']
+                port = paths.beta_port(config)
+
                 def progress(msg):
-                    t5_status.value = '%s: %s' % (release['tag'], msg)
+                    t5_status.value = '%s: %s' % (tag, msg)
                     page.update()
-                beta = paths.beta_dir(release['tag'], config)
+                beta = paths.beta_dir(tag, config)
                 try:
+                    # 別のβ版が動いているとポートが塞がり、置き換えも
+                    # 新しい版の起動もできない (前の版の画面が開く)。
+                    # 取得済みかどうかにかかわらず先に終了させる
+                    if launcher.stop_other_beta(tag, port, config):
+                        progress('動いていた別のβ版を終了しました')
                     if updater.local_version_info(beta) is None:
-                        # 別のβ版が起動中だとフォルダの置き換えや
-                        # 新しい版の起動ができないため先に終了する
-                        launcher.stop_app(paths.beta_port(config))
-                        updater.install_release(repo, release, beta,
-                                                on_progress=progress)
-                    _, url = launcher.launch_app(
-                        beta, paths.beta_port(config), channel='beta')
-                    t5_status.value = ('β版 %s を起動しました (安定版とは'
-                                       '別画面・別データ): %s'
-                                       % (release['tag'], url))
+                        if updater.installing():
+                            progress('先に始まった取り込みの完了を'
+                                     '待っています...')
+
+                        def _stop_beta():
+                            launcher.stop_app(port)  # 置き換え前に念のため
+                            launcher.remember_beta(None, config)
+                        updater.install_if_needed(
+                            repo, release, beta, on_progress=progress,
+                            config=config, prepare=_stop_beta)
+                    proc, url = launcher.launch_app(
+                        beta, port, channel='beta', config=config)
+                    if proc is None:
+                        # 同じ版が動いていた (上で別の版は止めてある)
+                        t5_status.value = ('すでに起動しているβ版 %s の'
+                                           '画面を開きました: %s'
+                                           % (tag, url))
+                    else:
+                        launcher.remember_beta(tag, config)
+                        t5_status.value = ('β版 %s を起動しました (安定版とは'
+                                           '別画面・別データ): %s'
+                                           % (tag, url))
                 except (ghcli.GhError, launcher.LaunchError,
                         Exception) as e:
                     log.exception('β版の起動に失敗しました')
@@ -2828,7 +3084,29 @@ def main(page: ft.Page):
         # 追い越されて捨てられた取得結果では先読みしない
         if data is not None:
             _prefetch_diffs(data['pending'])
+            _prune_old_betas(data)
         return data
+
+    def _prune_old_betas(data):
+        """一覧に無いβ版の置き場を片付ける (裏で静かに、失敗しても続ける).
+
+        正式版になった版・取り下げられた版は GitHub 側でもβ版が削除
+        されるため、手元にだけ残っても「β版を試す」から起動できない。
+        放っておくと試すたびに増え続けるので、取得のたびに掃除する。
+        起動中のβ版があるときは触らない (使用中のフォルダを中途半端に
+        消さないため。次の取得で片付く)。
+        """
+        try:
+            if launcher.port_in_use(paths.beta_port(config)):
+                return
+            keep = [b['tag'] for b in
+                    ghcli.prereleases(data.get('releases') or [])]
+            removed = updater.prune_betas(keep, config)
+        except Exception:
+            log.exception('古いβ版の片付けに失敗しました')
+            return
+        if removed:
+            log.info('古いβ版を片付けました: %s', ', '.join(removed))
 
     def on_refresh_reviews(_):
         """一覧の再描画。手元にある前回の取得結果を即座に表示し、
@@ -2876,8 +3154,9 @@ def main(page: ft.Page):
         ft.Container(height=_INTRO_H, content=ft.Column([
             ft.Text('提出された更新版は、検証を通過するとβ版として発行され'
                     'ます。β版を確認したら承認してください。%d 人の'
-                    '承認がそろうと自動で正式版になり、みなさんの'
-                    'マネージャーに自動で取り込まれます。'
+                    '承認がそろうと自動で正式版になり、みなさんの PC に'
+                    '自動で届きます。次に「起動」を押したときから'
+                    '新しい版になります。'
                     '自分の提出は自分では承認できません。'
                     % reviews.required_approvals(config),
                     size=13, color='#555555'),
@@ -2990,10 +3269,19 @@ def main(page: ft.Page):
         def work():
             try:
                 data = _fetch_review_snapshot()
+            except (reviews.ReviewError, ghcli.GhError) as e:
+                # gh 未導入・未ログインは、その例外が正しい案内を
+                # 持っている (承認タブと同じ見せ方に揃える)
+                log.info('更新チェックをスキップしました: %s', e)
+                t1_fresh.value = str(e)
+                page.update()
+                return
             except Exception:
-                log.info('更新チェックをスキップしました (オフライン等)')
-                t1_fresh.value = ('確認できませんでした。ネットワーク接続を'
-                                  'ご確認ください。')
+                # 通信の失敗は上の GhError が正しい文言を持っている。
+                # ここに来るのは想定外なので原因を決め打ちしない
+                log.exception('更新チェックに失敗しました')
+                t1_fresh.value = ('確認できませんでした (繰り返す場合は'
+                                  'ログ manager.log を管理者へ)。')
                 page.update()
                 return
             if data is None:
@@ -3005,8 +3293,11 @@ def main(page: ft.Page):
             try:
                 result = updater.check_update(repo, stable,
                                               releases=data['releases'])
+            except ghcli.GhError as e:
+                log.info('更新チェックをスキップしました: %s', e)
+                result = None
             except Exception:
-                log.info('更新チェックをスキップしました (オフライン等)')
+                log.exception('更新チェックに失敗しました')
                 result = None
             if result is None:
                 return
@@ -3051,6 +3342,16 @@ def main(page: ft.Page):
     #    (オーナーに通知メールが届き、「承認」の返信で自動招待される)
 
     def check_membership():
+        """招待の自動承諾と参加申請 (**名前の登録が済んでから**).
+
+        以前は起動と同時に走らせていたため、初回登録の画面に名前を
+        打ち終える前に申請が飛び、管理者に届く Issue が
+        「名前: (未登録)」になっていた (裏で gh を叩くだけなので数秒で
+        終わる)。しかも close 済みも含めて既存申請を探す作りのため、
+        二度と作り直されず直しようがなかった。
+        """
+        name = (settings.user_name(config) or '').strip()
+
         def work():
             try:
                 if ghcli.accept_repo_invitation(repo):
@@ -3058,23 +3359,73 @@ def main(page: ft.Page):
                     return
                 if ghcli.has_push_access(repo):
                     return
-                if ghcli.find_my_join_request(repo) is None:
-                    name = settings.user_name(config) or ''
+                existing = ghcli.find_my_join_request(repo)
+                if existing is None:
+                    if not name:
+                        return          # 登録が済んだら送る (下記)
                     ghcli.create_join_request(repo, name)
                     join_notice.value = ('参加申請を送信しました。管理者の'
                                          '承認後に提出・承認へ参加できます '
                                          '(起動・β版の試用は承認前でも'
                                          '使えます)。')
                 else:
+                    # 名前を登録する前に送ってしまった申請を直す
+                    ghcli.update_join_request_name(repo, existing, name)
                     join_notice.value = ('参加申請は送信済みです。管理者の'
                                          '承認をお待ちください (起動・'
                                          'β版の試用はそのまま使えます)。')
                 page.update()
+            except ghcli.GhError as e:
+                log.info('参加状態を確認できませんでした: %s', e)
             except Exception:
-                log.info('参加状態の確認をスキップしました (オフライン等)')
+                log.exception('参加状態の確認に失敗しました')
         run_bg(work)
 
     check_membership()
+
+    # ---- 引っ越しの後片付け ----
+    # フォルダ構成を切り替えたときだけ、以前のフォルダを消す札が置かれる。
+    # ふだんの起動でやることは「札が無いことを確かめる」だけ (ファイルが
+    # 1 つ無いのを見るだけなので、片付けが済めば負担は残らない)。
+
+    def cleanup_old_folders():
+        if migrate.read_marker(config) is None:
+            return                      # ふだんはここで終わり
+
+        def work():
+            try:
+                removed, left, gave_up = migrate.run_cleanup(config)
+            except Exception:
+                log.exception('以前のフォルダの片付けに失敗しました')
+                return
+            if removed:
+                log.info('以前のフォルダを片付けました: %s', '、'.join(removed))
+            if gave_up:
+                join_notice.value = (
+                    '以前のフォルダを自動で片付けられませんでした。'
+                    'お手数ですが手で削除してください: %s' % '、'.join(left))
+                page.update()
+            elif left:
+                log.info('片付けきれなかったので次回に回します: %s',
+                         '、'.join(left))
+        run_bg(work)
+
+    cleanup_old_folders()
+
+    # ---- 前回の入れ替えの残骸を掃く ----
+    # 更新は「新しい内容を隣に用意して名前を付け替える」方式なので、
+    # 強制終了や電源断で作業フォルダが残ることがある。放っておくと
+    # 更新のたびに溜まるので、起動のたびに一度だけ掃く
+
+    def sweep_update_leftovers():
+        def work():
+            try:
+                updater.sweep_leftovers(config)
+            except Exception:
+                log.exception('前回の入れ替えの残骸を片付けられませんでした')
+        run_bg(work)
+
+    sweep_update_leftovers()
 
     # キャッシュの事前取得は check_update_notice のスナップショット取得が
     # 兼ねる (ログイン名・メンバー一覧・一覧・リリース一覧が一度に温まる)
@@ -3099,8 +3450,21 @@ def main(page: ft.Page):
                 except ValueError as e:
                     dialog_error(save_btn, err_text, str(e))
                     return
+                except OSError:
+                    # 保存先を作れない・書けない (空き容量やアクセス権)。
+                    # 捕まえないと run_bg のスレッドが黙って死に、
+                    # 「登録しています...」のままボタンが戻らなくなる
+                    log.exception('設定を保存できませんでした')
+                    dialog_error(save_btn, err_text,
+                                 '設定を保存できませんでした。パソコンの'
+                                 '空き容量と、保存先を使う権限があるかを'
+                                 '確認して、もう一度お試しください。')
+                    return
                 page.pop_dialog()
                 page.update()
+                # 登録が済んだのでここで参加申請を送る (起動と同時に
+                # 送ると「名前: (未登録)」になっていた)
+                check_membership()
             run_bg(work)
 
         save_btn = ft.FilledButton('登録してはじめる', on_click=on_save,

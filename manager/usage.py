@@ -20,7 +20,7 @@ import logging
 import os
 import threading
 
-from . import paths
+from . import paths, safeio
 
 log = logging.getLogger(__name__)
 
@@ -123,10 +123,9 @@ def record(usage_obj, config=None):
             day['out'] += out_tok
             day['calls'] += 1
             day['usd'] = round(day['usd'] + usd, 6)
-            path = usage_path(config)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=1)
+            # 記録済みの額は単価が変わると計算し直せないため、
+            # 書き込み中に落ちても前回までの記録が残る保存を使う
+            safeio.write_json(usage_path(config), data, indent=1)
         return usd
     except Exception:
         log.debug('API 利用量の記録に失敗しました', exc_info=True)

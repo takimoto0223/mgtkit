@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """配布 ZIP の展開と依存インストール."""
+import errno
 import logging
 import os
 import shutil
@@ -8,6 +9,8 @@ import sys
 import tempfile
 import zipfile
 
+from . import safeio
+
 log = logging.getLogger(__name__)
 
 
@@ -15,17 +18,90 @@ class InstallError(Exception):
     """展開・インストール失敗。str() はユーザー向けの平易な日本語メッセージ."""
 
 
-def _replace_dir(src, install_dir):
+SWAP_PREFIX = 'mgtkit_swap_'
+
+
+def _same_drive(a, b):
+    return (os.path.splitdrive(os.path.abspath(a))[0].lower()
+            == os.path.splitdrive(os.path.abspath(b))[0].lower())
+
+
+def sweep_swap_leftovers(*dirs):
+    """前回の入れ替えが途中で終わったときの残骸を片付ける (消した数を返す).
+
+    ``_replace_dir`` は finally で作業フォルダを消すが、強制終了や電源断で
+    そこまで届かないことがある。また入れ替え前のフォルダが使用中だと
+    ``old`` が残る。放っておくと更新のたびに溜まるので、起動時に掃く。
+    """
+    removed = 0
+    for target in dirs:
+        try:
+            names = sorted(os.listdir(target))
+        except OSError:
+            continue                    # まだ無い置き場は素通り
+        for name in names:
+            if not name.startswith(SWAP_PREFIX):
+                continue
+            path = os.path.join(target, name)
+            if os.path.isdir(path) and safeio.rmtree(path):
+                removed += 1
+                log.info('前回の入れ替えの残骸を片付けました: %s', path)
+    return removed
+
+
+# 入れ替えが失敗する原因は「使用中」だけではない。原因を名指しする文言は
+# errno で分かる分だけにする (分からないものに「再起動してください」と
+# 書くと、直らない操作を延々させることになる)
+_ENOSPC = (errno.ENOSPC, errno.EDQUOT) if hasattr(errno, 'EDQUOT') else (
+    errno.ENOSPC,)
+_EBUSY = (errno.EACCES, errno.EPERM, errno.EBUSY, errno.ENOTEMPTY,
+          errno.EEXIST)
+
+
+def _replace_message(exc):
+    """入れ替え失敗の原因ごとの案内 (分からないときは決め打ちしない)."""
+    code = getattr(exc, 'winerror', None) or exc.errno
+    if exc.errno in _ENOSPC:
+        return ('パソコンの空き容量が足りないため、新しい版に'
+                '置き換えられませんでした。空き容量を増やしてから'
+                'お試しください。')
+    if exc.errno == errno.ENOENT:
+        return ('アプリの置き場所が見つからないため、新しい版に'
+                '置き換えられませんでした。マネージャーを開き直して'
+                'お試しください。')
+    if exc.errno in _EBUSY:
+        return ('アプリのフォルダが使用中のため、新しい版に'
+                '置き換えられませんでした。アプリの画面を'
+                '閉じて再試行し、直らない場合はパソコンを'
+                '再起動してからお試しください。')
+    return ('新しい版に置き換えられませんでした (%s)。'
+            'もう一度お試しください。直らない場合は、'
+            'ログ (manager.log) を管理者にお知らせください。' % code)
+
+
+def _replace_dir(src, install_dir, work_parent=None):
     """src の内容で install_dir を置き換える (失敗しても元の内容を残す).
 
     実行中のアプリに使われているフォルダを直接消すと、Windows では途中まで
     消えた壊れた状態で止まる。そこで同じドライブ上に新しい内容を先に用意し、
     フォルダ名の付け替えだけで入れ替える。付け替えできない場合は元のまま
     InstallError にする。
+
+    work_parent: 作業フォルダを作る場所。既定は install_dir の親だが、
+    そこが**利用者に見えるフォルダ**のときは更新のたびに mgtkit_swap_XXXX
+    が一瞬見え、失敗すると残骸が残る。呼び出し側が隠し場所を渡せるように
+    してある。**付け替え (os.rename) は同じドライブ内でしかできない**ので、
+    別ドライブを渡されたときは既定に戻す。
     """
     parent = os.path.dirname(install_dir) or '.'
+    # 置き場所そのものを先に作る (初回のβ版などまだ無いことがある)。
+    # 作業フォルダを別の場所に作るときも、ここは必ず要る (付け替え先の
+    # 親が無いと os.rename が失敗する)
     os.makedirs(parent, exist_ok=True)
-    work = tempfile.mkdtemp(prefix='mgtkit_swap_', dir=parent)
+    if work_parent and _same_drive(work_parent, install_dir):
+        parent = work_parent
+        os.makedirs(parent, exist_ok=True)
+    work = tempfile.mkdtemp(prefix=SWAP_PREFIX, dir=parent)
     staging = os.path.join(work, 'new')
     backup = os.path.join(work, 'old')
     try:
@@ -34,42 +110,50 @@ def _replace_dir(src, install_dir):
             if os.path.isdir(install_dir):
                 os.rename(install_dir, backup)
             os.rename(staging, install_dir)
-        except OSError:
+        except OSError as e:
+            log.exception('フォルダの入れ替えに失敗しました: %s', install_dir)
             if not os.path.isdir(install_dir) and os.path.isdir(backup):
                 try:
                     os.rename(backup, install_dir)
                 except OSError:
                     pass
-            raise InstallError('アプリのフォルダが使用中のため、新しい版に'
-                               '置き換えられませんでした。アプリの画面を'
-                               '閉じて再試行し、直らない場合はパソコンを'
-                               '再起動してからお試しください。')
+            raise InstallError(_replace_message(e)) from e
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        safeio.rmtree(work)   # 中身は入れ替え前のフォルダ (読み取り専用あり)
 
 
-def extract_zip(zip_path, install_dir):
+def extract_zip(zip_path, install_dir, work_parent=None):
     """ZIP を install_dir へ展開する (既存の中身は置き換え).
 
     GitHub のソースアーカイブのように「単一のトップフォルダ」に包まれて
-    いる場合は 1 階層むいて展開する。
+    いる場合は 1 階層むいて展開する。work_parent は _replace_dir へ渡す。
     """
     tmp = tempfile.mkdtemp(prefix='mgtkit_extract_')
     try:
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmp)
-        except (zipfile.BadZipFile, OSError):
-            raise InstallError('取得した ZIP を展開できませんでした。'
-                               '再度お試しください。')
+        except zipfile.BadZipFile as e:
+            log.exception('ZIP が壊れています: %s', zip_path)
+            raise InstallError('ZIP ファイルが壊れているため開けません'
+                               'でした。作り直してからお試しください。') from e
+        except OSError as e:
+            # 空き容量・パスの長さ・ドライブが外れた等。やり直しても
+            # 直らないものが多いので「再度お試しください」とは言わない
+            log.exception('ZIP を展開できませんでした: %s', zip_path)
+            raise InstallError(
+                'ZIP を展開できませんでした (%s)。パソコンの空き容量と、'
+                'ファイルの置き場所 (フォルダ名が長すぎないか) を'
+                '確認してください。'
+                % (getattr(e, 'winerror', None) or e.errno)) from e
         entries = [e for e in os.listdir(tmp) if e != '__MACOSX']
         if len(entries) == 1 and os.path.isdir(os.path.join(tmp, entries[0])):
             src = os.path.join(tmp, entries[0])
         else:
             src = tmp
-        _replace_dir(src, install_dir)
+        _replace_dir(src, install_dir, work_parent)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        safeio.rmtree(tmp)    # ZIP の中身 (クローンが混ざっていることも)
     return install_dir
 
 
@@ -86,5 +170,7 @@ def install_requirements(install_dir, python=None):
     if proc.returncode != 0:
         log.error('pip install failed: %s', proc.stderr)
         raise InstallError('必要ライブラリのインストールに失敗しました。'
-                           'ネットワーク接続を確認して再試行してください。')
+                           'ネットワーク接続を確認して再試行してください。'
+                           '直らない場合は、ログ (manager.log) を管理者に'
+                           'お知らせください。')
     return True

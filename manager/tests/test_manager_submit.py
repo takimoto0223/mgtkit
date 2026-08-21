@@ -11,8 +11,10 @@ import zipfile
 
 import pytest
 
+from pathlib import Path
+
 from manager import claude_helper, reviews, submit, versions
-from manager.gitcli import run_git
+from manager.gitcli import GitError, run_git
 
 
 def _git(args, cwd):
@@ -422,42 +424,110 @@ class TestFullFlow:
     def test_reviewed_text_goes_into_pr(self, repo_env, tmp_path, gh_mock,
                                         monkeypatch):
         # 自動作成の結果を提出者が手直しすると、その文章が PR 本文に入る
-        monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
-                            lambda *a, **k: _AI_BODY)
+        _fake_ai(monkeypatch)
         z = _make_zip(tmp_path, _dist_files(
             repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
         prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
         seen = []
 
-        def review(update, limits):
-            seen.append((update, limits))
-            return ('- 手で直した更新内容', '- 手で直した制限事項')
+        def review(title, update, limits):
+            seen.append((title, update, limits))
+            return ('手で直したタイトル', '- 手で直した更新内容',
+                    '- 手で直した制限事項')
 
-        submit.finalize_submission(prep, [], 'msg', {}, use_ai=True,
+        submit.finalize_submission(prep, [], '', {}, use_ai=True,
                                    on_review=review)
-        assert seen == [('- 二丁山形鋼の断面算定に対応', '- 等辺のみ対応')]
+        assert seen == [('二丁山形鋼の断面算定に対応',
+                         '- 二丁山形鋼の断面算定に対応', '- 等辺のみ対応')]
         create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
         body = create[create.index('--body') + 1]
         assert '- 手で直した更新内容' in body
         assert '- 二丁山形鋼の断面算定に対応' not in body
 
+    def test_reviewed_title_becomes_the_pr_title(self, repo_env, tmp_path,
+                                                 gh_mock, monkeypatch):
+        # 手直ししたタイトルが PR の見出しとコミットメッセージになる
+        _fake_ai(monkeypatch)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        result = submit.finalize_submission(
+            prep, [], '', {}, use_ai=True,
+            on_review=lambda t, u, li: ('荷重分布図の PDF 書き出しに対応',
+                                        '- 荷重分布図を出せるようにした',
+                                        '- なし'))
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        assert (create[create.index('--title') + 1]
+                == '荷重分布図の PDF 書き出しに対応')
+        assert result['commit_message'].splitlines()[0] \
+            == '荷重分布図の PDF 書き出しに対応'
+        assert '- 荷重分布図を出せるようにした' in result['commit_message']
+
+    def test_blank_reviewed_title_falls_back_to_the_draft(
+            self, repo_env, tmp_path, gh_mock, monkeypatch):
+        # UI は空タイトルを赤枠で止める (main._review_ai_text)。ここは
+        # その裏の安全網: 万一空で通っても見出しが空の提出にはならない
+        _fake_ai(monkeypatch)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        submit.finalize_submission(
+            prep, [], '', {}, use_ai=True,
+            on_review=lambda t, u, li: ('   ', u, li))
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        assert (create[create.index('--title') + 1]
+                == '二丁山形鋼の断面算定に対応')
+
+    def test_ai_failure_stops_the_submission(self, repo_env, tmp_path,
+                                             gh_mock, monkeypatch):
+        # 自動作成が失敗したら、定型文で出さずに止める (管理者指示 2026-08)
+        def boom(*a, **k):
+            raise submit.claude_helper.ClaudeError('キーが無効です', 'HTTP 401')
+        monkeypatch.setattr(submit.claude_helper,
+                            'generate_pr_body', boom)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        with pytest.raises(submit.claude_helper.ClaudeError):
+            submit.finalize_submission(prep, [], '', {}, use_ai=True,
+                                       on_review=lambda t, u, li: (t, u, li))
+        heads = run_git(['ls-remote', '--heads', repo_env['origin']])
+        assert 'feature/' not in heads
+        assert not any(c[:2] == ['pr', 'create'] for c in gh_mock)
+
     def test_review_cancel_leaves_nothing_pushed(self, repo_env, tmp_path,
                                                  gh_mock, monkeypatch):
         # 確認画面で取り消したら、ブランチも PR も残らない
-        monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
-                            lambda *a, **k: _AI_BODY)
+        _fake_ai(monkeypatch)
         z = _make_zip(tmp_path, _dist_files(
             repo_env['base_sha'], **{'app.py': 'print("v2")\n'}))
         prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
         with pytest.raises(submit.SubmitCancelled):
-            submit.finalize_submission(prep, [], 'msg', {}, use_ai=True,
-                                       on_review=lambda u, li: None)
+            submit.finalize_submission(prep, [], '', {}, use_ai=True,
+                                       on_review=lambda t, u, li: None)
         heads = run_git(['ls-remote', '--heads', repo_env['origin']])
         assert 'feature/' not in heads
         assert not any(c[:2] == ['pr', 'create'] for c in gh_mock)
 
 
-_AI_BODY = '''## 更新内容
+def _fake_ai(monkeypatch):
+    """Claude の下書き (1 行目 = タイトルの本文) を返す差し替え.
+
+    タイトル生成の API は呼ばれない (提出 1 回 = 呼び出し 1 回の約束)。
+    呼ばれたら失敗させて見張る。
+    """
+    def boom(*a, **k):
+        raise AssertionError('提出で generate_commit_message が呼ばれた '
+                             '(API 呼び出しは generate_pr_body の 1 回だけ)')
+    monkeypatch.setattr(submit.claude_helper, 'generate_commit_message',
+                        boom)
+    monkeypatch.setattr(submit.claude_helper, 'generate_pr_body',
+                        lambda *a, **k: _AI_BODY)
+
+
+_AI_BODY = '''# 二丁山形鋼の断面算定に対応
+
+## 更新内容
 
 - 二丁山形鋼の断面算定に対応
 
@@ -473,6 +543,92 @@ s_check.py を変更
 
 - s_check.py — 断面算定の追加
 '''
+
+
+class TestWorkRepoRecovery:
+    """取得や提出が途中で強制終了された作業クローンからの回復.
+
+    チェックアウトの途中で落ちると .git は無事でも作業ツリーが半端に残り
+    (index.lock + 未追跡扱いのファイル)、そのままでは checkout -B が拒否
+    されて提出の確定・統合が**何度やり直しても**同じ文言で失敗していた。
+    """
+
+    def _make_residue(self, workrepo):
+        """チェックアウト中に強制終了された残骸を作る."""
+        wr = Path(workrepo)
+        # 追跡から外れて中身も違うファイル = checkout が「上書きになる」と拒否する
+        _git(['rm', '--cached', 'app.py'], cwd=wr)
+        (wr / 'app.py').write_text('half checked out\n', encoding='utf-8')
+        (wr / 'garbage.tmp').write_text('x', encoding='utf-8')
+        (wr / '.git' / 'index.lock').write_text('', encoding='utf-8')
+
+    def test_reset_work_tree_clears_residue(self, repo_env):
+        from manager import gitcli
+        self._make_residue(repo_env['workrepo'])
+        gitcli.reset_work_tree(repo_env['workrepo'])
+        wr = Path(repo_env['workrepo'])
+        assert not (wr / '.git' / 'index.lock').exists()
+        assert not (wr / 'garbage.tmp').exists()
+        # 元の追跡内容に戻っていて、checkout -B が通る
+        run_git(['checkout', '-B', 'feature/x', repo_env['base_sha']],
+                cwd=repo_env['workrepo'])
+
+    def test_finalize_succeeds_after_a_killed_checkout(self, repo_env,
+                                                       tmp_path,
+                                                       monkeypatch):
+        def fake_run_gh(args, timeout=60):
+            if args[:2] == ['api', 'user']:
+                return 'testuser\n'
+            if args[:2] == ['pr', 'create']:
+                return 'https://github.com/o/r/pull/99\n'
+            if args[:2] == ['pr', 'list']:
+                return ''
+            raise AssertionError('unexpected gh call: %r' % args)
+        monkeypatch.setattr(submit.ghcli, 'run_gh', fake_run_gh)
+        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'app.py': 'print("app v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        self._make_residue(repo_env['workrepo'])
+        result = submit.finalize_submission(prep, [], 'テスト提出', {})
+        assert result['pr_url']
+        # 残骸 (garbage.tmp) が提出に混ざっていないこと
+        tree = run_git(['ls-tree', '-r', '--name-only', result['branch']],
+                       cwd=repo_env['workrepo'])
+        assert 'garbage.tmp' not in tree
+
+    def test_reset_work_tree_missing_dir_has_its_own_message(self, tmp_path):
+        from manager import gitcli
+        with pytest.raises(GitError, match='見つかりません'):
+            gitcli.reset_work_tree(str(tmp_path / 'nai'))
+
+    def test_ensure_rebuilds_a_broken_clone(self, repo_env, monkeypatch):
+        """HEAD が引けない残骸は作り直す (fetch は通ってしまい見抜けない)."""
+        from manager import gitcli
+        wr = repo_env['workrepo']
+        os.remove(os.path.join(wr, '.git', 'HEAD'))
+        cloned = []
+
+        def fake_clone(slug, dest):
+            cloned.append(slug)
+            _git(['clone', repo_env['origin'], dest],
+                 cwd=repo_env['tmp'])
+        monkeypatch.setattr(gitcli, '_clone_work_repo', fake_clone)
+        assert gitcli.ensure_work_repo('o/r', wr) == wr
+        assert cloned == ['o/r']
+        run_git(['rev-parse', '--verify', 'HEAD'], cwd=wr)   # 使える
+
+    def test_ensure_leaves_a_healthy_clone_alone(self, repo_env,
+                                                 monkeypatch):
+        from manager import gitcli
+        monkeypatch.setattr(
+            gitcli, '_clone_work_repo',
+            lambda *a: pytest.fail('健全なクローンを作り直した'))
+        # fetch=False の高速経路 (差分表示) は何もしないこと
+        wr = repo_env['workrepo']
+        before = (Path(wr) / 'app.py').read_text(encoding='utf-8')
+        assert gitcli.ensure_work_repo('o/r', wr, fetch=False) == wr
+        assert (Path(wr) / 'app.py').read_text(encoding='utf-8') == before
 
 
 class TestReviewAiText:
@@ -498,6 +654,92 @@ class TestReviewAiText:
         assert '- 二丁山形鋼(2L)に対応しました' in notes
         assert '- 不等辺は未対応' in notes
         assert '影響範囲' not in notes
+
+
+class TestSplitBodyTitle:
+    """generate_pr_body の 1 行目 (# タイトル) を本文から切り出す."""
+
+    def test_title_is_split_off(self):
+        title, rest = submit.split_body_title(
+            '# 荷重分布図の PDF 書き出しに対応\n\n## 更新内容\n\n- 1 図')
+        assert title == '荷重分布図の PDF 書き出しに対応'
+        assert rest.startswith('## 更新内容')
+
+    def test_no_title_line(self):
+        title, rest = submit.split_body_title('## 更新内容\n\n- 改善')
+        assert title == ''
+        assert rest == '## 更新内容\n\n- 改善'
+
+    def test_empty(self):
+        assert submit.split_body_title('') == ('', '')
+        assert submit.split_body_title(None) == ('', '')
+
+
+class TestTitleLine:
+    """PR タイトル (一覧の見出し・リリースノートの 1 行目) の作り方."""
+
+    def test_first_line_is_used(self):
+        assert submit.title_line('断面算定に対応\n\n- 詳細') == '断面算定に対応'
+
+    def test_bullet_marks_are_dropped(self):
+        # 手入力の「更新内容」は箇条書きで書かれる。記号は見出しに残さない
+        assert submit.title_line('・二丁溝形鋼(2C)の断面算定に対応') \
+            == '二丁溝形鋼(2C)の断面算定に対応'
+        assert submit.title_line('- 計算書の文章出力を改善') \
+            == '計算書の文章出力を改善'
+
+    def test_a_leading_minus_in_a_word_is_kept(self):
+        assert submit.title_line('-30% の短縮') == '-30% の短縮'
+
+    def test_blank_lines_are_skipped(self):
+        assert submit.title_line('\n\n  \n本題\n') == '本題'
+
+    def test_length_is_capped(self):
+        assert len(submit.title_line('あ' * 200)) == submit.TITLE_MAX
+
+    def test_empty_is_empty(self):
+        assert submit.title_line('') == ''
+        assert submit.title_line(None) == ''
+
+
+class TestClaudeHelperStrict:
+    """提出の自動作成ルート (strict) は失敗の理由を持って止まる."""
+
+    def test_no_api_key_raises(self, monkeypatch):
+        from manager import claude_helper
+        monkeypatch.setattr(claude_helper.settings, 'api_key',
+                            lambda *a, **k: None)
+        with pytest.raises(claude_helper.ClaudeError, match='API キー'):
+            claude_helper._generate('x', strict=True)
+
+    def test_refusal_keeps_its_own_message(self, monkeypatch):
+        # try の中で送出した ClaudeError が「予期しないエラー」に
+        # 化けないこと (except Exception に飲まれない)
+        from manager import claude_helper
+
+        class _Resp:
+            stop_reason = 'refusal'
+            content = []
+            usage = None
+
+        class _Messages:
+            def create(self, **k):
+                return _Resp()
+
+        class _Client:
+            messages = _Messages()
+
+        monkeypatch.setattr(claude_helper, '_client',
+                            lambda strict=False: _Client())
+        with pytest.raises(claude_helper.ClaudeError, match='辞退'):
+            claude_helper._generate('x', strict=True)
+
+    def test_status_hints_are_user_facing(self):
+        from manager import claude_helper
+        err = claude_helper._status_error(401)
+        assert '設定タブ' in str(err) and err.detail == 'HTTP 401'
+        assert '管理者' in str(claude_helper._status_error(400))
+        assert '待って' in str(claude_helper._status_error(500))
 
 
 class TestClaudeHelperFallback:
@@ -554,3 +796,44 @@ class TestFallbackPrBody:
         body = submit.fallback_pr_body('改善しました', '', 'v1.1', 'x')
         notes = reviews.release_notes_from_pr(body, 'v1.2')
         assert '制限事項' not in notes
+
+
+class TestGitErrorMessages:
+    """git を実行できない理由を取り違えないこと (#12)."""
+
+    def test_missing_workdir_does_not_blame_git(self, tmp_path):
+        """作業フォルダが消えただけで「git が無い」と言わないこと.
+
+        git は入っているのに setup.bat の再実行を促され、何をしても
+        直らない案内になっていた。
+        """
+        from manager import gitcli
+        with pytest.raises(GitError) as got:
+            gitcli.run_git(['status'], cwd=str(tmp_path / 'kieta'))
+        assert '作業用のデータが見つかりません' in str(got.value)
+        assert 'setup.bat' not in str(got.value)
+
+    def test_missing_git_still_says_so(self, monkeypatch, tmp_path):
+        from manager import gitcli
+
+        def no_git(*a, **k):
+            raise FileNotFoundError(2, 'git')
+        monkeypatch.setattr(gitcli.subprocess, 'run', no_git)
+        with pytest.raises(GitError) as got:
+            gitcli.run_git(['status'], cwd=str(tmp_path))
+        assert 'git コマンドが見つかりません' in str(got.value)
+
+
+class TestMergeCleanupKeepsTheCause:
+    """後始末が元の例外を握り潰さないこと (#12: 画面が固まる原因)."""
+
+    def test_cleanup_failure_does_not_replace_the_error(self, monkeypatch,
+                                                        tmp_path):
+        from manager import conflicts
+
+        def raises_oserror(args, cwd):
+            raise NotADirectoryError(20, 'cwd が無い')
+        monkeypatch.setattr(conflicts, '_git_raw', raises_oserror)
+        # 後始末が失敗しても例外を投げない (呼び出し元の raise が生きる)
+        conflicts._cleanup_merge(str(tmp_path / 'nai'))
+

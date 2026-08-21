@@ -17,7 +17,12 @@ rem ============================================================
 setlocal
 title mgtkit セットアップ
 set "REPO=takimoto0223/mgtkit"
-set "DEST=%USERPROFILE%\mgtkit"
+rem 置き場所は C ドライブの直下。中の mgtkit と区別できるよう別名
+rem にしてある。管理者が配布前に試すときだけ、setup-test.bat が
+rem MGTKIT_HOME / MGTKIT_BRANCH / MGTKIT_MIGRATE_OPTS を差し替える
+if not defined MGTKIT_HOME set "MGTKIT_HOME=%SystemDrive%\mgtkit_appmanager"
+set "HOME_ROOT=%MGTKIT_HOME%"
+set "DEST=%HOME_ROOT%\.manager\mgtkit"
 
 echo === mgtkit セットアップを開始します ===
 echo.
@@ -123,8 +128,20 @@ if errorlevel 1 goto :pull_failed
 goto :fetch_done
 
 :do_clone
+rem 前回が途中で止まって中途半端に残っていることがある。そのまま
+rem clone すると「空でない」で失敗し、原因と無関係な案内で終わる。
+rem git は複製の中身に読み取り専用を付けるので先に外す
+if exist "%DEST%" attrib -r -h -s "%DEST%\*" /s /d >nul 2>nul
+if exist "%DEST%" rd /s /q "%DEST%"
 echo mgtkit を取得しています...
+if defined MGTKIT_BRANCH goto :do_clone_branch
 git clone "https://github.com/%REPO%.git" "%DEST%"
+if errorlevel 1 goto :clone_failed
+goto :fetch_done
+
+:do_clone_branch
+echo (試験用: ブランチ %MGTKIT_BRANCH% を取得します)
+git clone -b "%MGTKIT_BRANCH%" "https://github.com/%REPO%.git" "%DEST%"
 if errorlevel 1 goto :clone_failed
 goto :fetch_done
 
@@ -137,6 +154,19 @@ echo    退避してから更新し直すので、多くの場合はこれで解消します。
 echo    それでも古いままの場合は管理者に連絡してください。
 :fetch_done
 
+rem ---------------- 引っ越しと入口の準備 ----------------
+rem 以前のフォルダからお名前・API キー・利用量などを引き継ぎ、入口の
+rem ショートカットを作り、最後に以前のフォルダを片付ける。
+rem 片付けはいちばん最後なので、途中で失敗すれば以前のフォルダは
+rem 無傷のまま残り、もう一度この setup.bat を実行すれば続きから進む
+echo.
+echo === 引っ越しと入口の準備をしています ===
+pushd "%DEST%"
+%PY% -m manager.migrate --home "%HOME_ROOT%" %MGTKIT_MIGRATE_OPTS%
+set "RC=%errorlevel%"
+popd
+if not "%RC%"=="0" goto :migrate_failed
+
 echo.
 echo === セットアップ完了。マネージャーを起動します ===
 call "%DEST%\manager\マネージャー起動.bat"
@@ -144,6 +174,14 @@ endlocal
 exit /b 0
 
 rem ============ ここから下は失敗時の案内とサブルーチン ============
+
+:migrate_failed
+echo.
+echo 引っ越しの準備でつまずきました。以前のフォルダはそのまま残して
+echo あるので、これまでどおり使えます。もう一度 setup.bat を実行すると
+echo 続きから進みます。直らない場合は管理者に連絡してください。
+pause
+exit /b 1
 
 :clone_failed
 echo.

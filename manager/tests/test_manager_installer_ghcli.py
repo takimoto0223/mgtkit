@@ -1,6 +1,7 @@
 """manager/installer.py・ghcli.py・updater.py のテスト (外部プロセスはモック)。"""
 import io
 import json
+import logging
 import os
 import zipfile
 
@@ -41,6 +42,15 @@ class TestExtractZip:
         installer.extract_zip(str(z), str(dest))
         assert not (dest / 'old.py').exists()
         assert (dest / 'app.py').exists()
+
+    def test_first_install_creates_missing_folders(self, tmp_path):
+        # β版の初回導入: 置き場も作業フォルダの置き場もまだ無い状態
+        z = tmp_path / 'a.zip'
+        _make_zip(str(z), {'app.py': 'x'})
+        dest = tmp_path / '.manager' / 'beta' / 'v1.5-beta.1' / 'mgtkit'
+        installer.extract_zip(str(z), str(dest),
+                              str(tmp_path / '.manager' / 'tmp'))
+        assert (dest / 'app.py').read_text() == 'x'
 
     def test_bad_zip_raises_friendly_error(self, tmp_path):
         bad = tmp_path / 'bad.zip'
@@ -175,6 +185,272 @@ class TestCheckUpdate:
         assert r['latest']['tag'] == 'v1.2'
 
 
+class TestPruneBetas:
+    """試すたびに増えるβ版の置き場を、一覧に合わせて片付ける."""
+
+    def _install_root(self, monkeypatch, tmp_path, *versions_):
+        monkeypatch.setattr(updater.paths, 'install_root',
+                            lambda config=None: str(tmp_path))
+        for v in versions_:
+            (tmp_path / 'beta' / v / 'mgtkit').mkdir(parents=True)
+        return tmp_path / 'beta'
+
+    def test_keeps_only_the_versions_still_listed(self, monkeypatch,
+                                                  tmp_path):
+        beta = self._install_root(monkeypatch, tmp_path,
+                                  'v1.2-beta.1', 'v1.2-beta.2', 'v1.1-beta.9')
+        removed = updater.prune_betas(['v1.2-beta.2'])
+        assert removed == ['v1.1-beta.9', 'v1.2-beta.1']
+        assert [p.name for p in sorted(beta.iterdir())] == ['v1.2-beta.2']
+
+    def test_removes_everything_when_nothing_is_listed(self, monkeypatch,
+                                                       tmp_path):
+        """正式版になって一覧から消えたら、手元の置き場も残さない."""
+        beta = self._install_root(monkeypatch, tmp_path, 'v1.2-beta.1')
+        assert updater.prune_betas([]) == ['v1.2-beta.1']
+        assert list(beta.iterdir()) == []
+
+    def test_no_beta_folder_yet(self, monkeypatch, tmp_path):
+        """一度もβ版を試していない PC でも落ちないこと."""
+        monkeypatch.setattr(updater.paths, 'install_root',
+                            lambda config=None: str(tmp_path))
+        assert updater.prune_betas(['v1.2-beta.1']) == []
+
+    def test_leaves_files_alone(self, monkeypatch, tmp_path):
+        """フォルダ以外 (置かれた覚えのないファイル) には触らない."""
+        beta = self._install_root(monkeypatch, tmp_path, 'v1.2-beta.1')
+        (beta / 'メモ.txt').write_text('x', encoding='utf-8')
+        assert updater.prune_betas([]) == ['v1.2-beta.1']
+        assert (beta / 'メモ.txt').exists()
+
+
+class TestInstallRelease:
+    """取り込みは「全部済んでから」済んだ印 (version.json) を置く.
+
+    印を展開直後に置くと、そのあとの pip が失敗しても「入っている」に
+    なり、次からは取り込みごと飛ばして**必要ライブラリの無いアプリ**を
+    起動しようとする (画面は成功と出るのに何も起きず、自力では直せない)。
+    """
+
+    def _prepare(self, monkeypatch, tmp_path, entries):
+        """配布 ZIP の取得と作業フォルダをモックし、インスタンスを返す."""
+        z = tmp_path / 'rel.zip'
+        _make_zip(str(z), entries)
+        monkeypatch.setattr(updater.ghcli, 'download_release',
+                            lambda *a, **k: (str(z), False))
+        monkeypatch.setattr(updater.ghcli, 'tag_commit_sha',
+                            lambda *a, **k: 'abc123')
+        monkeypatch.setattr(updater.paths, 'install_root',
+                            lambda config=None: str(tmp_path / 'root'))
+        return tmp_path / 'inst'
+
+    def _release(self):
+        return {'tag': 'v1.4', 'published_at': '2026-08-18', 'assets': []}
+
+    def test_marker_is_not_left_behind_when_pip_fails(self, monkeypatch,
+                                                      tmp_path):
+        inst = self._prepare(monkeypatch, tmp_path, {
+            'app.py': 'x',
+            'version.json': '{"version": "v1.4", "commit": "abc"}'})
+
+        def boom(*a, **k):
+            raise installer.InstallError('必要ライブラリの…')
+        monkeypatch.setattr(updater.installer, 'install_requirements', boom)
+
+        with pytest.raises(installer.InstallError):
+            updater.install_release('o/r', self._release(), str(inst))
+        # 「入っている」と誤認されないこと (次に押せば取り込み直される)
+        assert updater.local_version_info(str(inst)) is None
+        assert (inst / 'mgtkit' / 'app.py').exists()
+
+    def test_marker_keeps_the_distributed_contents(self, monkeypatch,
+                                                   tmp_path):
+        """配布物の version.json は中身をそのまま戻すこと."""
+        body = ('{"version": "v1.4", "commit": "abc123", '
+                '"distributed_at": "2026-08-18", "built_by": "CI"}')
+        inst = self._prepare(monkeypatch, tmp_path,
+                             {'app.py': 'x', 'version.json': body})
+        monkeypatch.setattr(updater.installer, 'install_requirements',
+                            lambda *a, **k: True)
+
+        updater.install_release('o/r', self._release(), str(inst))
+        info = updater.local_version_info(str(inst))
+        assert info['version'] == 'v1.4'
+        assert info['built_by'] == 'CI'      # 余分な項目も失わない
+
+    def test_marker_is_written_after_pip_when_missing(self, monkeypatch,
+                                                      tmp_path):
+        """配布物に version.json が無いときも、印は最後に置くこと."""
+        inst = self._prepare(monkeypatch, tmp_path, {'app.py': 'x'})
+        seen = {}
+
+        def install_requirements(app_dir, python=None):
+            # pip の時点ではまだ印が無い (途中で落ちれば残らない)
+            seen['during'] = versions.read_version_json(app_dir)
+            return True
+        monkeypatch.setattr(updater.installer, 'install_requirements',
+                            install_requirements)
+
+        updater.install_release('o/r', self._release(), str(inst))
+        assert seen['during'] is None
+        info = updater.local_version_info(str(inst))
+        assert info == {'version': 'v1.4', 'commit': 'abc123',
+                        'distributed_at': '2026-08-18'}
+
+
+class TestFailureMessages:
+    """原因を名指しする案内は、原因が分かった分岐でだけ出す.
+
+    「使用中です。再起動を」は、空き容量不足や置き場所の不在で出ると
+    利用者に**直らない操作**を延々させる。errno で分かる分だけ書く。
+    """
+
+    def _replace_with(self, monkeypatch, tmp_path, exc):
+        src = tmp_path / 'src'
+        src.mkdir()
+        (src / 'app.py').write_text('x', encoding='utf-8')
+        install_dir = tmp_path / 'inst' / 'mgtkit'
+        install_dir.mkdir(parents=True)
+
+        real_rename = os.rename
+
+        def fake_rename(a, b):
+            if os.path.abspath(a) == str(install_dir):
+                raise exc
+            return real_rename(a, b)
+        monkeypatch.setattr(installer.os, 'rename', fake_rename)
+        with pytest.raises(installer.InstallError) as got:
+            installer._replace_dir(str(src), str(install_dir))
+        return str(got.value)
+
+    def test_locked_folder_says_in_use(self, monkeypatch, tmp_path):
+        msg = self._replace_with(
+            monkeypatch, tmp_path, PermissionError(13, '使用中'))
+        assert '使用中' in msg
+
+    def test_disk_full_does_not_say_in_use(self, monkeypatch, tmp_path):
+        msg = self._replace_with(
+            monkeypatch, tmp_path, OSError(28, 'No space left'))
+        assert '空き容量' in msg
+        assert '使用中' not in msg and '再起動' not in msg
+
+    def test_missing_location_does_not_say_in_use(self, monkeypatch,
+                                                  tmp_path):
+        msg = self._replace_with(
+            monkeypatch, tmp_path, FileNotFoundError(2, 'No such file'))
+        assert '見つからない' in msg
+        assert '使用中' not in msg and '再起動' not in msg
+
+    def test_unknown_cause_points_at_the_log(self, monkeypatch, tmp_path):
+        msg = self._replace_with(monkeypatch, tmp_path, OSError(75, '謎'))
+        assert 'manager.log' in msg
+        assert '使用中' not in msg and '再起動' not in msg
+
+    def test_broken_zip_and_environment_errors_differ(self, tmp_path,
+                                                      monkeypatch):
+        bad = tmp_path / 'bad.zip'
+        bad.write_bytes(b'not a zip')
+        with pytest.raises(installer.InstallError) as broken:
+            installer.extract_zip(str(bad), str(tmp_path / 'x'))
+        assert '壊れている' in str(broken.value)
+
+        z = tmp_path / 'ok.zip'
+        _make_zip(str(z), {'app.py': 'x'})
+
+        def no_space(*a, **k):
+            raise OSError(28, 'No space left')
+        monkeypatch.setattr(installer.zipfile.ZipFile, 'extractall',
+                            no_space)
+        with pytest.raises(installer.InstallError) as env:
+            installer.extract_zip(str(z), str(tmp_path / 'y'))
+        assert '空き容量' in str(env.value)
+        # やり直しても直らないので「再度お試しください」とは言わない
+        assert '再度お試しください' not in str(env.value)
+
+    def test_the_cause_reaches_the_log(self, tmp_path, caplog):
+        bad = tmp_path / 'bad.zip'
+        bad.write_bytes(b'not a zip')
+        with caplog.at_level(logging.ERROR, logger='manager.installer'):
+            with pytest.raises(installer.InstallError):
+                installer.extract_zip(str(bad), str(tmp_path / 'x'))
+        assert any(r.exc_info for r in caplog.records)   # 追跡できる
+
+
+class TestInstallLock:
+    """取り込みは同時に 2 本走らせない (置き換えと pip がぶつかる).
+
+    初回起動では、画面の案内どおり「起動」を押した人と起動時の自動更新が
+    ちょうどぶつかる。負けた側は置き換えに失敗し、まだ一度も起動して
+    いないのに「フォルダが使用中です…再起動を」と案内されていた。
+    """
+
+    def test_two_installs_never_overlap(self):
+        import threading
+        import time
+        inside, overlapped = [], []
+
+        def work():
+            with updater.install_lock():
+                inside.append(1)
+                if len(inside) > 1:
+                    overlapped.append(1)
+                time.sleep(0.01)
+                inside.pop()
+
+        threads = [threading.Thread(target=work) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert overlapped == []
+
+    def test_try_lock_gives_up_when_busy(self):
+        with updater.install_lock():
+            assert updater.try_install_lock() is None
+            assert updater.installing() is True
+        assert updater.installing() is False
+        held = updater.try_install_lock()
+        assert held is not None
+        with held:
+            assert updater.installing() is True
+
+    def test_waiting_side_skips_an_install_that_already_happened(
+            self, monkeypatch, tmp_path):
+        """待っている間に同じ版が入ったら、取り込みも停止もしないこと."""
+        installed, prepared = [], []
+        monkeypatch.setattr(updater, 'install_release',
+                            lambda *a, **k: installed.append(1))
+        monkeypatch.setattr(updater, 'local_version_info',
+                            lambda d: {'version': 'v1.4'})
+        took = updater.install_if_needed(
+            'o/r', {'tag': 'v1.4'}, str(tmp_path),
+            prepare=lambda: prepared.append(1))
+        assert took is False
+        assert installed == [] and prepared == []
+
+    def test_a_different_version_is_installed(self, monkeypatch, tmp_path):
+        installed, prepared = [], []
+        monkeypatch.setattr(updater, 'install_release',
+                            lambda *a, **k: installed.append(1))
+        monkeypatch.setattr(updater, 'local_version_info',
+                            lambda d: {'version': 'v1.3'})
+        took = updater.install_if_needed(
+            'o/r', {'tag': 'v1.4'}, str(tmp_path),
+            prepare=lambda: prepared.append(1))
+        assert took is True
+        assert installed == [1] and prepared == [1]
+
+    def test_the_lock_is_released_even_when_install_fails(self, monkeypatch,
+                                                          tmp_path):
+        def boom(*a, **k):
+            raise installer.InstallError('失敗')
+        monkeypatch.setattr(updater, 'install_release', boom)
+        monkeypatch.setattr(updater, 'local_version_info', lambda d: None)
+        with pytest.raises(installer.InstallError):
+            updater.install_if_needed('o/r', {'tag': 'v1.4'}, str(tmp_path))
+        assert updater.installing() is False   # 次の取り込みが詰まらない
+
+
 def test_manager_main_compiles():
     # flet は CI に入れないため import はせず、構文チェックのみ行う
     src_path = os.path.join(os.path.dirname(updater.__file__), 'main.py')
@@ -227,6 +503,61 @@ class TestJoinRequest:
         assert '@o さんへ' in body
 
 
+class TestJoinRequestNameRepair:
+    """名前を登録する前に送ってしまった申請を、あとから直せること.
+
+    以前は起動と同時に申請が飛び、初回登録に名前を打ち終える前に
+    「名前: (未登録)」で送られていた。しかも close 済みも含めて既存を
+    探すため二度と作り直されず、直す口も無かった。
+    """
+
+    def _gh(self, monkeypatch, calls):
+        def fake_run_gh(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'user']:
+                return 'yamada\n'
+            return ''
+        monkeypatch.setattr(ghcli, 'run_gh', fake_run_gh)
+
+    def test_open_request_gets_the_registered_name(self, monkeypatch):
+        calls = []
+        self._gh(monkeypatch, calls)
+        issue = {'number': 7, 'title': '参加申請: yamada (@yamada)',
+                 'state': 'OPEN'}
+        assert ghcli.update_join_request_name('o/r', issue, '山田太郎')
+        edit = calls[-1]
+        assert edit[:4] == ['issue', 'edit', '7', '--repo']
+        assert (edit[edit.index('--title') + 1]
+                == '参加申請: 山田太郎 (@yamada)')
+        assert '- 名前: 山田太郎' in edit[edit.index('--body') + 1]
+
+    def test_closed_request_is_left_alone(self, monkeypatch):
+        """承認・却下が済んだ申請は直しても意味がない (API の無駄打ち)."""
+        calls = []
+        self._gh(monkeypatch, calls)
+        issue = {'number': 7, 'title': '参加申請: yamada (@yamada)',
+                 'state': 'CLOSED'}
+        assert ghcli.update_join_request_name('o/r', issue, '山田太郎') is False
+        assert calls == []
+
+    def test_already_correct_is_not_rewritten(self, monkeypatch):
+        """起動のたびに同じ内容で edit を打たないこと."""
+        calls = []
+        self._gh(monkeypatch, calls)
+        issue = {'number': 7, 'title': '参加申請: 山田太郎 (@yamada)',
+                 'state': 'OPEN'}
+        assert ghcli.update_join_request_name('o/r', issue, '山田太郎') is False
+        assert calls == []
+
+    def test_no_name_yet_does_nothing(self, monkeypatch):
+        calls = []
+        self._gh(monkeypatch, calls)
+        issue = {'number': 7, 'title': '参加申請: yamada (@yamada)',
+                 'state': 'OPEN'}
+        assert ghcli.update_join_request_name('o/r', issue, '') is False
+        assert calls == []
+
+
 class TestCollaboratorInvitation:
     def test_accept_matching_invitation(self, monkeypatch):
         calls = []
@@ -249,3 +580,58 @@ class TestCollaboratorInvitation:
         monkeypatch.setattr(ghcli, 'run_gh',
                             lambda args, timeout=60: '[]')
         assert ghcli.accept_repo_invitation('o/r') is False
+
+
+class TestSwapLeftovers:
+    """更新の入れ替えは「隣に用意して名前を付け替える」方式なので、
+    強制終了や電源断で作業フォルダが残る。放置すると更新のたびに溜まる。
+    新しい配置では stable が利用者に見えるので、なおさら残せない。
+    """
+
+    def test_sweeps_only_its_own_leftovers(self, tmp_path):
+        (tmp_path / (installer.SWAP_PREFIX + 'aaa')).mkdir()
+        (tmp_path / (installer.SWAP_PREFIX + 'bbb') / 'old').mkdir(parents=True)
+        (tmp_path / 'mgtkit').mkdir()          # 本物。消してはいけない
+        (tmp_path / 'version.json').write_text('{}', encoding='utf-8')
+        assert installer.sweep_swap_leftovers(str(tmp_path)) == 2
+        assert (tmp_path / 'mgtkit').is_dir()
+        assert (tmp_path / 'version.json').is_file()
+        assert not list(tmp_path.glob(installer.SWAP_PREFIX + '*'))
+
+    def test_missing_folder_is_harmless(self, tmp_path):
+        assert installer.sweep_swap_leftovers(str(tmp_path / 'nope')) == 0
+
+    def test_work_parent_is_used_when_given(self, tmp_path, monkeypatch):
+        # 作業フォルダは、指定された隠し場所に作られること
+        src = tmp_path / 'src'
+        src.mkdir()
+        (src / 'app.py').write_text('# app', encoding='utf-8')
+        install_dir = tmp_path / 'visible' / 'mgtkit'
+        install_dir.mkdir(parents=True)
+        work_parent = tmp_path / 'hidden' / 'tmp'
+        installer._replace_dir(str(src), str(install_dir), str(work_parent))
+        assert (install_dir / 'app.py').is_file()
+        # 見える側に残骸が出ていないこと
+        assert not list((tmp_path / 'visible').glob(
+            installer.SWAP_PREFIX + '*'))
+
+    def test_creates_the_install_parent_when_missing(self, tmp_path):
+        # 初めてβ版を試すときは beta/<版>/ がまだ無い。作業フォルダを
+        # 隠し側に作る指定でも、付け替え先の親は作られること
+        # (作られないと os.rename が失敗し「使用中」と誤って案内される)
+        src = tmp_path / 'src'
+        src.mkdir()
+        (src / 'app.py').write_text('# app', encoding='utf-8')
+        install_dir = tmp_path / '.manager' / 'beta' / 'v1.5-beta.1' / 'mgtkit'
+        work_parent = tmp_path / '.manager' / 'tmp'
+        installer._replace_dir(str(src), str(install_dir), str(work_parent))
+        assert (install_dir / 'app.py').is_file()
+
+    def test_defaults_to_the_parent(self, tmp_path):
+        src = tmp_path / 'src'
+        src.mkdir()
+        (src / 'app.py').write_text('# app', encoding='utf-8')
+        install_dir = tmp_path / 'inst' / 'mgtkit'
+        install_dir.mkdir(parents=True)
+        installer._replace_dir(str(src), str(install_dir))
+        assert (install_dir / 'app.py').is_file()

@@ -26,7 +26,7 @@ import zipfile
 
 from . import diffcache, ghcli, paths
 from .gitcli import GitError, ensure_work_repo, run_git
-from .submit import _is_dist_scope, workrepo_dir
+from .submit import _is_dist_scope, user_sections, workrepo_dir
 
 log = logging.getLogger(__name__)
 
@@ -285,6 +285,11 @@ tr.gap td { background: #eef2f7; color: #6b7280; text-align: center;
 .mgo { font-size: 13px; color: #fff; background: #1e3a5f;
        text-decoration: none; padding: 8px 16px; border-radius: 6px; }
 .mgo:hover { background: #2b4a6f; }
+.usum { margin-bottom: 18px; padding: 12px 16px; }
+.usum h3 { margin: 14px 0 4px; font-size: 13.5px; color: #374151; }
+.usum pre { margin: 0; padding: 0; background: none; border: none;
+            font-family: inherit; font-size: 13px; color: #1f2937;
+            white-space: pre-wrap; }
 """
 
 _STATUS_JP = {'M': ('変更', 'tagM'), 'A': ('追加', 'tagA'),
@@ -664,6 +669,8 @@ def collect_model(meta, base_ref, head_ref, workrepo, merge_base=None):
 
     return {'number': meta['number'], 'title': meta['title'],
             'author': meta.get('author', '?'), 'beta': meta.get('beta'),
+            'update_text': meta.get('update_text', ''),
+            'limits_text': meta.get('limits_text', ''),
             'has_notes': bool(notes), 'n_add': n_add, 'n_del': n_del,
             'files': files, 'dl_paths': dl_paths,
             'dl_deleted': dl_deleted, 'base_ref': base_ref,
@@ -742,7 +749,7 @@ def render_html(model, workrepo):
         '<header><div><h1>#%d %s</h1>'
         '<div class="meta">提出者: %s %s・ 基点との比較 '
         '(追加 <b>+%d</b> 行 / 削除 <b>-%d</b> 行)</div></div>%s</header>'
-        '<div class="wrap">'
+        '<div class="wrap">%s'
         '<h2 class="sec-h">&lt;1&gt; フォルダ比較 '
         '(変更されたファイル %d 件)</h2>'
         '<div class="card"><table class="sum">%s</table>'
@@ -760,8 +767,33 @@ def render_html(model, workrepo):
         % (model['number'], _CSS, model['number'],
            html.escape(model['title']), html.escape(model['author']),
            beta, model['n_add'], model['n_del'], dl_html,
+           _user_summary_html(model),
            len(model['files']), sum_rows, notes_caveat,
            ''.join(sections), dl_modal))
+
+
+def _user_summary_html(model):
+    """冒頭に出す「更新内容」「制限事項」の箱 (提出時の記載の転載).
+
+    承認判断の第一材料なので差分より先に見せる (管理者指示 2026-08)。
+    このまま正式版のリリースノートになる文章。無い提出 (旧様式・手書きで
+    空欄) では箱ごと出さない。
+    """
+    update = (model.get('update_text') or '').strip()
+    limits = (model.get('limits_text') or '').strip()
+    if not (update or limits):
+        return ''
+    parts = ['<div class="card usum">',
+             '<p class="note">提出時に書かれた内容です。正式版になった'
+             'ときに「更新内容」「ご利用にあたっての制限事項」として'
+             'そのまま表示されます。</p>']
+    if update:
+        parts.append('<h3>更新内容</h3><pre>%s</pre>' % html.escape(update))
+    if limits:
+        parts.append('<h3>ご利用にあたっての制限事項</h3><pre>%s</pre>'
+                     % html.escape(limits))
+    parts.append('</div>')
+    return ''.join(parts)
 
 
 def _has_commit(workrepo, sha):
@@ -852,9 +884,11 @@ def build_model(pr, config=None, workrepo=None, beta_tag=None):
             log.warning('PR #%s の本文取得に失敗 (説明なしで表示します)',
                         pr['number'])
             body = ''
+    update_text, limits_text = user_sections(body or '')
     meta = {'number': pr['number'], 'title': pr['title'],
             'author': pr.get('author', '?'), 'beta': beta_tag,
-            'notes': parse_file_notes(body)}
+            'notes': parse_file_notes(body),
+            'update_text': update_text, 'limits_text': limits_text}
     model = collect_model(meta, 'origin/%s' % base, head_ref, workrepo,
                           merge_base=merge_base)
     # 先端と分岐点の両方を SHA で固定できたか。固定できていないものは

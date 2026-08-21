@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<!--
+  mgtkit フォルダ構成の見直し 1 枚目 (A3 横。図だけ)
+
+  2 枚目 (A4 縦) は フォルダ構成の見直し-2.html。Chromium は 1 つの PDF に
+  複数の用紙サイズを混ぜられないため、別々に PDF 化して pdfunite で
+  つなぐ (作り方は 2 枚目の冒頭に記載)。
+
+  - 左に変更前、右に変更後。同じ色のかたまりが「どこへ移ったか」を表す
+  - 枝 (├─ └─ │) は和文等幅 (IPAGothic) で桁を合わせている。
+    .tree のフォント指定を変えると枝がずれる
+  - パスは日本語 Windows の見え方 (円記号) に揃うよう和文等幅を先に置く
+  - **入れ物のフォルダには群の色を塗らない** (中に別々の群を含むため、
+    どの色を塗っても嘘になる)。白地＋濃いグレーの実線の枠にし、
+    ふだん開かない入れ物 (.manager\) だけ破線 (.box.hide) にする。
+    左右で同じものが同じ描き方になるようにそろえること
+    (管理者の赤入れ 2026-08)
+  - 色だけに頼らないよう、群の番号と記号 (◎ △ ×) を必ず添える。
+    2 型色覚では緑地と赤地の差が 1.03:1 でほぼ判別できない
+  - 説明で補わず、見た目で分からせる。冒頭と重複する説明文は置かない
+  - ショートカットの行き先の曲線 (.wires) は **PDF を作るときに
+    scripts/readme_build/make_a3.py がその場で位置を測って引く**。
+    原稿には座標を書かないので、ツリーの行を増減してもずれない。
+    目印は id="a-dst" (入口の行) と id="a-tgt" (その行き先)
+  - 枝 (├─ │ └─) は「子の │ が親の ├ の真下」に来るように書く。
+    記号 (◎ △ ×) は .mk で左の溝へ絶対配置し、文字の並びには
+    入れない (並びに入れるとその行だけ枝がずれる)
+  - 用語は既存の使い方ガイドに合わせて「正式版」。「本体」は使わない
+  - GitHub という語は、この資料に限り使用可 (管理者の判断 2026-08)。
+    マネージャーの画面文言には出さない
+  - PDF 化: Chromium (Playwright) で page.goto(この HTML) →
+    page.pdf(width='420mm', height='297mm', print_background=True,
+             margin=dict(top='0', bottom='0', left='0', right='0'))
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>mgtkit フォルダ構成の見直し (案) 1/2</title>
+<style>
+  @page { size: 420mm 297mm; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 420mm; height: 297mm; padding: 9mm 11mm 7mm;
+    font-family: 'IPAPGothic', sans-serif;
+    color: #1f2937; font-size: 9pt; line-height: 1.6;
+    background: #ffffff;
+  }
+
+  .head { display: flex; align-items: baseline; gap: 4mm;
+          margin-bottom: 1.5mm; }
+  .mark { background: #16283c; color: #ffffff; border-radius: 4px;
+          padding: 1.2mm 3mm; display: inline-flex; gap: 2mm;
+          align-items: baseline; flex: none; }
+  .mark .logo { font-weight: bold; font-size: 10pt; }
+  .mark .t { color: #9fb3c8; font-size: 7.5pt; }
+  h1 { color: #1e3a5f; font-size: 15.5pt; margin: 0; }
+  .askchip { background: #fde68a; color: #713f12; border-radius: 3px;
+             padding: 0.6mm 2.4mm; font-size: 8.6pt; font-weight: bold;
+             flex: none; }
+  .pg { margin-left: auto; color: #9ca3af; font-size: 8.5pt; flex: none; }
+  .lead { color: #374151; font-size: 9.4pt; margin: 0 0 3mm;
+          line-height: 1.55; }
+  .lead b { color: #1e3a5f; }
+
+  /* ---- 凡例 ---- */
+  .legend { display: flex; gap: 2.5mm; margin-bottom: 3.5mm; }
+  .lg { flex: 1; border: 1px solid; border-left-width: 3.5px;
+        border-radius: 4px; padding: 1.6mm 2.4mm; font-size: 8.2pt;
+        line-height: 1.5; }
+  .lg b { display: block; font-size: 9.2pt; margin-bottom: 0.4mm; }
+
+  .g1 { background: #e8f1fb; border-color: #5b8cc0; color: #17456f; }
+  .g2 { background: #e3f4e7; border-color: #5aa571; color: #1c6334; }
+  .g3 { background: #fbe6e6; border-color: #c47575; color: #8f2d2d; }
+  .g4 { background: #eaedf2; border-color: #8d99ab; color: #414c5c; }
+
+  /* ---- 2 段組み ---- */
+  .cols { display: flex; gap: 9mm; align-items: stretch; }
+  .col { flex: 1; min-width: 0; }
+  .colhead { display: flex; align-items: baseline; gap: 3mm;
+             margin-bottom: 1.8mm; }
+  .colhead .n { font-size: 11.5pt; font-weight: bold; color: #1e3a5f; }
+  .colhead .s { font-size: 8.6pt; color: #6b7280; }
+  /* パネル自体には枠も地色も置かない (赤入れ 2026-08「この枠線ケス」)。
+     枠は入れ物 (.box) だけが持ち、階層が枠の数で分かるようにする。
+     入れ物の枠は左へはみ出して描くので、列のすき間はその分ひろく取る */
+  .panel { padding: 0.6mm 0 3.6mm; height: 100%; position: relative; }
+
+  /* ---- ツリー ---- */
+  .tree { font-family: 'IPAGothic', monospace; font-size: 10.4pt;
+          line-height: 1.5; }
+  /* 記号 (◎ △ ×) は文字の並びの外 (左の溝) に置く。並びの中に入れると
+     その行だけ枝の縦線が記号のぶんずれる (管理者の赤入れ「まっすぐ
+     あわせる」)。全行が同じ左端から始まるので枝が縦に通る */
+  .ln { white-space: pre; position: relative; padding-left: 6mm; }
+  .br { color: #9aa5b1; }
+  .nm { font-weight: bold; }
+  .ds { font-family: 'IPAPGothic', sans-serif; font-size: 8.4pt;
+        color: #5b6572; font-weight: normal; }
+  .star { color: #b45309; font-weight: bold; }
+  .mk { position: absolute; left: 1.8mm; top: 0;
+        font-weight: bold; font-size: 11.5pt; color: #374151; }
+
+  /* 入れ物・群とも **左の余白を作らない**。左に余白を持たせると、
+     枠をまたぐたびに枝の縦線がずれる。色帯は ::before の重ね描きにして
+     幅を食わせない。
+     入れ物の枠も同じ理由で border では引かず、**::before で文字の並びの
+     外 (左) へはみ出させて描く**。深さごとに左へずらすので、枠と中の
+     カードのあいだに余白ができても枝は縦に通ったまま
+     (赤入れ 2026-08「マージンをもう少し取って」) */
+  .box { position: relative; background: #ffffff;
+         padding: 2.2mm 1.6mm 2.6mm 0; margin: 3mm 0; }
+  .box::before { content: ''; position: absolute;
+                 top: 0; bottom: 0; left: -3.6mm; right: 0;
+                 border: 2px solid #6b7280; border-radius: 5px; }
+  /* ふだん開かない入れ物 (.manager\) だけ破線。
+     「実線＝見える／破線＝隠れている」を枠の描き方だけで言う */
+  .box .box::before { left: -1.8mm;
+                      border: 1.6px dashed #a3adb9; }
+  .grp { position: relative; border-radius: 0 5px 5px 0;
+         padding: 1.6mm 1.2mm 1.6mm 0; margin: 2mm 0; }
+  .grp::before { content: ''; position: absolute; left: 0; top: 0;
+                 bottom: 0; width: 4px; border-radius: 2px 0 0 2px; }
+  .grp.c1 { background: #f2f7fc; } .grp.c1::before { background: #5b8cc0; }
+  .grp.c2 { background: #f1faf3; } .grp.c2::before { background: #5aa571; }
+  .grp.c3 { background: #fdf3f3; } .grp.c3::before { background: #c47575; }
+  .grp.c4 { background: #f5f7f9; } .grp.c4::before { background: #8d99ab; }
+  .grp .tag { float: right;
+              font-family: 'IPAPGothic', sans-serif;
+              font-size: 8.2pt; font-weight: bold; padding: 0.2mm 1.2mm;
+              border-radius: 3px; border: 1px solid; }
+
+  .t1 { color: #17456f; } .t2 { color: #1c6334; }
+  .t3 { color: #8f2d2d; } .t4 { color: #414c5c; }
+  .tag.g1 { color: #17456f; } .tag.g2 { color: #1c6334; }
+  .tag.g3 { color: #8f2d2d; } .tag.g4 { color: #414c5c; }
+
+  .root { font-weight: bold; color: #374151; }
+  .hid { color: #8a94a0; font-size: 9pt;
+         font-family: 'IPAPGothic', sans-serif; }
+
+  /* ショートカットの行き先を示す曲線 (座標は実測値) */
+  /* 曲線を引くため、変更後のパネルだけ右に余白を確保する */
+  .panel.wired { padding-right: 12mm; }
+  /* .grp / .box は後から地色を塗るので、z-index がないと曲線が
+     枠をまたぐたびに塗りつぶされて切れて見える (赤入れ 2026-08) */
+  .wires { position: absolute; inset: 0; width: 100%; height: 100%;
+           pointer-events: none; z-index: 3; }
+  .wires path { fill: none; stroke: #2563eb; stroke-width: 1.1;
+                stroke-linecap: round; }
+  .wires text { font-family: 'IPAPGothic', sans-serif; font-size: 7pt;
+                fill: #2563eb; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <span class="mark"><span class="logo">mgtkit</span><span class="t">アプリマネージャー</span></span>
+  <h1>フォルダ構成を整理したいのですが、いかがでしょうか</h1>
+  <span class="askchip">これはまだ案です — ご意見をお寄せください</span>
+  <span class="pg">1 / 2</span>
+</div>
+
+<p class="lead">
+いま <code style="font-family:'IPAGothic',monospace">setup.bat</code> を実行すると、PC の <b>2 か所</b>にフォルダが作られ、どちらも <b>mgtkit</b> という同じ名前です。しかも
+<b>さわらないものが手前に、よくさわるものが奥にある</b>ので、これを <b>C ドライブの直下の 1 つのフォルダにまとめて整理し直したい</b>というご相談です。
+ふだんの操作 (起動・更新・β版の確認・提出) は変わりません。
+</p>
+
+<div class="legend">
+  <div class="lg g1"><b>1 ◎ 入口</b>
+    普段はここから起動します。移動・コピーは自由です。</div>
+  <div class="lg g2"><b>2 △ リリースされた最新版のアプリ</b>
+    見る・コピーは自由。改造はこれをコピーして行います。アプリマネージャーから起動したときに開いて実際に動くプログラムです。</div>
+  <div class="lg g3"><b>3 × 道具</b>
+    アプリマネージャーが動くための、GitHub のリポジトリの複製 (開発用のファイルも含めてまるごと)。さわらないでください。</div>
+  <div class="lg g4"><b>4 × 置き場</b>
+    β版・作業データ・設定。マネージャーが自動で作り、自動で片付けます。</div>
+</div>
+
+<div class="cols">
+
+<!-- ================= 変更前 ================= -->
+<div class="col">
+  <div class="colhead"><span class="n">変更前 (いま)</span>
+    <span class="s">C:\Users\(自分)\ 以下にフォルダが 2 か所。名前はどちらも mgtkit で混乱する。</span></div>
+  <div class="panel">
+    <div class="tree">
+      <div class="ln root">C:\Users\(自分)\</div>
+
+      <div class="box">
+        <div class="ln"><span class="br">├─ </span><span class="nm">mgtkit\</span><span class="ds">   <b>ここが一番手前に見えている</b></span></div>
+        <div class="grp c3"><span class="tag g3">3 × 道具</span>
+          <div class="ln"><span class="mk">×</span><span class="br">│  ├─ </span><span class="nm t3">.git\</span><span class="ds">   <span class="hid">(隠し)</span> 版を管理する中身</span></div>
+          <div class="ln"><span class="br">│  ├─ </span>app.py  mgt.py  s_check.py  rc_check.py  section.py <span class="ds">…</span></div>
+          <div class="ln"><span class="br">│  ├─ </span>data\   static\   templates\</div>
+          <div class="ln"><span class="br">│  ├─ </span>tests\   .github\   pytest.ini   requirements.txt</div>
+          <div class="ln"><span class="br">│  ├─ </span>config.json   README.md</div>
+          <div class="ln"><span class="br">│  ├─ </span>起動.bat<span class="ds">   非常用。この複製を直接動かす</span></div>
+          <div class="ln"><span class="br">│  ├─ </span>stash\2026-08-18_1030\<span class="ds">   直接なおした内容の退避先</span></div>
+          <div class="ln"><span class="br">│  └─ </span><span class="nm t3">manager\</span><span class="ds">   アプリマネージャーそのもの</span></div>
+          <div class="ln" id="a-src"><span class="mk">◎</span><span class="br">│     ├─ </span><span class="nm t1">マネージャー起動.bat</span><span class="ds">   <span class="star">★起動するのはここ</span></span></div>
+          <div class="ln"><span class="br">│     ├─ </span>main.py  updater.py  submit.py  launcher.py <span class="ds">…</span></div>
+          <div class="ln"><span class="br">│     └─ </span>docs\   readme\   scripts\   tests\<span class="ds">   記録・資料・setup.bat ほか</span></div>
+        </div>
+      </div>
+
+      <div class="box">
+        <div class="ln"><span class="br">└─ </span><span class="nm">AppData\Local\mgtkit\</span><span class="ds">   <span class="hid">深い場所。ふつうは誰もたどり着かない</span></span></div>
+
+        <div class="grp c2"><span class="tag g2">2 △ 正式版</span>
+          <div class="ln"><span class="mk">△</span><span class="br">   ├─ </span><span class="nm t2">stable\mgtkit\</span><span class="ds">   <span class="star">★アプリマネージャーから起動されるアプリ。改造するときはこれをフォルダの外へコピー</span></span></div>
+          <div class="ln"><span class="br">   │  ├─ </span>app.py  s_check.py <span class="ds">…  (配布版。tests\ や manager\ は入っていない)</span></div>
+          <div class="ln"><span class="br">   │  ├─ </span>version.json<span class="ds">   どの版か・どこから直したかの目印</span></div>
+          <div class="ln"><span class="br">   │  └─ </span>起動.bat<span class="ds">   非常用。この正式版を直接動かす</span></div>
+        </div>
+
+        <div class="grp c4"><span class="tag g4">4 × 置き場</span>
+          <div class="ln"><span class="mk">×</span><span class="br">   ├─ </span>stable\uploads_tmp\<span class="ds">   読み込んだファイルの一時置き場</span></div>
+          <div class="ln"><span class="br">   ├─ </span><span class="nm t4">beta\</span>v1.2-beta.1\mgtkit\<span class="ds">   試用中のβ版</span></div>
+          <div class="ln"><span class="br">   ├─ </span>workrepo\   diffcache\<span class="ds">   差分を出すための作業データ</span></div>
+          <div class="ln"><span class="br">   ├─ </span>settings.json   usage.json<span class="ds">   お名前・API キー・利用量</span></div>
+          <div class="ln"><span class="br">   └─ </span>reviews_cache.json   local_state.json</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 変更後 ================= -->
+<div class="col">
+  <div class="colhead"><span class="n">変更後 (案)</span>
+    <span class="s">C ドライブの直下 (C:\) にフォルダは 1 つ。開いて見えるのは 3 つだけ</span></div>
+  <div class="panel wired">
+    <!-- ショートカットの行き先 (アプリマネージャー →
+         .manager\mgtkit\manager\マネージャー起動.bat)。
+         座標は実測 (wires3.py / tags.py)。viewBox の縦横比はパネルの実比
+         (400 : 404.3)。ずらすと線の太さと矢じりがゆがむ。行を増減したら
+         測り直すこと。右へ回り込む前にいったん下がるのは、右肩の
+         「1 ◎ 入口」タグ (x 314-348) を避けるため -->
+    <svg class="wires" viewBox="0 0 400 404.3" preserveAspectRatio="none">
+      <path d="M268,50.8 C282,50.8 286,57 286,68 L286,80
+               C286,88 296,92 306,92 L372,92
+               C382,92 388,100 388,112 L388,240
+               C388,252 379,259.7 362,259.7 L170,259.7"/>
+      <path d="M170,259.7 l7,-3.5 M170,259.7 l7,3.5"/>
+    </svg>
+    <div class="tree">
+      <div class="ln root">C:\</div>
+
+      <div class="box">
+        <div class="ln"><span class="br">└─ </span><span class="nm">mgtkit_appmanager\</span><span class="ds">   <b>mgtkit 関係はここ 1 つだけ。</b>中の mgtkit のフォルダと区別できるよう改名</span></div>
+
+        <div class="grp c1"><span class="tag g1">1 ◎ 入口</span>
+          <div class="ln" id="a-dst"><span class="mk">◎</span><span class="br">   ├─ </span><span class="nm t1">マネージャー起動.bat</span><span class="ds"> のショートカット <b>(デスクトップにコピーしても使えます)</b></span></div>
+          <div class="ln"><span class="br">   ├─ </span><span class="nm t1">アプリマネージャー使い方ガイド.pdf</span><span class="ds">   アプリマネージャーの使い方・フォルダ構成の説明</span></div>
+        </div>
+
+        <div class="grp c2"><span class="tag g2">2 △ 正式版</span>
+          <div class="ln"><span class="mk">△</span><span class="br">   ├─ </span><span class="nm t2">stable\mgtkit\</span><span class="ds">   <span class="star">★アプリマネージャーから起動されるアプリ。改造するときはこれをフォルダの外へコピー</span></span></div>
+          <div class="ln"><span class="br">   │  ├─ </span>app.py  s_check.py <span class="ds">…  (配布版。tests\ や manager\ は入っていない)</span></div>
+          <div class="ln"><span class="br">   │  ├─ </span>version.json<span class="ds">   どの版か・どこから直したかの目印</span></div>
+          <div class="ln" id="b-src"><span class="br">   │  └─ </span>起動.bat<span class="ds">   非常用。この正式版を直接動かす</span></div>
+        </div>
+
+        <div class="box hide">
+          <div class="ln"><span class="mk">×</span><span class="br">   └─ </span><span class="nm">.manager\</span><span class="ds">   <b>ここから下はマネージャーの持ち物。開かないでください</b> (通常は非表示)</span></div>
+
+          <div class="grp c3"><span class="tag g3">3 × 道具</span>
+            <div class="ln"><span class="br">      ├─ </span><span class="nm t3">mgtkit\</span><span class="ds">   GitHub リポジトリの複製。旧 C:\Users\(自分)\mgtkit がまるごと移ってくる</span></div>
+            <div class="ln"><span class="br">      │  ├─ </span><span class="nm t3">.git\</span><span class="ds">   <span class="hid">(隠し)</span> 版を管理する中身</span></div>
+            <div class="ln"><span class="br">      │  ├─ </span>app.py  mgt.py  s_check.py  rc_check.py  section.py <span class="ds">…</span></div>
+            <div class="ln"><span class="br">      │  ├─ </span>data\   static\   templates\</div>
+            <div class="ln"><span class="br">      │  ├─ </span>tests\   .github\   pytest.ini   requirements.txt</div>
+            <div class="ln"><span class="br">      │  ├─ </span>config.json   README.md</div>
+            <div class="ln"><span class="br">      │  ├─ </span>起動.bat<span class="ds">   非常用。この複製を直接動かす</span></div>
+            <div class="ln"><span class="br">      │  ├─ </span>stash\2026-08-18_1030\<span class="ds">   直接なおした内容の退避先</span></div>
+            <div class="ln"><span class="br">      │  └─ </span><span class="nm t3">manager\</span><span class="ds">   アプリマネージャーそのもの</span></div>
+            <div class="ln" id="a-tgt"><span class="br">      │     ├─ </span><span class="nm t1">マネージャー起動.bat</span></div>
+            <div class="ln"><span class="br">      │     ├─ </span>main.py  updater.py  submit.py  launcher.py <span class="ds">…</span></div>
+            <div class="ln"><span class="br">      │     └─ </span>docs\   readme\   scripts\   tests\<span class="ds">   記録・資料・setup.bat ほか</span></div>
+          </div>
+
+          <div class="grp c4"><span class="tag g4">4 × 置き場</span>
+            <div class="ln"><span class="mk">×</span><span class="br">      ├─ </span><span class="nm t4">beta\</span>v1.2-beta.1\mgtkit\<span class="ds">   試用中のβ版</span></div>
+            <div class="ln"><span class="br">      ├─ </span>workrepo\   diffcache\<span class="ds">   差分を出すための作業データ</span></div>
+            <div class="ln"><span class="br">      ├─ </span>tmp\stable\   tmp\beta\<span class="ds">   読み込んだファイルの一時置き場</span></div>
+            <div class="ln"><span class="br">      ├─ </span>settings.json   usage.json<span class="ds">   お名前・API キー・利用量</span></div>
+            <div class="ln"><span class="br">      └─ </span>reviews_cache.json   local_state.json</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /cols -->
+
+</body>
+</html>

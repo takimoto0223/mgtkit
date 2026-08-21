@@ -18,7 +18,8 @@ import sys
 
 from . import claude_helper, ghcli, paths
 from .autofix import _PROTECTED_PREFIXES
-from .gitcli import GitError, ensure_work_repo, run_git
+from .gitcli import (GitError, ensure_work_repo,
+                     reset_work_tree, run_git)
 from .submit import workrepo_dir
 
 log = logging.getLogger(__name__)
@@ -43,12 +44,28 @@ def _git_raw(args, cwd):
                           **kw)
 
 
+def _cleanup_merge(workrepo):
+    """中断した merge の後始末 (**元の例外を握り潰さない**).
+
+    後始末そのものが失敗しても、呼び出し元が投げようとしている例外の方が
+    利用者にとって意味がある。作業フォルダが消えていると _git_raw が
+    OSError になり、それが送出中の例外を置き換えて画面が
+    「統合を進めています...」のまま固まっていた。
+    """
+    try:
+        _git_raw(['merge', '--abort'], cwd=workrepo)
+    except OSError:
+        log.warning('統合の後始末ができませんでした: %s', workrepo,
+                    exc_info=True)
+
+
 def _start_merge(workrepo, branch, base):
     """branch に origin/base の merge を試行する.
 
     戻り値: 衝突ファイルの相対パスリスト (空 = 衝突なしで取り込み完了、
     コミットは未実施)。
     """
+    reset_work_tree(workrepo)   # 前回の強制終了の残骸で checkout が拒否されないように
     run_git(['fetch', 'origin', branch, base], cwd=workrepo, timeout=300)
     run_git(['checkout', '-B', branch, 'origin/%s' % branch], cwd=workrepo)
     # git 個人設定が無い環境でも動くよう merge 時の識別情報を明示する
@@ -61,7 +78,7 @@ def _start_merge(workrepo, branch, base):
         ['diff', '--name-only', '--diff-filter=U'],
         cwd=workrepo).splitlines() if p.strip()]
     if proc.returncode != 0 and not conflicted:
-        _git_raw(['merge', '--abort'], cwd=workrepo)
+        _cleanup_merge(workrepo)
         log.error('merge failed: %s', proc.stderr)
         raise ConflictError('最新版の取り込みに失敗しました。'
                             '時間をおいて再試行してください。')
@@ -111,7 +128,7 @@ def analyze(branch, config=None, on_progress=None):
 
 def abort(analysis):
     """merge を取り消して元の状態に戻す."""
-    _git_raw(['merge', '--abort'], cwd=analysis['workrepo'])
+    _cleanup_merge(analysis['workrepo'])
 
 
 def resolve(analysis, policy, config=None, on_progress=None):
@@ -185,9 +202,6 @@ def resolve(analysis, policy, config=None, on_progress=None):
                 cwd=workrepo)
         run_git(['push', 'origin', branch], cwd=workrepo, timeout=300)
         return summary
-    except (GitError, ghcli.GhError):
-        _git_raw(['merge', '--abort'], cwd=workrepo)
-        raise
-    except ConflictError:
-        _git_raw(['merge', '--abort'], cwd=workrepo)
+    except (GitError, ghcli.GhError, ConflictError):
+        _cleanup_merge(workrepo)
         raise
