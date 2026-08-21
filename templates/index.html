@@ -138,6 +138,7 @@
   <button data-tab="tex">TeX表</button>
   <button data-tab="dxf">DXF</button>
   <button data-tab="quantity">数量集計</button>
+  <button data-tab="loadmap">荷重分布図</button>
 </nav>
 <main>
 
@@ -977,6 +978,8 @@
   <div id="qty_msg"></div>
   <div id="qty_out"></div>
 </section>
+
+{% include '_tab_loadmap.html' %}
 
 </main>
 <div id="overlay"><div class="spinner"></div><p>実行中...</p></div>
