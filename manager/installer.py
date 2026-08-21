@@ -157,6 +157,39 @@ def extract_zip(zip_path, install_dir, work_parent=None):
     return install_dir
 
 
+# pip の失敗は原因がいろいろある (通信・空き容量・一覧が読めない…)。
+# 「ネットワーク接続を確認して」一択の案内は、別の原因のときに利用者へ
+# 直らない操作をさせるので、出力から分かる分だけ原因を名指しする
+# (installer._replace_message や ghcli._friendly_message と同じ方針)
+_PIP_NETWORK_MARKS = (
+    'connectionerror', 'newconnectionerror', 'proxyerror', 'sslerror',
+    'connection refused', 'connection reset', 'could not resolve',
+    'name resolution', 'network is unreachable', 'timed out',
+)
+
+
+def _pip_message(output):
+    """pip の出力から原因ごとの案内 (分からないときは決め打ちしない)."""
+    low = (output or '').lower()
+    if 'unicodedecodeerror' in low:
+        # requirements.txt が想定の文字コード (UTF-8) で読めなかった。
+        # 利用者側では直せないので、再試行はさせず管理者へつなぐ
+        return ('必要ライブラリの一覧 (requirements.txt) を読み取れません'
+                'でした。ログ (manager.log) を管理者にお知らせください。')
+    if 'no space left' in low or 'disk quota' in low:
+        return ('パソコンの空き容量が足りないため、必要ライブラリを'
+                'インストールできませんでした。空き容量を増やしてから'
+                'お試しください。')
+    if any(mark in low for mark in _PIP_NETWORK_MARKS):
+        return ('必要ライブラリのインストールに失敗しました。'
+                'ネットワーク接続を確認して再試行してください。'
+                '直らない場合は、ログ (manager.log) を管理者に'
+                'お知らせください。')
+    return ('必要ライブラリのインストールに失敗しました。'
+            'もう一度お試しください。直らない場合は、ログ (manager.log) '
+            'を管理者にお知らせください。')
+
+
 def install_requirements(install_dir, python=None):
     """requirements.txt があれば pip install する."""
     req = os.path.join(install_dir, 'requirements.txt')
@@ -164,13 +197,18 @@ def install_requirements(install_dir, python=None):
         log.warning('requirements.txt が見つかりません: %s', install_dir)
         return False
     python = python or sys.executable
+    # pip は BOM の無い requirements.txt を OS の既定の文字コード (日本語
+    # Windows では cp932) で読むため、UTF-8 の日本語コメントが入っていると
+    # UnicodeDecodeError で pip ごと失敗する (25.1 以降の pip は UTF-8 既定
+    # だが、メンバーの PC の pip の版には頼れない)。PYTHONUTF8=1 で pip 側
+    # の既定を UTF-8 に固定する (配布物の requirements.txt は UTF-8 前提)
+    env = dict(os.environ, PYTHONUTF8='1')
     proc = subprocess.run(
         [python, '-m', 'pip', 'install', '-r', req],
-        capture_output=True, text=True, encoding='utf-8', errors='replace')
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        env=env)
     if proc.returncode != 0:
-        log.error('pip install failed: %s', proc.stderr)
-        raise InstallError('必要ライブラリのインストールに失敗しました。'
-                           'ネットワーク接続を確認して再試行してください。'
-                           '直らない場合は、ログ (manager.log) を管理者に'
-                           'お知らせください。')
+        log.error('pip install failed: %s\n%s', proc.stderr, proc.stdout)
+        raise InstallError(_pip_message('%s\n%s' % (proc.stderr or '',
+                                                    proc.stdout or '')))
     return True
