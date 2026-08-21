@@ -97,6 +97,7 @@ class TestInstallRequirements:
             proc = Proc()
             proc.returncode = returncode
             proc.stderr = 'UnicodeDecodeError: cp932 ...'
+            proc.stdout = ''
             return proc
         monkeypatch.setattr(installer.subprocess, 'run', fake_run)
         return seen
@@ -125,6 +126,24 @@ class TestInstallRequirements:
         self._capture_pip(monkeypatch, returncode=1)
         with pytest.raises(installer.InstallError, match='必要ライブラリ'):
             installer.install_requirements(str(tmp_path))
+
+    # 失敗の案内は原因が分かる分だけ名指しする (「ネットワーク接続を確認」
+    # 一択だと、文字コード等の別原因のとき直らない操作をさせてしまう —
+    # v1.5 取り込みの実機障害で実際に出た誤案内)
+    @pytest.mark.parametrize('output,expected', [
+        ("UnicodeDecodeError: 'cp932' codec can't decode byte 0x98",
+         '読み取れません'),
+        ('OSError: [Errno 28] No space left on device', '空き容量'),
+        ('WARNING: Retrying... NewConnectionError: name resolution failed',
+         'ネットワーク接続'),
+        ('ERROR: Could not find a version that satisfies flask==9.9',
+         'もう一度お試しください'),
+    ])
+    def test_pip_message_names_only_known_causes(self, output, expected):
+        assert expected in installer._pip_message(output)
+
+    def test_pip_message_does_not_blame_network_by_default(self):
+        assert 'ネットワーク' not in installer._pip_message('something else')
 
 
 RELEASES_JSON = [

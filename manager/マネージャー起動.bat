@@ -6,6 +6,11 @@ rem 詳細は manager/scripts/setup.bat の冒頭と decisions.md)
 title mgtkit アプリマネージャー
 cd /d "%~dp0.."
 
+rem pip と Python は UTF-8 で動かす。古い pip (25.0 以前) は
+rem requirements.txt を OS の文字コード (CP932) で読むため、
+rem UTF-8 の日本語コメントで失敗する (decisions.md 参照)
+set "PYTHONUTF8=1"
+
 rem 起動のたびに最新のマネージャーへ更新する
 rem (オフライン等で失敗しても、そのまま手元の版で起動する)
 echo 最新版を確認しています...
