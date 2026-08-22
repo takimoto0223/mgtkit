@@ -73,9 +73,9 @@
   td.ng { background: #f6c8c4; font-weight: bold; }
   td.warn { background: #fbe9b8; }
   td.na { color: #999; }
-  #viewer3d { width: 100%; height: 560px; background: #fdfdfe;
+  #viewer3d, #viewer3d_ng { width: 100%; height: 560px; background: #fdfdfe;
               border: 1px solid #ccd; border-radius: 4px; position: relative; }
-  #tooltip3d { position: absolute; pointer-events: none; background: #234;
+  #tooltip3d, #tooltip3d_ng { position: absolute; pointer-events: none; background: #234;
                color: #fff; font-size: 12px; padding: 3px 8px;
                border-radius: 3px; display: none; z-index: 5; }
   #overlay { position: fixed; inset: 0; background: rgba(255,255,255,.65);
@@ -732,6 +732,23 @@
       検定実行</button></div>
   </fieldset>
   <div id="check_msg"></div>
+  <details class="adv" id="ng3d_box">
+    <summary>3Dモデルで確認 (NG部材ハイライト)</summary>
+    <div class="row">
+      <button class="act" onclick="show3DNG()">3D表示</button>
+      <span class="hint">マウス左ドラッグ: 回転 / ホイール: 拡大縮小 /
+        右ドラッグ: 移動 / 要素にマウスを乗せると断面名と検定比を表示</span>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="ng3d_chk" onchange="applyNg3D()">
+        NG部材 (赤: 検定比 &gt; 1.0)</label>
+      <label><input type="checkbox" id="warn3d_chk" onchange="applyNg3D()">
+        検定比0.9超の部材 (青)</label>
+      <span class="hint" id="ng3d_hint">「検定実行」の結果を使います</span>
+    </div>
+    <div id="viewer3d_ng"><div id="tooltip3d_ng"></div></div>
+    <div id="model3d_ng_msg"></div>
+  </details>
   <div id="check_result"></div>
 </section>
 
