@@ -1270,6 +1270,64 @@ def api_check_cases():
         return _error_response(e)
 
 
+def _ratio3d_rows(result):
+    """要素ごとの最大検定比 [[要素番号, 最大比], ...] (3D表示のNG強調用).
+
+    beam_ratio (3行/要素×ケース, 比=列2:6) と truss_ratio (1行/要素×ケース,
+    比=列2:4) を要素番号で集計する。未検定部材 (PC/SRC等) は0行のため
+    最大値0のままとなり、クライアント側で「検定データなし」と扱われる。
+    """
+    best = {}
+    for tab, c1 in ((np.asarray(result.beam_ratio, dtype=float), 6),
+                    (np.asarray(result.truss_ratio, dtype=float), 4)):
+        if tab.size == 0:
+            continue
+        tab = np.atleast_2d(tab)
+        for r in range(tab.shape[0]):
+            vals = tab[r, 2:c1]
+            vals = vals[np.isfinite(vals)]
+            if not vals.size:
+                continue
+            e = int(tab[r, 0])
+            v = float(vals.max())
+            if v > best.get(e, -1.0):
+                best[e] = v
+    return [[e, round(best[e], 3)] for e in sorted(best)]
+
+
+
+def _ratio3d_unit_rows(mgt_path, rows):
+    """結合部材ごとの [[要素番号...], 部材内最大検定比] (3D表示のまとめ用).
+
+    単一部材指定 (*MEMBER) の要素列でまとめ、部材内の最大検定比を
+    部材全要素に対応付ける。検定比図の「一部材として表記」と同じ発想。
+    *MEMBERの無いモデルでは空を返す (クライアントは要素単位表示)。
+    """
+    best = {int(e): float(v) for e, v in rows}
+    try:
+        node = mgtopen_node(mgt_path)
+        element = mgtopen_element(mgt_path)
+        from mgtkit.mgt import mgtopen_unit_2015
+        unit_element = mgtopen_unit_2015(mgt_path, element, node)
+    except Exception:  # noqa: BLE001
+        return []
+    if not unit_element:
+        return []
+    groups = []
+    used = set()
+    for u in unit_element:
+        eles = [int(v) for v in np.atleast_1d(u[1]).ravel()
+                if int(v) in best]
+        if not eles:
+            continue
+        groups.append([eles, round(max(best[e] for e in eles), 3)])
+        used.update(eles)
+    for e in sorted(best):
+        if e not in used:
+            groups.append([[e], best[e]])
+    return groups
+
+
 @app.route('/api/steel_check', methods=['POST'])
 def api_steel_check():
     p = request.get_json(force=True)
@@ -1546,6 +1604,10 @@ def api_steel_check():
                             np.asarray(result.load_case_no).ravel()]
         _CHECK_CACHE['key'] = _check_cache_key(p)
         _CHECK_CACHE['result'] = result
+        # 3D表示のNG部材ハイライト用 (検定タブ)
+        data['ratio3d'] = _ratio3d_rows(result)
+        data['ratio3d_unit'] = _ratio3d_unit_rows(p['mgt_path'],
+                                                  data['ratio3d'])
 
         with _capture_notes(notes):
             out_dir = _out_dir(p, 'ratio_tex')
