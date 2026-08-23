@@ -288,18 +288,50 @@ def make_shortcut(home, clone, dry_run=False):
     return 'bat'
 
 
+def _same_file(src, dst):
+    """すでに同じ中身が置いてあるか (大きさと更新時刻で見る).
+
+    copy2 は更新時刻も複製するので、この 2 つが一致していれば置き直す
+    必要はない。毎回書きに行くと、ガイドを開いたまま起動した Windows で
+    ロックに当たるだけ損をする。
+    """
+    try:
+        a, b = os.stat(src), os.stat(dst)
+    except OSError:
+        return False
+    return a.st_size == b.st_size and int(a.st_mtime) == int(b.st_mtime)
+
+
 def copy_guide(home, clone, dry_run=False):
     """使い方ガイドを見えるところにも置く (中身は readme/ のものと同じ)."""
     src = os.path.join(clone, 'manager', 'readme', GUIDE_PDF)
     dst = os.path.join(home, GUIDE_PDF)
     if not os.path.isfile(src) or dry_run:
         return False
+    if _same_file(src, dst):        # すでに同じ版が置いてある
+        return False
     try:
-        shutil.copy2(src, dst)      # 版が上がったら上書きしたいので毎回コピー
+        shutil.copy2(src, dst)      # 版が上がったら上書きする
         return True
     except OSError:
         log.warning('使い方ガイドを置けませんでした', exc_info=True)
         return False
+
+
+def refresh_guide(config=None):
+    """見えるところのガイドを、いまのクローンの版に合わせ直す.
+
+    ガイドは setup.bat の引っ越しのときにしか置いておらず、その後 PDF が
+    新しくなっても手元は古いままだった (資料だけの更新は git pull で
+    クローンには入るが、見えるところには反映されない)。マネージャーの
+    起動のたびに置き直す。
+
+    これまでの配置 (見えるフォルダを持たない PC) では何もしない。
+    """
+    home = paths.home_root(config)
+    if not home or not os.path.isdir(home):
+        return False
+    return copy_guide(home, paths.REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
