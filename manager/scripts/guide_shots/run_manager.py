@@ -85,7 +85,11 @@ def seed_state():
     root = paths.install_root()
     os.makedirs(root, exist_ok=True)
     sp = os.path.join(root, 'settings.json')
-    if not os.path.exists(sp):
+    if os.environ.get('GUIDE_SHOTS_FIRSTRUN'):
+        # 初回登録ダイアログ (real_firstrun) を撮るときだけ未登録に戻す
+        if os.path.exists(sp):
+            os.remove(sp)
+    elif not os.path.exists(sp):
         with open(sp, 'w', encoding='utf-8') as f:
             # キー名は settings.load_settings が見る 'name'。API キーは
             # 使わないのでダミー (本物らしい文字列は置かない)
