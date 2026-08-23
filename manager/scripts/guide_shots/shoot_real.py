@@ -119,10 +119,33 @@ def trim_bottom(path, margin=16):
     return new_h
 
 
-async def shot(pg, name):
+def trim_to_dialog(path, margin=28):
+    """ダイアログの図は、暗幕だけの上下を切り詰める.
+
+    ダイアログは横幅がほぼ一定 (約 600px) の明るい箱なので、「明るい画素が
+    300 個以上ある行」を続いている範囲がダイアログ。暗幕だけの帯を残すと
+    図が縦に伸びて、ガイドの紙面が図 1 枚のために割れる。
+    """
+    from PIL import Image
+    im = Image.open(path).convert('RGB')
+    w, h = im.size
+    px = im.load()
+    rows = [y for y in range(h)
+            if sum(1 for x in range(w) if min(px[x, y]) > 215) > 300]
+    if not rows:
+        return trim_bottom(path)
+    top = max(0, rows[0] - margin)
+    bottom = min(h, rows[-1] + 1 + margin)
+    if bottom - top < h:
+        im.crop((0, top, w, bottom)).save(path)
+    return bottom - top
+
+
+async def shot(pg, name, dialog=False):
     path = os.path.join(BASE, name + '.png')
     await pg.screenshot(path=path)
-    print('saved', name, '(高さ %d)' % trim_bottom(path))
+    height = trim_to_dialog(path) if dialog else trim_bottom(path)
+    print('saved', name, '(高さ %d)' % height)
 
 
 async def click(pg, xy, wait=2500):
@@ -159,14 +182,14 @@ async def cut_submit(pg):
 async def cut_submit_dialog(pg):
     await click(pg, TAB_SUBMIT)
     await click(pg, BTN_PICK_ZIP, 4000)
-    await shot(pg, 'real_submit_dialog')
+    await shot(pg, 'real_submit_dialog', dialog=True)
 
 
 async def cut_submit_manual(pg):
     await click(pg, TAB_SUBMIT)
     await click(pg, BTN_PICK_ZIP, 4000)
     await click(pg, RADIO_MANUAL)
-    await shot(pg, 'real_submit_manual')
+    await shot(pg, 'real_submit_manual', dialog=True)
 
 
 async def cut_submit_review(pg):
@@ -174,7 +197,7 @@ async def cut_submit_review(pg):
     await click(pg, TAB_SUBMIT)
     await click(pg, BTN_PICK_ZIP, 4000)
     await click(pg, BTN_CONFIRM_SUBMIT, 4000)
-    await shot(pg, 'real_submit_review')
+    await shot(pg, 'real_submit_review', dialog=True)
 
 
 async def cut_beta(pg):
