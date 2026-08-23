@@ -3496,6 +3496,9 @@ def main(page: ft.Page):
     def check_selfupdate():
         def work():
             upd = selfupdate.auto_update()
+            # 見えるところのガイドを、取り込んだ版に合わせ直す (資料だけの
+            # 更新はクローンには入るが、置いた PDF は古いままのため)
+            migrate.refresh_guide(config)
             if not upd.get('stashed'):
                 return
 
