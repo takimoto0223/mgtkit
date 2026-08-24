@@ -170,6 +170,55 @@ class TestEntry:
         assert (home / migrate.GUIDE_PDF).is_file()
 
 
+class TestGuideStaysCurrent:
+    """見えるところのガイドは、起動のたびに取り込んだ版に合わせ直す.
+
+    引っ越しのときにしか置いていなかったため、資料だけを更新しても手元の
+    PDF が古いままだった (2026-08 実機で発覚)。
+    """
+
+    def _placed(self, tmp_path, monkeypatch):
+        home, clone = _new_home(tmp_path)
+        home.mkdir(exist_ok=True)
+        monkeypatch.setattr(paths, 'REPO_ROOT', str(clone))
+        return home, clone
+
+    def test_new_version_replaces_the_placed_one(self, tmp_path, monkeypatch):
+        home, clone = self._placed(tmp_path, monkeypatch)
+        (home / migrate.GUIDE_PDF).write_text('%PDF-古い版', encoding='utf-8')
+        assert migrate.refresh_guide() is True
+        assert (home / migrate.GUIDE_PDF).read_text(
+            encoding='utf-8') == '%PDF-1.4'
+
+    def test_missing_one_is_placed(self, tmp_path, monkeypatch):
+        home, _ = self._placed(tmp_path, monkeypatch)
+        assert migrate.refresh_guide() is True
+        assert (home / migrate.GUIDE_PDF).is_file()
+
+    def test_same_version_is_not_written_again(self, tmp_path, monkeypatch):
+        home, _ = self._placed(tmp_path, monkeypatch)
+        migrate.refresh_guide()
+        # 2 度目は書きに行かない (開いたままの PDF をロックで掴まないため)
+        assert migrate.refresh_guide() is False
+
+    def test_old_layout_places_nothing(self, tmp_path, monkeypatch):
+        _, clone = self._placed(tmp_path, monkeypatch)
+        # これまでの配置 = 見えるフォルダを持たない PC
+        monkeypatch.setattr(paths, 'home_root', lambda config=None: None)
+        assert migrate.refresh_guide() is False
+
+    def test_a_locked_file_does_not_stop_the_launch(self, tmp_path,
+                                                    monkeypatch):
+        home, _ = self._placed(tmp_path, monkeypatch)
+        (home / migrate.GUIDE_PDF).write_text('%PDF-古い版', encoding='utf-8')
+
+        def _locked(*_a, **_k):
+            raise OSError('使用中です')
+
+        monkeypatch.setattr(migrate.shutil, 'copy2', _locked)
+        assert migrate.refresh_guide() is False   # 例外を上げない
+
+
 class TestVerifyBeforeCleanup:
     def test_broken_settings_stops_the_migration(self, tmp_path):
         old_clone, old_root = _old_layout(tmp_path)
