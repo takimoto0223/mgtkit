@@ -1,0 +1,50 @@
+# リリースノートの後付け (手動実行)
+# 公開済みリリースの本文を docs/release_notes/<version>.md で差し替える。
+# release ワークフローが定型文 (「vX.Y リリース」) のまま公開した版に、
+# 後からユーザー向けの更新内容・制限事項を書き足すための入口。
+name: release-notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'ノートを付けるバージョン (例: v1.5)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: バージョン表記の検証
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
+            echo "エラー: バージョンは vX.Y または vX.Y-beta.N 形式で指定してください: $VERSION"
+            exit 1
+          fi
+
+      - name: ノート本文の確認
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          notes="docs/release_notes/${VERSION}.md"
+          if [[ ! -s "$notes" ]]; then
+            echo "エラー: $notes がありません。先にノート本文を main へ追加してください。"
+            exit 1
+          fi
+          echo "--- $notes ---"
+          cat "$notes"
+
+      - name: Releases の本文を差し替え
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh release edit "$VERSION" \
+            --notes-file "docs/release_notes/${VERSION}.md"
