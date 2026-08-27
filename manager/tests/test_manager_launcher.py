@@ -1,4 +1,14 @@
-"""manager/launcher.py の停止まわりのテスト (外部プロセスはモック)。"""
+"""manager/launcher.py の停止・起動まわりのテスト.
+
+停止は外部プロセスをモックする。起動の見届けだけは、本物の
+python を子プロセスとして動かして確かめる (「落ちたのに
+成功と出る」は親子のふるまいそのものなので、モックでは固定
+できない)。
+"""
+import os
+import socket
+import sys
+
 import pytest
 
 from manager import launcher
@@ -141,4 +151,102 @@ class TestStopOtherBeta:
         launcher.remember_beta('v1.5-beta.1')
         assert updater.prune_betas([]) == ['v1.5-beta.1']
         assert launcher.running_beta() == 'v1.5-beta.1'
+
+
+class TestLaunchVerification:
+    """起動したことを見届けてから「開きます」と言うこと.
+
+    プロセスを作っただけで成功と出すと、アプリが起動直後に落ちても
+    画面には「ブラウザで開きます」と出て、実際には何も開かないまま
+    利用者が待ち続ける (ライブラリが足りない PC で必ずこうなる)。
+    """
+
+    def _instance(self, tmp_path, source):
+        """app.py が source であるインスタンスフォルダを作る."""
+        app = tmp_path / 'inst' / 'mgtkit'
+        app.mkdir(parents=True)
+        (app / 'app.py').write_text(source, encoding='utf-8')
+        return str(tmp_path / 'inst')
+
+    def _free_port(self):
+        with socket.socket() as s:
+            s.bind(('127.0.0.1', 0))
+            return s.getsockname()[1]
+
+    def _config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(launcher.paths, 'install_root',
+                            lambda config=None: str(tmp_path / 'root'))
+
+    def test_reports_a_missing_library_it_can_see(self, tmp_path,
+                                                  monkeypatch):
+        self._config(monkeypatch, tmp_path)
+        inst = self._instance(tmp_path, 'import no_such_module_here\n')
+        with pytest.raises(launcher.LaunchError, match='必要なもの'):
+            launcher.launch_app(inst, self._free_port(),
+                                python=sys.executable, startup_timeout=15)
+
+    def test_other_crashes_point_at_the_log(self, tmp_path, monkeypatch):
+        self._config(monkeypatch, tmp_path)
+        inst = self._instance(tmp_path, 'raise SystemExit(3)\n')
+        with pytest.raises(launcher.LaunchError, match='app-stable.log'):
+            launcher.launch_app(inst, self._free_port(),
+                                python=sys.executable, startup_timeout=15)
+
+    def test_the_reason_is_kept_in_the_log(self, tmp_path, monkeypatch):
+        """原因 (子の出力) を捨てないこと — 捨てると誰も追えない."""
+        self._config(monkeypatch, tmp_path)
+        inst = self._instance(
+            tmp_path, 'raise RuntimeError("目印になる失敗")\n')
+        with pytest.raises(launcher.LaunchError):
+            launcher.launch_app(inst, self._free_port(),
+                                python=sys.executable, startup_timeout=15)
+        written = open(launcher.app_log_path('stable'),
+                       encoding='utf-8').read()
+        assert '目印になる失敗' in written
+
+    def test_a_serving_app_is_reported_as_launched(self, tmp_path,
+                                                   monkeypatch):
+        self._config(monkeypatch, tmp_path)
+        port = self._free_port()
+        inst = self._instance(tmp_path, (
+            'import socket, time\n'
+            's = socket.socket()\n'
+            's.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n'
+            's.bind(("127.0.0.1", %d))\n'
+            's.listen(5)\n'
+            'time.sleep(30)\n' % port))
+        monkeypatch.setattr(launcher.webbrowser, 'open', lambda url: True)
+        proc, url = launcher.launch_app(inst, port, python=sys.executable,
+                                        startup_timeout=15)
+        try:
+            assert url.endswith('%d/' % port)
+            assert proc.poll() is None
+        finally:
+            proc.kill()
+            proc.wait(timeout=10)
+
+    def test_a_slow_app_is_not_called_a_failure(self, tmp_path,
+                                                monkeypatch):
+        """待ち時間を過ぎても生きていれば失敗と言わない (遅い PC)."""
+        self._config(monkeypatch, tmp_path)
+        inst = self._instance(tmp_path, 'import time\ntime.sleep(30)\n')
+        proc, url = launcher.launch_app(inst, self._free_port(),
+                                        python=sys.executable,
+                                        startup_timeout=0.5)
+        try:
+            assert proc.poll() is None      # 起動は続いている
+        finally:
+            proc.kill()
+            proc.wait(timeout=10)
+
+    def test_launching_does_not_need_the_log_folder_to_exist(
+            self, tmp_path, monkeypatch):
+        """記録先が無くても起動できること (記録は補助にすぎない)."""
+        self._config(monkeypatch, tmp_path)
+        assert not os.path.exists(str(tmp_path / 'root'))
+        inst = self._instance(tmp_path, 'raise SystemExit(1)\n')
+        with pytest.raises(launcher.LaunchError):
+            launcher.launch_app(inst, self._free_port(),
+                                python=sys.executable, startup_timeout=15)
+        assert os.path.isfile(launcher.app_log_path('stable'))
 

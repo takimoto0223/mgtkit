@@ -744,6 +744,85 @@ def test_join_request_is_sent_once_the_name_is_registered(monkeypatch):
     assert sent == ['山田太郎']
 
 
+def _submit_confirm_dialog(monkeypatch):
+    """提出タブで ZIP を選んだ直後 (提出内容の確認ダイアログ) を作る.
+
+    GitHub にも API にもつながず、準備結果は canned 値を返す。
+    戻り値: (page, 確認ダイアログ, 提出タブの Text をたどる関数)。
+    """
+    import flet as ft
+
+    from manager import main as manager_main
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+    monkeypatch.setattr(manager_main.submit, 'prepare_submission',
+                        lambda *a, **k: {
+                            'changes': {'added': ['csv_out.py'],
+                                        'modified': ['app.py'],
+                                        'deleted': []},
+                            'skipped': [],
+                            'safety': {'warnings': [], 'blockers': []}})
+    monkeypatch.setattr(manager_main.autofix, 'list_my_submissions',
+                        lambda *a, **k: [])
+    # API キーが登録済みの PC を想定する (未登録だと自動作成を選べず、
+    # 確認ダイアログの既定が「自分で入力する」になる)
+    monkeypatch.setattr(manager_main.settings, 'api_key',
+                        lambda config=None: 'dummy-not-a-real-key')
+
+    class _PickedZip:
+        path = 'C:/Users/yamada/Desktop/mgtkit.zip'
+        name = 'mgtkit.zip'
+
+    async def _pick(self, *a, **k):
+        return [_PickedZip()]
+    monkeypatch.setattr(ft.FilePicker, 'pick_files', _pick)
+
+    page = _FakePage()
+    manager_main.main(page)
+    column = page.added[1].content
+    submit_panel = column.controls[1].controls[2]
+
+    button = None
+    for c in _walk_controls(submit_panel, []):
+        if getattr(c, 'content', None) == 'ZIP を選んで提出':
+            button = c
+    assert button is not None, '「ZIP を選んで提出」ボタンが見つかりません'
+    page.run_task(button.on_click, None)
+    # 確認ダイアログを出すところまでは本物どおり動かす (準備は
+    # asyncio.to_thread 経由で走るため)。この先の送信だけ止める
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NoThread)
+    return page, page.dialogs[-1], lambda: _walk_texts(submit_panel, [])
+
+
+def test_the_draft_course_does_not_claim_the_submission_was_sent(monkeypatch):
+    """下書きを作らせるコースでは「提出しています...」と言わないこと.
+
+    「Claude で自動作成する」を選んだ提出は、このあと出る下書きの確認
+    画面で取り消せば何も送られない (使い方ガイドにもそう書いてある)。
+    以前はここで「提出しています...」と出ていたため、ガイドの説明と
+    画面が食い違って見えていた。
+    """
+    page, dialog, texts = _submit_confirm_dialog(monkeypatch)
+    _dialog_button(dialog, '提出する').on_click(None)   # 既定 = 自動作成
+    shown = texts()
+    assert '提出の準備をしています...' in shown
+    assert '提出しています...' not in shown
+
+
+def test_the_manual_course_still_says_it_is_submitting(monkeypatch):
+    """自分で入力するコースは、押した時点で本当に送り始めるのでそのまま."""
+    page, dialog, texts = _submit_confirm_dialog(monkeypatch)
+    radios = [c for c in _walk_controls(dialog, [])
+              if type(c).__name__ == 'RadioGroup']
+    radios[0].value = 'manual'
+    fields = [c for c in _walk_controls(dialog, [])
+              if type(c).__name__ == 'TextField']
+    fields[0].value = 'CSV 出力の桁数を直しました'
+    _dialog_button(dialog, '提出する').on_click(None)
+    assert '提出しています...' in texts()
+
+
 def test_registering_a_name_sends_the_request_right_away(monkeypatch):
     """登録の保存が済んだら、その場で申請を送ること (次回起動まで待たない)."""
     manager_main, sent = _page_without_settings(monkeypatch, name=None)

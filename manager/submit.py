@@ -14,8 +14,6 @@
 処理を分割している: prepare_submission() → (UI で確認) → finalize_submission()
 """
 import datetime
-import fnmatch
-import json
 import logging
 import os
 import re
@@ -580,7 +578,10 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         if use_ai:
             # API 呼び出しは提出 1 回につきこの 1 回だけ。タイトルも
             # 本文の 1 行目 (# 行) としてまとめて書かせて取り出す
-            progress('提出内容のまとめを作成しています...')
+            # 一番長く待たされる区間 (API 呼び出し)。提出者が選んだ
+            # 「Claude で自動作成する」の実行中だと分かる言葉にする
+            progress('Claude が更新内容を作成しています... '
+                     '(数十秒かかることがあります)')
             body = claude_helper.generate_pr_body(
                 summary, diff_text, prep['base_version'], notes, strict=True)
             drafted, body = split_body_title(body)
