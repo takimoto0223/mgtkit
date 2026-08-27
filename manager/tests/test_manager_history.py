@@ -298,6 +298,42 @@ class TestBuildTimeline:
         # 前の帯の公開日から始まる帯は下レーンに戻れる
         assert by_num[40]['lane'] == -1
 
+    def test_same_day_submissions_do_not_share_a_lane(self):
+        # きょう公開した版から、きょう 2 本出された提出 (提出 #167/#168)。
+        # 幅 0 の期間どうしを「重なっていない」と見て同じレーンに載せて
+        # いた = 図で帯が重なっていた
+        rel = [_rel('v1.7', '2026-08-27'), _rel('v1.6', '2026-08-21')]
+        pend = [{'number': 167, 'title': 'a', 'author': 'tomiriri',
+                 'created_at': '2026-08-27', 'base_version': 'v1.7'},
+                {'number': 168, 'title': 'b', 'author': 'tomiriri',
+                 'created_at': '2026-08-27', 'base_version': 'v1.7'}]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 27))
+        by_num = {c['number']: c for c in tl['chips']}
+        assert by_num[167]['lane'] != by_num[168]['lane']
+
+    def test_lanes_keep_going_when_many_overlap(self):
+        # 同時に何本出ても重ねない (レーンは下へいくらでも深くする)
+        rel = [_rel('v1.1', '2026-08-27'), _rel('v1.0', '2026-08-06')]
+        pend = [{'number': 200 + i, 'title': 't', 'author': 'a%d' % i,
+                 'created_at': '2026-08-20', 'base_version': 'v1.1'}
+                for i in range(6)]
+        tl = history.build_timeline(rel, [], pend, today=D(2026, 8, 27))
+        lanes = [c['lane'] for c in tl['chips'] if c['pending']]
+        assert len(set(lanes)) == len(lanes) == 6
+
+
+class TestPackLanes:
+    def test_touching_spans_share_a_lane(self):
+        # 端が同じだけ (前の帯の終わり = 次の帯の始まり) は重ならない
+        assert history.pack_lanes([(0, 10), (10, 20), (20, 30)]) == [-1] * 3
+
+    def test_overlapping_spans_go_outward_in_order(self):
+        # 内側 (本線に近い) から順に埋める: -1 → +1 → -2 → -3
+        assert history.pack_lanes([(0, 10)] * 4) == [-1, 1, -2, -3]
+
+    def test_freed_lane_is_reused(self):
+        assert history.pack_lanes([(0, 10), (5, 15), (10, 20)]) == [-1, 1, -1]
+
     def test_authors_and_colors_stable(self):
         tl = history.build_timeline(RELEASES, MERGED, PENDING, today=TODAY)
         assert tl['authors'] == sorted(tl['authors'])

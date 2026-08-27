@@ -31,7 +31,9 @@ X0 = 120                # 初回配布ノードの x (左端でラベルが切�
 AXIS_Y = 40
 RAIL_Y = 180
 CHIP_H = 30
-LANE_STEP = 57          # 2 段目以降の下レーンの間隔
+# 2 段目以降の下レーンの間隔。帯の下に置く「確認中」のピル・外へ出した
+# ラベルが、下の段の帯よりも自分の帯に近く見える高さを取る
+LANE_STEP = 70
 FIG_H = 330             # 下レーンが 1 段のときの図の高さ
 RIGHT_PAD = 114
 CHIP_PAD = 24           # 帯の中で「名前 #番号」の左右に取る余白の合計
@@ -321,6 +323,54 @@ def _chip_span(c, base_x, node_x, today_x):
     return span_l, max(span_r, span_l + 12)
 
 
+def _chip_extent(c, span, node_x):
+    """帯がレーンの高さで横に占める範囲 (x0, x1).
+
+    帯の箱だけでなく、同じ高さに描かれるもの全部を含める:
+    基点ノードから帯まで走る派生線、帯から合流ノードへ走る線、箱に
+    入らずに外へ出したラベル、確認中の「確認中」ピル。ここが重なると
+    図の上で帯や線が重なって見えるので、この範囲でレーンを分ける。
+
+    両端はノードの中心ではなく線が実際に離れる / 刺さる位置にする
+    (前の帯の合流先 = 次の帯の基点、という連続した提出を「重なり」に
+    しないため)。
+    """
+    left, right = span
+    base_x = node_x.get(c['base_tag'])
+    if base_x is not None:
+        left = min(left, base_x + DEPART_DX)
+    if c['pending']:
+        right = max(right, span[0] + PILL_W)    # ピルが帯より広いとき
+    else:
+        target_x = node_x.get(c['target_tag'])
+        if target_x is not None:
+            right = max(right, target_x - ARRIVE_DX)
+    label_w = _est_w(_chip_label(c))
+    if label_w + 14 > span[1] - span[0]:
+        # 箱に入らないラベルは外 (帯の右端そろえ) に出る = 左へ張り出す
+        left = min(left, span[1] - label_w)
+    return left, right
+
+
+def _assign_lanes(chips, node_x, spans):
+    """帯のレーンを実際の x 座標で決め直す (モデルの日付での割当を上書き).
+
+    日付で分けるだけでは足りない: 確認中の帯はきょうの線に寄せて置く、
+    ノードの間隔は帯が入る幅まで広げる、といった理由で「日付は重なって
+    いないのに px では重なる」「その逆」が起きる。とくに同じ日に出された
+    提出どうしは日付の幅が 0 で、重なりを見落として同じレーンに載って
+    いた (提出 #167/#168 の重なり)。
+
+    先に来た帯 (提出が古い順) ほど本線に近いレーンに置く。同時に何本
+    出ても重ねないぶん、図は縦に伸びる (許容 = 管理者指示)。
+    """
+    drawn = [c for c in chips if c['number'] in spans]
+    lanes = history.pack_lanes(
+        [_chip_extent(c, spans[c['number']], node_x) for c in drawn])
+    for c, lane in zip(drawn, lanes):
+        c['lane'] = lane
+
+
 def _depart_slots(chips):
     """同じノードから出る枝を何本目として描くか {提出番号: 0,1,2...}.
 
@@ -424,13 +474,17 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
                                         node_x, tx)
                 for c in chips if node_x.get(c['base_tag']) is not None}
 
-    # バッジの置き場所は帯の実際の位置で決める (レーンだけで決めると、
-    # 現行版と関係のない帯の上に重ねてしまう)
-    badge_side = _badge_side(current_tag, node_x, chips, _spans(today_x))
+    # レーンは帯の実際の x で決める (日付だけでは重なりを見落とす)。
+    # バッジの置き場所もレーンではなく帯の実際の位置で決める
+    # (レーンだけで決めると現行版と関係のない帯の上に重ねてしまう)
+    spans = _spans(today_x)
+    _assign_lanes(chips, node_x, spans)
+    badge_side = _badge_side(current_tag, node_x, chips, spans)
     if current_tag in node_x:
         bx, _by, bw, _bh = _badge_rect(badge_side, node_x[current_tag])
         today_x = max(today_x, bx + bw + TODAY_GAP)
     spans = _spans(today_x)     # きょう線が動いた分、確認中の帯も動く
+    _assign_lanes(chips, node_x, spans)
     depart_slots = _depart_slots(chips)
     width = today_x + RIGHT_PAD
     # 上レーンの枝が付くノード (出ていく基点 + 入ってくる合流先)。
@@ -438,8 +492,9 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     upper_bases = {t for c in chips if c['lane'] >= 1
                    for t in (c['base_tag'], c['target_tag']) if t}
     depth = max([-c['lane'] for c in chips if c['lane'] < 0] or [1])
-    # 2 段目以降はラベル外出しの分も含めて下へ広げる
-    fig_h = FIG_H + (depth - 1) * (LANE_STEP + 17)
+    # 下の段が増えたぶんだけ図を下へ広げる (いちばん下の帯とその下に
+    # 置くピル・ラベルの余地は FIG_H が 1 段目のぶんとして持っている)
+    fig_h = FIG_H + (depth - 1) * LANE_STEP
     grid_bottom = fig_h - 22
 
     shapes = []
