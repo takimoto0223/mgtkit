@@ -493,6 +493,240 @@ async function show3D() {
   } catch (e) { setMsg('model3d_msg', esc(e.message), 'msg-err'); }
 }
 
+// ---------------- 検定タブの3D表示 (NGハイライト付き) ----------------
+let V3N = null;
+
+function init3DNG() {
+  const box = $('viewer3d_ng');
+  const W = box.clientWidth, H = box.clientHeight;
+  const renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setSize(W, H);
+  renderer.setClearColor(0xfdfdfe);
+  box.insertBefore(renderer.domElement, box.firstChild);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, W / H, 0.01, 100000);
+  camera.up.set(0, 0, 1);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  V3N = {scene, camera, renderer, controls, raycaster, mouse,
+        lineObj: null, data: null, rmap: {}, gmap: {}, ngGroup: null};
+
+  renderer.domElement.addEventListener('mousemove', ev => {
+    if (!V3N.lineObj) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(V3N.lineObj);
+    const tip = $('tooltip3d_ng');
+    if (hits.length) {
+      const i = Math.floor(hits[0].index / 2);
+      let txt = '要素 ' + V3N.data.ele_nos[i] + ' | 断面: ' +
+                V3N.data.ele_secs[i];
+      const rv = V3N.rmap[V3N.data.ele_nos[i]];
+      const gv = V3N.gmap ? V3N.gmap[V3N.data.ele_nos[i]] : undefined;
+      if (rv !== undefined && rv > 0) {
+        txt += ' | 検定比 ' + rv.toFixed(2);
+        if (gv !== undefined && gv > rv) {
+          txt += ' (部材最大 ' + gv.toFixed(2) + ')';
+        }
+        const mv = gv !== undefined ? gv : rv;
+        txt += mv > 1.0 ? ' NG' : mv > 0.9 ? ' 0.9超' : '';
+      }
+      tip.textContent = txt;
+      tip.style.display = 'block';
+      tip.style.left = (ev.clientX - rect.left + 14) + 'px';
+      tip.style.top = (ev.clientY - rect.top + 8) + 'px';
+    } else { tip.style.display = 'none'; }
+  });
+  (function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  })();
+}
+
+async function show3DNG() {
+  setMsg('model3d_ng_msg', '', '');
+  if (typeof THREE === 'undefined') {
+    setMsg('model3d_ng_msg', 'three.js のCDN読み込みに失敗しました。' +
+           'インターネット接続を確認してください。', 'msg-err');
+    return;
+  }
+  try {
+    const j = await api('/api/model3d', {mgt_path: $('mgt_path').value});
+    if (!V3N) init3DNG();
+    // 折りたたみ内・タブ切替後でも現在の枠サイズで描く
+    const box = $('viewer3d_ng');
+    if (box.clientWidth > 0 && box.clientHeight > 0) {
+      V3N.renderer.setSize(box.clientWidth, box.clientHeight);
+      V3N.camera.aspect = box.clientWidth / box.clientHeight;
+      V3N.camera.updateProjectionMatrix();
+    }
+    while (V3N.scene.children.length) V3N.scene.remove(V3N.scene.children[0]);
+    V3N.data = j;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position',
+      new THREE.Float32BufferAttribute(j.lines, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(
+      new Float32Array(j.lines.length), 3));
+    const mat = new THREE.LineBasicMaterial({vertexColors: true});
+    V3N.lineObj = new THREE.LineSegments(geo, mat);
+    V3N.scene.add(V3N.lineObj);
+    applyNg3D();
+    if (j.plate_lines.length) {
+      const g2 = new THREE.BufferGeometry();
+      g2.setAttribute('position',
+        new THREE.Float32BufferAttribute(j.plate_lines, 3));
+      V3N.scene.add(new THREE.LineSegments(g2,
+        new THREE.LineBasicMaterial({color: 0xbbc4cc})));
+    }
+    geo.computeBoundingSphere();
+    const c = geo.boundingSphere.center, r = geo.boundingSphere.radius || 10;
+    V3N.raycaster.params.Line = {threshold: r / 150};
+    V3N.controls.target.copy(c);
+    V3N.camera.position.set(c.x + r * 1.3, c.y - r * 1.5, c.z + r * 0.9);
+    V3N.camera.near = r / 1000; V3N.camera.far = r * 100;
+    V3N.camera.updateProjectionMatrix();
+    setMsg('model3d_ng_msg', '節点 ' + j.n_node + ' / 線要素 ' +
+           j.ele_nos.length + ' を表示しました。', 'msg-ok');
+  } catch (e) { setMsg('model3d_ng_msg', esc(e.message), 'msg-err'); }
+}
+
+// ---------------- 検定NG部材の3D強調 ----------------
+function applyNg3D() {
+  if (!V3N || !V3N.lineObj) return;
+  // 検定比: 要素ごとの値 (rmap) と、単一部材指定(*MEMBER)でまとめた
+  // 部材内最大値 (gmap)。判定・強調は部材最大で行い、部材の全要素を
+  // まとめてハイライトする (検定比図の「一部材として表記」と同じ発想)
+  const rmap = {};
+  const gmap = {};
+  const groups = [];
+  if (CHECK && CHECK.ratio3d) {
+    CHECK.ratio3d.forEach(r => { rmap[r[0]] = r[1]; });
+  }
+  if (CHECK && CHECK.ratio3d_unit && CHECK.ratio3d_unit.length) {
+    CHECK.ratio3d_unit.forEach(g => {
+      groups.push(g);
+      g[0].forEach(e => { gmap[e] = g[1]; });
+    });
+  } else {
+    Object.keys(rmap).forEach(e => {
+      groups.push([[+e], rmap[e]]);
+      gmap[e] = rmap[e];
+    });
+  }
+  V3N.rmap = rmap;
+  V3N.gmap = gmap;
+  const cN = $('ng3d_chk');
+  const cW = $('warn3d_chk');
+  const showNg = cN && cN.checked;
+  const showWarn = cW && cW.checked;
+  const on = showNg || showWarn;
+  const has = Object.keys(rmap).length > 0;
+  const attr = V3N.lineObj.geometry.getAttribute('color');
+  const base = [0x2b / 255, 0x5f / 255, 0x8f / 255];  // 通常: 紺
+  const dim = [0.80, 0.83, 0.86];                     // 強調時の非対象: 薄灰
+  const ng = [0.90, 0.45, 0.45];                      // NG: 淡い赤 (#e57373)
+  const warn = [0.39, 0.63, 0.85];                    // 0.9超: 青 (#64a0d8)
+  const ngIdx = [];
+  const warnIdx = [];
+  V3N.data.ele_nos.forEach((eno, i) => {
+    let c = base;
+    if (on && has) {
+      const v = gmap[eno] !== undefined ? gmap[eno] : rmap[eno];
+      if (showNg && v !== undefined && v > 1.0) {
+        c = ng;
+        ngIdx.push(i);
+      } else if (showWarn && v !== undefined && v > 0.9 && v <= 1.0) {
+        c = warn;
+        warnIdx.push(i);
+      } else c = dim;
+    }
+    attr.setXYZ(2 * i, c[0], c[1], c[2]);
+    attr.setXYZ(2 * i + 1, c[0], c[1], c[2]);
+  });
+  attr.needsUpdate = true;
+  // NG部材は1px線では見落とすため (WebGLは線幅指定が効かない)、
+  // 太さのある円柱を重ねて常に手前に描く
+  if (V3N.ngGroup) {
+    V3N.scene.remove(V3N.ngGroup);
+    V3N.ngGroup = null;
+  }
+  if (on && (ngIdx.length || warnIdx.length)) {
+    if (!V3N.lineObj.geometry.boundingSphere) {
+      V3N.lineObj.geometry.computeBoundingSphere();
+    }
+    const R = (V3N.lineObj.geometry.boundingSphere.radius || 10) / 100;
+    const ngMat = new THREE.MeshBasicMaterial({color: 0xe57373,
+                                               depthTest: false});
+    const warnMat = new THREE.MeshBasicMaterial({color: 0x64a0d8,
+                                                 depthTest: false});
+    V3N.ngGroup = new THREE.Group();
+    const addCyl = (i, mat) => {
+      const a = new THREE.Vector3(V3N.data.lines[6 * i],
+                                  V3N.data.lines[6 * i + 1],
+                                  V3N.data.lines[6 * i + 2]);
+      const b = new THREE.Vector3(V3N.data.lines[6 * i + 3],
+                                  V3N.data.lines[6 * i + 4],
+                                  V3N.data.lines[6 * i + 5]);
+      const d = b.clone().sub(a);
+      const len = d.length();
+      if (!(len > 0)) return;
+      const cyl = new THREE.Mesh(
+        new THREE.CylinderGeometry(R, R, len, 6), mat);
+      cyl.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0), d.normalize());
+      cyl.position.copy(a.clone().add(b).multiplyScalar(0.5));
+      cyl.renderOrder = 10;
+      V3N.ngGroup.add(cyl);
+    };
+    warnIdx.forEach(i => addCyl(i, warnMat));
+    ngIdx.forEach(i => addCyl(i, ngMat));  // NGを後に描いて青より手前に
+    V3N.scene.add(V3N.ngGroup);
+  }
+  const hint = $('ng3d_hint');
+  if (!hint) return;
+  if (!on) {
+    hint.textContent = '「検定実行」の結果を使います';
+  } else if (!has) {
+    hint.textContent =
+      '検定結果がありません。先に「検定実行」してください。';
+  } else {
+    const glabel = g => {
+      const es = g[0].slice().sort((a, b) => a - b);
+      let lab;
+      if (es.length === 1) {
+        lab = '要素' + es[0];
+      } else if (es[es.length - 1] - es[0] + 1 === es.length) {
+        lab = '要素' + es[0] + '〜' + es[es.length - 1];  // 連番
+      } else {
+        lab = '要素' + es.slice(0, 4).join('・') +
+              (es.length > 4 ? '…' : '');
+      }
+      return lab + ' (' + g[1].toFixed(2) + ')';
+    };
+    const ngG = groups.filter(g => g[1] > 1.0);
+    const warnG = groups.filter(g => g[1] > 0.9 && g[1] <= 1.0);
+    ngG.sort((a, b) => b[1] - a[1]);
+    warnG.sort((a, b) => b[1] - a[1]);
+    const parts = [];
+    if (showNg && ngG.length) {
+      parts.push('NG(赤) ' + ngG.length + ' 部材: ' +
+        ngG.slice(0, 15).map(glabel).join(', ') +
+        (ngG.length > 15 ? ' …' : ''));
+    }
+    if (showWarn && warnG.length) {
+      parts.push('0.9超(青) ' + warnG.length + ' 部材: ' +
+        warnG.slice(0, 10).map(glabel).join(', ') +
+        (warnG.length > 10 ? ' …' : ''));
+    }
+    hint.textContent = parts.length ? parts.join(' / ')
+      : '該当する部材はありません';
+  }
+}
+
 // ---------------- モデル図PDF ----------------
 async function runPlotModel() {
   setMsg('model_msg', '', ''); $('model_pdfs').innerHTML = '';
@@ -1609,6 +1843,7 @@ async function runCheck() {
     const j = await api('/api/steel_check', req);
     CHECK = j;
     renderCheck(j);
+    applyNg3D();  // 3D表示中ならNG強調を最新の検定結果で更新
   } catch (e) { setMsg('check_msg', esc(e.message), 'msg-err'); return; }
   // 検定値一覧表と検定詳細のTeXも続けて自動生成 (失敗しても検定結果は残す)
   await runRatioTex();

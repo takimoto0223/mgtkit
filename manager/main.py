@@ -1421,6 +1421,9 @@ def main(page: ft.Page):
                                 color='#ffffff',
                                 on_click=submit_reviewed)])
         try:
+            # 裏の処理はここで止まり、提出者の返事待ちになる。進行中の
+            # 文言を残すと、確認画面の奥でまだ動いているように見える
+            t4_status.value = '下書きができました。内容を確認してください。'
             page.show_dialog(dlg)
             page.update()
         except Exception:
@@ -1478,8 +1481,11 @@ def main(page: ft.Page):
             t4_status.value = '自動作成できませんでした: %s' % err
 
     def _do_finalize(prep, deletions, existing_branch=None, use_ai=False):
-        # ダイアログを閉じた直後に反応を見せる (裏の処理は数十秒かかる)
-        t4_status.value = '提出しています...'
+        # ダイアログを閉じた直後に反応を見せる (裏の処理は数十秒かかる)。
+        # 下書きコースはまだ何も送らない段階 (確認画面で取り消せば送信
+        # されない) なので「提出しています...」とは言わない
+        t4_status.value = ('提出の準備をしています...' if use_ai
+                           else '提出しています...')
         page.update()
 
         def work():
@@ -3496,6 +3502,9 @@ def main(page: ft.Page):
     def check_selfupdate():
         def work():
             upd = selfupdate.auto_update()
+            # 見えるところのガイドを、取り込んだ版に合わせ直す (資料だけの
+            # 更新はクローンには入るが、置いた PDF は古いままのため)
+            migrate.refresh_guide(config)
             if not upd.get('stashed'):
                 return
 

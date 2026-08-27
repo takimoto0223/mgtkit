@@ -148,6 +148,16 @@ def test_no_rem_or_errorlevel_inside_parenthesised_blocks(path):
             '%s:%d ブロック内で %%errorlevel%% を読まない' % (path, no)
 
 
+def test_manager_launch_runs_pip_in_utf8_mode():
+    # 古い pip (25.0 以前) は BOM の無い requirements.txt を CP932 で読み、
+    # UTF-8 の日本語コメントで UnicodeDecodeError になる (v1.5 取り込みの
+    # 実機障害と同型)。pip を呼ぶ前に PYTHONUTF8=1 を宣言しておくこと
+    lines = [ln.strip().lower() for ln in lines_of(MANAGER_LAUNCH)]
+    pip_at = next(i for i, ln in enumerate(lines) if '-m pip install' in ln)
+    assert 'set "pythonutf8=1"' in lines[:pip_at], \
+        'pip install より前に set "PYTHONUTF8=1" を置く'
+
+
 @pytest.mark.parametrize('path', [SETUP, MANAGER_LAUNCH])
 def test_pull_is_ff_only(path):
     # --ff-only が無いと、履歴が分かれたときにマージのメッセージ入力が

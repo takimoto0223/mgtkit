@@ -29,13 +29,80 @@ def app_url(port):
     return 'http://127.0.0.1:%d/' % port
 
 
+# アプリが画面を出せるようになるまで待つ上限 (秒)。ここを過ぎても
+# 生きていれば、遅い PC で読み込みに時間がかかっているものとして扱う
+# (落ちるときは数秒以内に落ちるため、待つのはその見極めのため)
+STARTUP_TIMEOUT = 20.0
+
+
+def app_log_path(channel='stable', config=None):
+    """アプリ自身の出力を書き出す先 (起動できなかった理由が残る).
+
+    親から見えないところで落ちると原因が分からないため、子の出力を
+    捨てずにファイルへ回す。**起動のたびに書き直す** (直前の 1 回分が
+    あれば足り、放っておくと際限なく育つため)。
+    """
+    return os.path.join(paths.install_root(config),
+                        'app-%s.log' % (channel or 'stable'))
+
+
+def _open_app_log(channel, config):
+    """子の出力先を開く。開けなければ None (起動そのものは止めない)."""
+    path = app_log_path(channel, config)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        return open(path, 'w', encoding='utf-8', errors='replace'), path
+    except OSError:
+        log.warning('アプリの出力を記録できません: %s', path, exc_info=True)
+        return None, path
+
+
+def _wait_until_serving(proc, port, timeout):
+    """画面を出せる状態になるまで待つ。なったら True.
+
+    途中でアプリが終了したら、待たずに False を返す。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if port_in_use(port):
+            return True
+        if proc.poll() is not None:
+            return False                # 起動直後に落ちた
+        time.sleep(0.2)
+    return False
+
+
+def _startup_failure(log_path, returncode):
+    """起動直後に落ちたときの案内 (理由が読めた分だけ名指しする)."""
+    tail = ''
+    try:
+        with open(log_path, encoding='utf-8', errors='replace') as f:
+            tail = f.read()[-4000:]
+    except OSError:
+        pass
+    log.error('アプリが起動直後に終了しました (終了コード %s)\n%s',
+              returncode, tail)
+    if 'ModuleNotFoundError' in tail or 'ImportError' in tail:
+        # 取り込みが途中で終わった PC。版の印は付いていないので、
+        # もう一度押せば取り込み直される
+        return ('アプリの動作に必要なものが足りないため起動できません'
+                'でした。もう一度「起動」を押すと取り込み直します。')
+    return ('アプリを起動できませんでした。繰り返す場合は、ログ '
+            '(%s) を管理者にお知らせください。' % os.path.basename(log_path))
+
+
 def launch_app(instance_dir, port, channel='stable', python=None,
-               config=None):
+               config=None, startup_timeout=None):
     """インストール済み mgtkit を起動しブラウザを開く.
 
     instance_dir は stable/ や beta/<version>/ のインスタンスフォルダ
     (アプリ本体はその中の mgtkit/)。既に同じポートで起動済みの場合は
     新規起動せずブラウザだけ開く。
+
+    **起動したことを見届けてから返す**。プロセスを作っただけで「開き
+    ます」と言うと、アプリが起動直後に落ちても画面には成功と出て、
+    ブラウザは開かないまま利用者が待ち続けることになる。
+
     戻り値: (subprocess.Popen | None, url)
     """
     app_py = os.path.join(app_dir(instance_dir), 'app.py')
@@ -57,16 +124,31 @@ def launch_app(instance_dir, port, channel='stable', python=None,
     kw = {}
     if sys.platform == 'win32':
         kw['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+    out, log_path = _open_app_log(channel, config)
     try:
         proc = subprocess.Popen(
             [python or sys.executable, app_py],
             cwd=app_dir(instance_dir), env=env,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
+            stdout=out or subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if out else subprocess.DEVNULL, **kw)
     except OSError as e:
         log.error('launch failed: %s', e)
         raise LaunchError('アプリの起動に失敗しました。'
                           'Python の導入状態を確認してください。')
+    finally:
+        if out is not None:
+            out.close()     # 子が自分の複製を持つので親は閉じてよい
+
+    timeout = STARTUP_TIMEOUT if startup_timeout is None else startup_timeout
+    if not _wait_until_serving(proc, port, timeout):
+        if proc.poll() is not None:
+            raise LaunchError(_startup_failure(log_path, proc.returncode))
+        # 生きてはいる (遅い PC での読み込み中)。ここで失敗と言うと
+        # 実際には開く画面を「開かない」と案内することになるため、
+        # 記録だけ残して先へ進む
+        log.warning('%s 秒たってもアプリが応答しません (起動は継続)',
+                    timeout)
     return proc, url
 
 

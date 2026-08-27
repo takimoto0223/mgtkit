@@ -1,10 +1,9 @@
 """manager/settings.py・autofix.py のテスト。"""
-import os
 import subprocess
 
 import pytest
 
-from manager import autofix, settings, submit
+from manager import autofix, settings
 from manager.gitcli import run_git
 
 

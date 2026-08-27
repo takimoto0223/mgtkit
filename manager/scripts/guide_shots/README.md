@@ -12,9 +12,25 @@
 - `shoot_real.py` — Playwright で各画面を撮影する。flutter は canvas
   描画のため座標クリック。CDN (canvaskit / rive / フォント) は
   ローカル資産で差し替える。フォントは Noto Sans JP TTF を用意して
-  fonts.gstatic の要求に応えると実機に近い見た目になる
+  fonts.gstatic の要求に応えると実機に近い見た目になる。
+  撮影後、下の余白 (地の色だけの行) は自動で切り詰める
 
 パス (rive・フォントの置き場所) は撮影環境に合わせて調整すること。
+
+## 使い方
+
+```
+python run_manager.py &                  # 架空データで UI を起動 (:8571)
+python shoot_real.py                     # 既定の一式を撮る
+python shoot_real.py submit submit_dialog   # 1 枚ずつ撮り直す
+```
+
+撮影名は `launch` `history` `usage` `submit` `submit_dialog`
+`submit_manual` `submit_review` `beta` `feedback` `firstrun`。
+
+**`firstrun` だけは未登録の状態が要る**ので、`GUIDE_SHOTS_FIRSTRUN=1`
+を付けて `run_manager.py` を起動し直してから撮る (この環境変数が
+あるときは `settings.json` を消してから起動する)。
 
 ## 撮影時の注意 (2026-08)
 
@@ -22,13 +38,17 @@
   ダイアログが全画面を覆い、どのコマも同じ絵になる。`run_manager.py`
   が起動時に `settings.json` (名前 = 山田太郎、キーはダミー) と
   `stable/mgtkit/version.json` (v1.1) を用意する
-- **ダイアログは Escape で閉じない** (modal=True のため)。`shoot_real.py`
-  の後半 (提出確認 → β版タブ) は Escape 頼みなので、そのままでは
-  ダイアログが被ったまま撮れる。連続撮影するときは「キャンセル」
-  ボタンを座標クリックする形に直すこと。1 枚だけ撮り直すなら
-  該当の分岐だけ実行するのが確実
+- **ダイアログは Escape で閉じない** (modal=True のため)。このため
+  `shoot_real.py` は**1 枚ごとに新しいページを開いて撮る**
+  (前の画面を閉じて回らない)。撮影は遅くなるが、ダイアログが被ったまま
+  撮れる事故が起きない
+- **UI のタブの並びを変えたら、座標定数 (`TAB_*` ほか) と図の撮り直しを
+  同じ PR でやること**。図だけ古いタブ順で残ると、章ごとに並びが違う
+  ガイドになる (2026-08 の #134 で実際に起きた)
 - 生成物 (`real_*.png`) と `home/` は .gitignore 済み。採用する図だけ
   `manager/readme/src/img/` へコピーする
+- `real_diff.png` (差分ビューワ) はブラウザで開く別画面なのでこの
+  ハーネスでは撮らない
 
 ## 資産の置き場所 (環境変数で上書き)
 
