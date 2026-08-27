@@ -62,6 +62,7 @@ pip install flask numpy matplotlib openpyxl pypdf ezdxf
 | `qr_*.py` | QR（保有水平耐力）関連の算定 |
 | `secprops.py` / `section.py` | 断面性能 |
 | `data/` | 基準データ（材料・鉄筋・PC 情報など JSON） |
+| `wallqty/` | 木造壁量計算タブ（存在壁量の読み取り・壁量検定） |
 | `templates/` / `static/` | フロントエンド（index.html / app.js） |
 | `readme/` | mgtkit 本体の操作マニュアル |
 | `tests/` | 本体の回帰テスト（pytest。CI で自動実行） |

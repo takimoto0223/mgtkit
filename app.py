@@ -54,6 +54,7 @@ from mgtkit.w_check import w_al_match, w_al_names
 from mgtkit.export_tex import export_model_tex, export_ratio_detail_tex
 from mgtkit.export_dxf import export_dxf
 from mgtkit.loadmap.routes import make_blueprint as _loadmap_bp
+from mgtkit.wallqty.routes import make_blueprint as _wallqty_bp
 
 app = Flask(__name__)
 
@@ -398,6 +399,9 @@ def _parse_heights(p):
 
 # 荷重分布図タブ (mgtkit/loadmap/)。共通ヘルパを渡して登録する
 app.register_blueprint(_loadmap_bp(sys.modules[__name__]))
+
+# 木造壁量計算タブ (mgtkit/wallqty/)。同じく共通ヘルパを渡して登録する
+app.register_blueprint(_wallqty_bp(sys.modules[__name__]))
 
 
 @app.route('/')
