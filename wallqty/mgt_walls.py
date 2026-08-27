@@ -46,8 +46,9 @@ from mgtkit.util import space_erace
 #: 壁倍率1・長さ1m あたりの許容せん断耐力 [kN/m] (= 1.96kN/m ≒ 200kgf/m)
 QA_UNIT = 1.96
 
-#: 材料名のふるい分けキーワード (既定)
-DEFAULT_KEYWORD = '壁倍率'
+#: 材料名のふるい分けキーワード (既定)。検定タブの木材料の命名規則
+#: 「W-構造用合板1級/2級」(W_AL表の照合と共通) を既定で拾う
+DEFAULT_KEYWORD = '合板'
 
 #: 壁として算入する勾配の下限 [度] (既定)。90°=鉛直、0°=水平
 DEFAULT_SLOPE_MIN = 60.0
@@ -501,9 +502,10 @@ def read_walls(mgt_path, keyword=DEFAULT_KEYWORD, diag_split=False,
     wall_mats = {no: nm for no, nm in mnames.items() if keyword in nm}
     if not wall_mats:
         raise ValueError('材料名に「%s」を含む材料が mgt にありません。'
-                         '耐力壁の板要素に「%s5.0」のような名前の材料を'
+                         '耐力壁の板要素に「W-構造用合板2級」のような名前'
+                         '(検定タブの木材料と共通の命名) の材料を'
                          '割り当ててください (現在の材料名: %s)'
-                         % (keyword, keyword,
+                         % (keyword,
                             ', '.join(sorted(mnames.values())[:12]) or 'なし'))
 
     eles = []

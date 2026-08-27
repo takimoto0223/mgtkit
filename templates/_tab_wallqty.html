@@ -4,8 +4,9 @@
   <fieldset>
     <legend>存在壁量の読み込み (mgt の板要素から)</legend>
     <div class="row"><span class="hint">
-      耐力壁は <b>板要素</b> でモデル化し、その板要素の <b>材料名に
-      「壁倍率」を含める</b> 規約です。板要素の厚みがそのまま壁倍率になります
+      耐力壁は <b>板要素</b> でモデル化し、その板要素の材料名は検定タブの
+      木材料と共通の <b>「W-構造用合板1級/2級」</b> 命名です (既定キーワード
+      「合板」で拾います)。板要素の厚みがそのまま壁倍率になります
       (単位 mm のモデルなら 厚み5mm → 壁倍率5.0、単位 m のモデルなら
       厚み0.005m → 壁倍率5.0)。メッシュ分割された壁は 階・厚み・同一平面
       ごとにまとめ、壁の通り方向へ投影した区間の和集合を壁長とするので、
@@ -13,7 +14,7 @@
     </div>
     <div class="row">
       <label class="inline">材料名のキーワード
-        <input type="text" id="wq_keyword" value="壁倍率"
+        <input type="text" id="wq_keyword" value="合板"
                style="width:120px"></label>
       <label class="inline">壁とみなす勾配の下限[°]
         <input type="number" id="wq_slope" value="60" step="5" min="0"
