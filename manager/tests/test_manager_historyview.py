@@ -10,11 +10,13 @@ CI はマネージャーの依存 (flet) も入れるのでここは必ず実行
 手元に flet を入れていない環境のためにスキップの逃げ道だけ残す。
 """
 import datetime
+import math
 
 import pytest
 
 pytest.importorskip('flet')
 
+import flet as ft                                           # noqa: E402
 import flet.canvas as cv                                    # noqa: E402
 
 from manager import history, historyview                    # noqa: E402
@@ -311,6 +313,66 @@ class TestChipsNeverOverlap:
         assert sorted(c['lane'] for c in tl['chips']) == [-2, -1, 1]
 
 
+class TestLinesMeetTheirArrowHeads:
+    """枝の線と矢先がつながっている (線が矢先を追い越さない・届かないが無い).
+
+    同じ版から 3 本・4 本と枝が出ると、出発位置を右へずらすぶんだけ
+    帯の左端までの横幅が足りなくなり、1/4 円弧が矢先を追い越して
+    「線と矢先が別々に浮いている」見え方になっていた (2026-08 実機)。
+    """
+
+    LATER = D(2026, 8, 27)
+
+    def _fig(self, n):
+        # 同じ版から n 本、同じ日に出した確認中の提出
+        releases = [_rel('v1.7', '2026-08-27'), _rel('v1.6', '2026-08-21'),
+                    _rel('v1.0', '2026-08-06')]
+        merged = [_merged(150, 'tomiriri', '2026-08-06', '2026-08-21',
+                          'v1.0'),
+                  _merged(152, 'kanazawaryoma817', '2026-08-08',
+                          '2026-08-27', 'v1.0')]
+        pending = [{'number': 167 + i, 'title': 't',
+                    'author': ['tomiriri', 'fujitaka213-sys', 'y-kunie',
+                               'kanazawaryoma817'][i],
+                    'created_at': '2026-08-27', 'base_version': 'v1.7'}
+                   for i in range(n)]
+        tl = history.build_timeline(releases, merged, pending,
+                                    today=self.LATER)
+        fig = historyview.build_figure(tl, 'v1.7', self.LATER,
+                                       lambda *a: None)
+        assert fig is not None
+        return _canvas(fig)
+
+    def _joints(self, canvas):
+        """(枝の線の終点, その矢先の先端) の組.
+
+        枝の線 = 太さ 2.4 の Path、矢先 = 塗りつぶしの三角。どちらも
+        帯ごとに「線 → 矢先」の順に積まれる。
+        """
+        ends, tips = [], []
+        for s in canvas.shapes:
+            if not isinstance(s, cv.Path):
+                continue
+            paint = s.paint
+            if paint.style == ft.PaintingStyle.STROKE:
+                if abs((paint.stroke_width or 0) - 2.4) < 0.01:
+                    ends.append((s.elements[-1].x, s.elements[-1].y))
+            elif len(s.elements) == 4:
+                tips.append((s.elements[0].x, s.elements[0].y))
+        assert ends and len(ends) == len(tips)
+        return list(zip(ends, tips))
+
+    @pytest.mark.parametrize('n', [1, 2, 3, 4])
+    def test_arrow_head_sits_on_the_end_of_its_line(self, n):
+        for (ex, ey), (tx, ty) in self._joints(self._fig(n)):
+            # 矢先の根元 (先端から 9px 手前) が線の終点と一致すること。
+            # ずれていると線が矢先を追い越す / 届かないで途切れて見える
+            d = math.hypot(tx - ex, ty - ey)
+            assert abs(d - 9) < 0.01, \
+                '線の終点 (%.1f, %.1f) と矢先 (%.1f, %.1f) が離れています' \
+                % (ex, ey, tx, ty)
+
+
 class TestNodePositions:
     """ノードの x 座標: 日付に比例させつつ、帯が入る幅は必ず確保する."""
 
@@ -323,8 +385,10 @@ class TestNodePositions:
         tl = history.build_timeline(releases, merged, [], today=TODAY)
         node_x = historyview._node_positions(tl['stables'], tl['chips'])
         assert node_x['v1.0'] < node_x['v1.1'] < node_x['v1.2']
+        depart_span = historyview._depart_span(tl['chips'])
         for c in tl['chips']:
-            need = (historyview.DERIV_LEAD + historyview._chip_min_w(c)
+            need = (historyview._deriv_lead(c['base_tag'], depart_span)
+                    + historyview._chip_min_w(c)
                     + historyview.CHIP_SLACK + historyview.MERGE_LEAD)
             assert (node_x[c['target_tag']] - node_x[c['base_tag']]
                     >= need - 0.001)

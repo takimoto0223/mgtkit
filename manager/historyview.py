@@ -37,7 +37,7 @@ LANE_STEP = 70
 FIG_H = 330             # 下レーンが 1 段のときの図の高さ
 RIGHT_PAD = 114
 CHIP_PAD = 24           # 帯の中で「名前 #番号」の左右に取る余白の合計
-DERIV_LEAD = 55         # 基点ノード → 帯の左端 (S カーブ + 矢先の分)
+DERIV_RUN = 55          # 枝の出発点 → 帯の左端 (1/4 円弧 46 + 矢先 9)
 MERGE_LEAD = 46         # 帯の右端 → 合流ノード (合流カーブの分)
 CHIP_SLACK = 12         # 帯の左右に残す最低限の水平線 (詰まって見えない)
 MIN_NODE_GAP = 68       # 隣り合う正式版ノードの最小間隔 (版名が並ぶ幅)
@@ -140,7 +140,10 @@ def _derivation(base_x, arrow_back, lane, color):
     """
     _, line_y = _lane_geom(lane)
     dy = line_y - RAIL_Y
-    dx = min(46, max(24, arrow_back - base_x))
+    # 横に取れる幅より広い円弧は描かない。描くと線が矢先を追い越して
+    # 「線と矢先がつながっていない」見え方になる (帯の左端は
+    # _deriv_lead ぶん空けてあるので、通常は 46 = 一定の形になる)
+    dx = min(46, max(0, arrow_back - base_x))
     elements = [cv.Path.MoveTo(base_x, RAIL_Y),
                 cv.Path.CubicTo(base_x, RAIL_Y + dy * 0.55,
                                 base_x + dx * 0.45, line_y,
@@ -168,7 +171,7 @@ def _merge_arrow(chip_right, node_x, lane, color, big_node):
     tip_y = RAIL_Y + sign * (edge + 1)      # 矢先の先端 = ノードの縁
     back_y = RAIL_Y + sign * (edge + 10)    # 矢先の根元 = 曲線の終点
     dy = line_y - back_y
-    dx = min(46, max(18, ax - chip_right))
+    dx = min(46, max(0, ax - chip_right))
     elements = [cv.Path.MoveTo(chip_right, line_y)]
     if ax - dx > chip_right:
         elements.append(cv.Path.LineTo(ax - dx, line_y))
@@ -259,11 +262,13 @@ def _node_positions(stables, chips):
         return X0 + (s['date'] - t0).days * PX_PER_DAY
 
     # (基点タグ, 公開タグ) → その区間に必要な最小の幅
+    depart_span = _depart_span(chips)
     need = {}
     for c in chips:
         if c['pending'] or not c['base_tag'] or not c['target_tag']:
             continue
-        w = (DERIV_LEAD + _chip_min_w(c) + CHIP_SLACK + MERGE_LEAD)
+        w = (_deriv_lead(c['base_tag'], depart_span) + _chip_min_w(c)
+             + CHIP_SLACK + MERGE_LEAD)
         key = (c['base_tag'], c['target_tag'])
         need[key] = max(need.get(key, 0), w)
 
@@ -304,18 +309,22 @@ def _date_scale(stables, node_x):
     return X
 
 
-def _chip_span(c, base_x, node_x, today_x):
+def _chip_span(c, base_x, node_x, today_x, lead):
     """帯の左右の x。帯はどれも「名前 #番号 + 同じ余白」の同じ作りの箱で、
-    期間は枝の線の長さが表す (モックの文法)."""
+    期間は枝の線の長さが表す (モックの文法).
+
+    lead = 基点ノード → 帯の左端に取る距離 (_deriv_lead)。派生線の
+    1/4 円弧と矢先がここに収まる。
+    """
     min_w = _chip_min_w(c)
     if c['pending']:
         # 確認中はきょう線側に寄せる (点線がきょうまで続く文法)
         chip_right = today_x - TODAY_GAP
-        chip_left = max(chip_right - min_w, base_x + 30)
+        chip_left = max(chip_right - min_w, base_x + lead)
         return chip_left, max(chip_right, chip_left + 12)
     # 取り込み済みは基点ノードと合流ノードの中央に置き、両側の水平部分が
     # 同じ長さになるようにする (_node_positions が幅を確保している)
-    span_l = base_x + DERIV_LEAD             # S カーブ + 矢先の分
+    span_l = base_x + lead                   # S カーブ + 矢先の分
     span_r = node_x[c['target_tag']] - MERGE_LEAD   # 合流カーブの分
     if span_r - span_l >= min_w:
         chip_left = span_l + (span_r - span_l - min_w) / 2
@@ -371,6 +380,29 @@ def _assign_lanes(chips, node_x, spans):
         c['lane'] = lane
 
 
+def _depart_span(chips):
+    """基点ノードごとの、いちばん外側の出発位置のずれ幅 {タグ: px}.
+
+    同じノードから出る枝は出発位置を右へずらす (_depart_slots)。
+    """
+    n = {}
+    for c in chips:
+        if c['base_tag']:
+            n[c['base_tag']] = n.get(c['base_tag'], 0) + 1
+    return {tag: (k - 1) * DEPART_STEP for tag, k in n.items()}
+
+
+def _deriv_lead(base_tag, depart_span):
+    """基点ノードの中心 → 帯の左端に取る距離.
+
+    いちばん外側の出発位置から測るので、同じノードから何本出ても
+    どの枝も 1/4 円弧 + 矢先ぶんの横幅を持てる (足りないと円弧が
+    矢先を追い越して線が途切れて見える)。同じノードから出る帯は
+    左端がそろい、ずれの割り当てが変わっても帯の位置は動かない。
+    """
+    return DEPART_DX + depart_span.get(base_tag, 0) + DERIV_RUN
+
+
 def _depart_slots(chips):
     """同じノードから出る枝を何本目として描くか {提出番号: 0,1,2...}.
 
@@ -392,13 +424,19 @@ def _depart_slots(chips):
     return slots
 
 
-def _badge_rect(side, cur_x):
-    """現行版バッジの矩形 (x, y, w, h)."""
+def _badge_rect(side, cur_x, depart_off=0):
+    """現行版バッジの矩形 (x, y, w, h).
+
+    右に置くときは、その版から出る枝のいちばん外側の出発位置
+    (depart_off) より右へ寄せる。枝が本線を離れるところにバッジを
+    重ねない。
+    """
     if side == 'top':
         return (cur_x - BADGE_W / 2, RAIL_Y - 72, BADGE_W, BADGE_H)
     if side == 'bottom':
         return (cur_x - BADGE_W / 2, RAIL_Y + 48, BADGE_W, BADGE_H)
-    return (cur_x + 22, RAIL_Y - BADGE_H / 2, BADGE_W, BADGE_H)
+    return (cur_x + 22 + depart_off, RAIL_Y - BADGE_H / 2,
+            BADGE_W, BADGE_H)
 
 
 def _chip_rect(c, span):
@@ -418,7 +456,7 @@ def _overlaps(a, b, pad=0):
             and a[1] - pad < b[1] + b[3] and b[1] < a[1] + a[3] + pad)
 
 
-def _badge_side(current_tag, node_x, chips, spans):
+def _badge_side(current_tag, node_x, chips, spans, depart_off=0):
     """現行版バッジの置き場所 'right' | 'top' | 'bottom'.
 
     既定は本線の右 (駅名標と同じ形で、図が変わっても位置が動かない)。
@@ -427,7 +465,7 @@ def _badge_side(current_tag, node_x, chips, spans):
     cur_x = node_x.get(current_tag)
     if cur_x is None:
         return 'right'
-    if not any(cur_x < x < cur_x + BADGE_W + 30
+    if not any(cur_x < x < cur_x + BADGE_W + 30 + depart_off
                for tag, x in node_x.items() if tag != current_tag):
         return 'right'
     for side in ('top', 'bottom'):
@@ -455,10 +493,12 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     authors = tl['authors']
     node_x = _node_positions(stables, chips)
     X = _date_scale(stables, node_x)
+    depart_span = _depart_span(chips)
 
     # きょうの線: 基本は「きょう」の実位置。ただし確認中の帯に
-    # 「名前 #番号」が入るだけの幅と、最新ノード・現行版バッジとの
-    # 間隔が足りなければ右へ広げる (可変でよい = 管理者指示)
+    # 「名前 #番号」が入るだけの幅と、派生線 (1/4 円弧 + 矢先) の
+    # 横幅、最新ノード・現行版バッジとの間隔が足りなければ右へ広げる
+    # (可変でよい = 管理者指示)
     today_x = max(X(today), X(stables[-1]['date']),
                   node_x[stables[-1]['tag']] + 24)
     for c in chips:
@@ -466,12 +506,14 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
             continue
         base_x = node_x.get(c['base_tag'])
         left = max(X(c['start']),
-                   (base_x + 30) if base_x is not None else X0)
+                   (base_x + _deriv_lead(c['base_tag'], depart_span))
+                   if base_x is not None else X0)
         today_x = max(today_x, left + _chip_min_w(c) + TODAY_GAP)
 
     def _spans(tx):
-        return {c['number']: _chip_span(c, node_x[c['base_tag']],
-                                        node_x, tx)
+        return {c['number']: _chip_span(
+                    c, node_x[c['base_tag']], node_x, tx,
+                    _deriv_lead(c['base_tag'], depart_span))
                 for c in chips if node_x.get(c['base_tag']) is not None}
 
     # レーンは帯の実際の x で決める (日付だけでは重なりを見落とす)。
@@ -479,9 +521,11 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     # (レーンだけで決めると現行版と関係のない帯の上に重ねてしまう)
     spans = _spans(today_x)
     _assign_lanes(chips, node_x, spans)
-    badge_side = _badge_side(current_tag, node_x, chips, spans)
+    badge_off = depart_span.get(current_tag, 0)
+    badge_side = _badge_side(current_tag, node_x, chips, spans, badge_off)
     if current_tag in node_x:
-        bx, _by, bw, _bh = _badge_rect(badge_side, node_x[current_tag])
+        bx, _by, bw, _bh = _badge_rect(badge_side, node_x[current_tag],
+                                       badge_off)
         today_x = max(today_x, bx + bw + TODAY_GAP)
     spans = _spans(today_x)     # きょう線が動いた分、確認中の帯も動く
     _assign_lanes(chips, node_x, spans)
@@ -565,7 +609,7 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
                                     paint=_stroke('#f59e0b', 6)))
             # バッジは枝と重ならない側に置く: 上が空いていれば上、
             # 次に下、両方ふさがっていればノードの右 (本線の上)
-            bx0, by0, bw, bh = _badge_rect(badge_side, x)
+            bx0, by0, bw, bh = _badge_rect(badge_side, x, badge_off)
             shapes.append(cv.Rect(bx0, by0, bw, bh, border_radius=7,
                                   paint=_fill('#fef08a')))
             shapes.append(cv.Rect(bx0, by0, bw, bh, border_radius=7,
