@@ -2,7 +2,7 @@
 
 <https://polyformproject.org/licenses/perimeter/1.0.0>
 
-> Required Notice: Copyright 2026 HSC+takimoto0223 (https://github.com/takimoto0223)
+> Required Notice: Copyright 2026 HSC+yt+nt (https://github.com/takimoto0223)
 
 ## Acceptance
 
