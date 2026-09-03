@@ -71,7 +71,8 @@ def build_timeline(releases, merged, pending, today=None):
                済み提出 dict か None。None の最古の版 = 初回配布)
       chips:   昇順の帯 [{author, number, title, start, end, base_tag,
                target_tag, pending, lane}] (end/target_tag は確認中なら
-               None。lane: -1 = 下レーン, +1 = 上レーン)
+               None。lane: -1 = 本線のすぐ下、+1 = 上、
+               -2, -3, ... = さらに下の段)
       authors: 登場する提出者のログイン名 (昇順。色割り当て用)
     """
     today = today or datetime.date.today()
@@ -230,32 +231,63 @@ def base_label(chip):
     return '%s (推定)' % tag if c.get('base_source') == 'estimate' else tag
 
 
+def lane_order():
+    """レーン番号を内側から順に返す (-1 → +1 → -2 → -3 → ...).
+
+    上は 1 段だけ (日付の軸との間に段を増やす余地が無い)。下は必要な
+    だけ深くする。同時に何本の枝が出ても重ねない = 図が縦に伸びるのは
+    許容する (管理者指示 2026-08)。
+    """
+    yield -1
+    yield 1
+    n = 2
+    while True:
+        yield -n
+        n += 1
+
+
+def pack_lanes(spans):
+    """区間の列 → レーン番号の列 (先に来たものほど本線に近いレーン).
+
+    区間は半開区間 [lo, hi) として扱う。端が同じだけ (前の帯の公開位置
+    = 次の帯の基点) は重なりとしない。そうしないと連続する提出が交互に
+    レーンを変えてしまう。lo/hi は日付でも x 座標でも比較さえできれば
+    よい (モデルは日付、描画は px で同じ規則を使う)。
+    """
+    placed = {}
+    lanes = []
+    for lo, hi in spans:
+        for lane in lane_order():
+            if all(hi <= b0 or b1 <= lo for b0, b1 in placed.get(lane, ())):
+                break       # 空のレーンには必ず置けるので必ず抜ける
+        lanes.append(lane)
+        placed.setdefault(lane, []).append((lo, hi))
+    return lanes
+
+
 def _assign_lanes(chips, today, base_dates):
-    """帯のレーン割当。基本は下、重なったら上、それでも重なれば 2 段目の下.
+    """帯のレーン割当 (日付での粗い割当).
 
     重なり判定は帯そのものだけでなく、基点ノードから帯まで横に走る
     派生線も含めた範囲 (基点の日〜終わりの日) で行う。線が他の帯を
-    突っ切るのを防ぐため。
+    突っ切るのを防ぐため。同じ日に始まって同じ日に終わる帯 (きょう
+    公開した版から、きょう出された提出など) は幅が 0 になり重なりを
+    見逃すので、どの帯も最低 1 日ぶんの幅があるものとして比べる。
+
+    描画側 (historyview) は帯の実際の x 座標で割当をやり直す。日付が
+    重ならなくても、確認中の帯がきょうの線に寄せられるなどで px では
+    重なることがあるため。ここでの割当は図を使わない利用者向けの既定値。
     """
-    placed = {}
-
-    def overlaps(span, spans):
-        # 端の日が同じだけ (前の帯の公開日 = 次の帯の基点) は重なり扱い
-        # しない。そうしないと連続する提出が交互にレーンを変えてしまう
-        a0, a1 = span
-        return any(a1 > b0 and b1 > a0 for b0, b1 in spans)
-
+    day = datetime.timedelta(days=1)
+    spans = []
     for c in chips:
         start = c['start']
         base_date = base_dates.get(c['base_tag'])
         if base_date is not None and base_date < start:
             start = base_date
-        span = (start, c['end'] or today)
-        for lane in (-1, 1, -2, -3, -4):
-            if not overlaps(span, placed.get(lane, [])):
-                break
+        spans.append((start, max(c['end'] or today, start + day)))
+    for c, lane in zip(chips, pack_lanes(spans)):
         c['lane'] = lane
-        placed.setdefault(lane, []).append(span)
 
 
 def split_title(notes):
