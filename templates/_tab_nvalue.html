@@ -1,0 +1,29 @@
+<!-- ============ タブ: N値計算 ============ -->
+<!-- index.html から include される。既存タブの markup に合わせてある。 -->
+<section class="tab" id="tab-nvalue">
+  <fieldset>
+    <legend>N値計算 (木造柱頭柱脚接合部・告示1460号)</legend>
+    <div class="row"><span class="hint">
+      面材壁は <b>厚み=壁倍率</b> の板要素、筋かいは下の断面番号→倍率の
+      指定で読み取ります。階はmgtの<b>層設定 (*STORY)</b> を優先し
+      (層レベル外の鉛直材は小屋束・間柱として対象外)、屋根などで分断
+      された柱は<b>単一部材 (*MEMBER)</b> 指定で1本の柱として扱います。
+      出隅は平面の凸包から自動推定し、表のチェックで修正できます。</span>
+    </div>
+    <div class="row">
+      <label class="inline">筋かい倍率 (断面番号:倍率)
+        <input type="text" id="nv_brace" style="width:280px"
+          placeholder="例: 1001:1.0, 1002:1.5"></label>
+    </div>
+    <div class="row">
+      <button class="act" onclick="runNValue()">N値計算</button>
+      <button class="sub" onclick="runNValue3D()">3D表示 (金物色分け)</button>
+      <button class="sub" onclick="runNValueDxf()">伏図DXF (N値注記)</button>
+    </div>
+    <div id="nv_msg"></div>
+    <div id="viewer3d_nv" style="display:none">
+      <div id="tooltip3d_nv"></div></div>
+    <div id="nv_legend" class="hint" style="display:none"></div>
+    <div id="nv_table"></div>
+  </fieldset>
+</section>

@@ -73,9 +73,9 @@
   td.ng { background: #f6c8c4; font-weight: bold; }
   td.warn { background: #fbe9b8; }
   td.na { color: #999; }
-  #viewer3d, #viewer3d_ng { width: 100%; height: 560px; background: #fdfdfe;
+  #viewer3d, #viewer3d_ng, #viewer3d_nv { width: 100%; height: 560px; background: #fdfdfe;
               border: 1px solid #ccd; border-radius: 4px; position: relative; }
-  #tooltip3d, #tooltip3d_ng { position: absolute; pointer-events: none; background: #234;
+  #tooltip3d, #tooltip3d_ng, #tooltip3d_nv { position: absolute; pointer-events: none; background: #234;
                color: #fff; font-size: 12px; padding: 3px 8px;
                border-radius: 3px; display: none; z-index: 5; }
   #overlay { position: fixed; inset: 0; background: rgba(255,255,255,.65);
@@ -140,6 +140,7 @@
   <button data-tab="quantity">数量集計</button>
   <button data-tab="loadmap">荷重分布図</button>
   <button data-tab="wallqty">木造壁量計算</button>
+  <button data-tab="nvalue">N値計算</button>
 </nav>
 <main>
 
@@ -1000,6 +1001,7 @@
 {% include '_tab_loadmap.html' %}
 
 {% include '_tab_wallqty.html' %}
+{% include '_tab_nvalue.html' %}
 
 </main>
 <div id="overlay"><div class="spinner"></div><p>実行中...</p></div>
