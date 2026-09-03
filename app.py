@@ -1660,6 +1660,63 @@ def api_steel_check():
 
 
 # ---------------------------------------------------------------------------
+# エンドポイント: N値計算 (木造柱頭柱脚接合部)
+# ---------------------------------------------------------------------------
+
+@app.route('/api/n_value', methods=['POST'])
+def api_n_value():
+    p = request.get_json(force=True)
+    err = _check_input_file(p.get('mgt_path'), 'mgtファイル')
+    if err:
+        return jsonify({'error': err}), 400
+    try:
+        from mgtkit.n_value import (n_value_compute, n_value_csv,
+                                    n_value_tex)
+        brace = {}
+        for tok in str(p.get('brace_baisu') or '').replace(
+                '、', ',').split(','):
+            tok = tok.strip()
+            if not tok:
+                continue
+            k0, v0 = tok.replace('：', ':').split(':')
+            brace[int(float(k0))] = float(v0)
+        sumi = {str(k): bool(v)
+                for k, v in dict(p.get('sumi_override') or {}).items()}
+        notes = []
+        with _capture_notes(notes):
+            res = n_value_compute(
+                p['mgt_path'], brace_baisu=brace, sumi_override=sumi,
+                limit_sec_no=float(p.get('limit_sec_no', 9000)))
+            out_dir = _out_dir(p, 'n_value')
+        base = os.path.splitext(os.path.basename(p['mgt_path']))[0]
+        csv_path = os.path.join(out_dir, base + '_nvalue.csv')
+        n_value_csv(res, csv_path)
+        res['csv_url'] = _register_file(csv_path) + '&dl=1'
+        res['csv_name'] = os.path.basename(csv_path)
+        if p.get('tex'):
+            tex_path = os.path.join(out_dir, '11nvalue.tex')
+            n_value_tex(res, tex_path)
+            res['tex_url'] = _register_file(tex_path) + '&dl=1'
+            res['tex_name'] = '11nvalue.tex'
+        if p.get('dxf'):
+            from mgtkit.n_value import export_nvalue_dxf
+            with _capture_notes(notes):
+                dxf_path, dxf_info = export_nvalue_dxf(
+                    p['mgt_path'], out_dir, res,
+                    paper=str(p.get('paper') or 'A3'),
+                    scale=(int(p['scale']) if p.get('scale') else None),
+                    limit_sec_no=float(p.get('limit_sec_no', 9000)))
+            res['dxf_url'] = _register_file(dxf_path) + '&dl=1'
+            res['dxf_name'] = os.path.basename(dxf_path)
+            res['dxf_info'] = dxf_info
+        res['out_dir'] = out_dir
+        res['notes'] = notes
+        return jsonify(res)
+    except Exception as e:  # noqa: BLE001
+        return _error_response(e)
+
+
+# ---------------------------------------------------------------------------
 # エンドポイント: QR図 (反力・せん断分担・偏心率)
 # ---------------------------------------------------------------------------
 

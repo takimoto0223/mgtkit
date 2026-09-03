@@ -727,6 +727,270 @@ function applyNg3D() {
   }
 }
 
+// ---------------- N値計算 (木造柱頭柱脚接合部) ----------------
+let NV = null;       // 直近のN値計算結果
+let NVSUMI = {};     // 出隅の手動指定 {'階|節点': bool}
+let V3V = null;      // 金物色分け3Dビューア
+
+const NV_COLORS = {'い': 0x9e9e9e, 'ろ': 0x8bc34a, 'は': 0xcddc39,
+                   'に': 0xffeb3b, 'ほ': 0xffc107, 'へ': 0xff9800,
+                   'と': 0xff7043, 'ち': 0xf4511e, 'り': 0xd32f2f,
+                   'ぬ': 0xb71c1c, '－': 0x7b1fa2};
+
+async function runNValue() {
+  setMsg('nv_msg', '', '');
+  try {
+    const j = await api('/api/n_value', {
+      mgt_path: $('mgt_path').value,
+      brace_baisu: $('nv_brace').value,
+      sumi_override: NVSUMI,
+      tex: true});
+    NV = j;
+    renderNValue(j);
+    if (V3V && V3V.lineObj) applyNv3D();
+  } catch (e) { setMsg('nv_msg', esc(e.message), 'msg-err'); }
+}
+
+function renderNValue(j) {
+  const cnt = {};
+  j.columns.forEach(r => { cnt[r.grade] = (cnt[r.grade] || 0) + 1; });
+  setMsg('nv_msg', '柱 ' + j.columns.length + ' 本 / 層 ' + j.stories +
+    ' / 壁 ' + j.n_wall + ' 件。 ' +
+    Object.entries(cnt).map(([g, n]) => '(' + g + ')' + n + '本')
+      .join(' '), 'msg-ok');
+  $('nv_msg').innerHTML += ' <a class="dl" href="' + j.csv_url + '">' +
+    esc(j.csv_name) + '</a>' +
+    (j.tex_url ? ' <a class="dl" href="' + j.tex_url +
+     '">11nvalue.tex</a>' : '') + notesHtml(j.notes);
+  let h = '<table class="res"><thead><tr><th>階</th><th>要素</th>' +
+    '<th>節点</th><th>X</th><th>Y</th><th>出隅</th><th>H[m]</th>' +
+    '<th>Ax</th><th>Ay</th><th>ΣABH上階</th><th>L</th><th>N</th>' +
+    '<th>T[kN]</th><th>告示</th><th>金物例</th></tr></thead><tbody>';
+  j.columns.forEach(r => {
+    const key = r.story + '|' + r.node;
+    h += '<tr><td>' + esc(r.story_label || r.story) + '</td><td>' +
+      r.ele_no + '</td><td>' +
+      r.node + '</td><td>' + r.x.toFixed(2) + '</td><td>' +
+      r.y.toFixed(2) + '</td><td><input type="checkbox" class="nvsumi"' +
+      ' data-key="' + key + '"' + (r.sumi ? ' checked' : '') +
+      '></td><td>' + r.h.toFixed(2) + (r.h_over ? ' ⚠' : '') +
+      '</td><td>' + r.a_x.toFixed(2) + '</td><td>' + r.a_y.toFixed(2) +
+      '</td><td>' + Math.max(r.ab2_x, r.ab2_y).toFixed(2) + '</td><td>' +
+      r.L.toFixed(1) + '</td><td><b>' + r.n.toFixed(2) + '</b></td><td>' +
+      r.t_kn.toFixed(1) + '</td><td>(' + r.grade + ')</td><td>' +
+      esc(r.hardware) + '</td></tr>';
+  });
+  h += '</tbody></table><div class="hint">' +
+    'N = A1×B1×(H1/2.7) − L (最上階・平屋) / ' +
+    'A1×B1×(H1/2.7) + ΣAkBk×(Hk/2.7) − L (その他の階)。' +
+    'Hは階高 (3.2m以下はH=2.7で係数1.0。6.0m超⚠はN値法適用外で' +
+    '構造計算による)。' +
+    '出隅チェックを変えると自動で再計算します。3階建て以上は上階の' +
+    '引抜きを累積し押さえLは2階建て相当 (安全側)。筋かいの取り付き' +
+    '向きによる補正は行いません。金物例は告示1460号表三対応 ' +
+    '(同等以上の金物で代替可)。</div>';
+  $('nv_table').innerHTML = h;
+  document.querySelectorAll('#nv_table input.nvsumi').forEach(cb => {
+    cb.addEventListener('change', () => {
+      NVSUMI[cb.dataset.key] = cb.checked;
+      runNValue();
+    });
+  });
+}
+
+function initNV3D() {
+  const box = $('viewer3d_nv');
+  const W = box.clientWidth, H = box.clientHeight;
+  const renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setSize(W, H);
+  renderer.setClearColor(0xfdfdfe);
+  box.insertBefore(renderer.domElement, box.firstChild);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, W / H, 0.01, 100000);
+  camera.up.set(0, 0, 1);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  V3V = {scene, camera, renderer, controls, raycaster, mouse,
+         lineObj: null, data: null, group: null, nvmap: {}};
+  renderer.domElement.addEventListener('mousemove', ev => {
+    if (!V3V.lineObj) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(V3V.lineObj);
+    const tip = $('tooltip3d_nv');
+    if (hits.length) {
+      const i = Math.floor(hits[0].index / 2);
+      const eno = V3V.data.ele_nos[i];
+      let txt = '要素 ' + eno + ' | 断面: ' + V3V.data.ele_secs[i];
+      const r = V3V.nvmap[eno];
+      if (r) {
+        txt += ' | N=' + r.n.toFixed(2) + ' (' + r.grade + ') ' +
+               r.hardware;
+      }
+      tip.textContent = txt;
+      tip.style.display = 'block';
+      tip.style.left = (ev.clientX - rect.left + 14) + 'px';
+      tip.style.top = (ev.clientY - rect.top + 8) + 'px';
+    } else { tip.style.display = 'none'; }
+  });
+  (function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  })();
+}
+
+async function runNValue3D() {
+  $('viewer3d_nv').style.display = 'block';
+  if (typeof THREE === 'undefined') {
+    setMsg('nv_msg', 'three.js のCDN読み込みに失敗しました。' +
+           'インターネット接続を確認してください。', 'msg-err');
+    return;
+  }
+  if (!NV) await runNValue();
+  if (!NV) return;
+  try {
+    const j = await api('/api/model3d', {mgt_path: $('mgt_path').value});
+    if (!V3V) initNV3D();
+    const box = $('viewer3d_nv');
+    if (box.clientWidth > 0 && box.clientHeight > 0) {
+      V3V.renderer.setSize(box.clientWidth, box.clientHeight);
+      V3V.camera.aspect = box.clientWidth / box.clientHeight;
+      V3V.camera.updateProjectionMatrix();
+    }
+    while (V3V.scene.children.length) {
+      V3V.scene.remove(V3V.scene.children[0]);
+    }
+    V3V.data = j;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position',
+      new THREE.Float32BufferAttribute(j.lines, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(
+      new Float32Array(j.lines.length), 3));
+    V3V.lineObj = new THREE.LineSegments(geo,
+      new THREE.LineBasicMaterial({vertexColors: true}));
+    V3V.scene.add(V3V.lineObj);
+    if (j.plate_lines.length) {
+      const g2 = new THREE.BufferGeometry();
+      g2.setAttribute('position',
+        new THREE.Float32BufferAttribute(j.plate_lines, 3));
+      V3V.scene.add(new THREE.LineSegments(g2,
+        new THREE.LineBasicMaterial({color: 0xdde3e8})));
+    }
+    geo.computeBoundingSphere();
+    const c = geo.boundingSphere.center;
+    const r = geo.boundingSphere.radius || 10;
+    V3V.raycaster.params.Line = {threshold: r / 150};
+    V3V.controls.target.copy(c);
+    V3V.camera.position.set(c.x + r * 1.3, c.y - r * 1.5, c.z + r * 0.9);
+    V3V.camera.near = r / 1000;
+    V3V.camera.far = r * 100;
+    V3V.camera.updateProjectionMatrix();
+    applyNv3D();
+  } catch (e) { setMsg('nv_msg', esc(e.message), 'msg-err'); }
+}
+
+function applyNv3D() {
+  if (!V3V || !V3V.lineObj || !NV) return;
+  const nvmap = {};
+  NV.columns.forEach(r => {
+    (r.eles || [r.ele_no]).forEach(e => {
+      if (!nvmap[e] || nvmap[e].n < r.n) nvmap[e] = r;  // 通し柱は厳しい階
+    });
+  });
+  V3V.nvmap = nvmap;
+  const attr = V3V.lineObj.geometry.getAttribute('color');
+  const cObj = new THREE.Color();
+  V3V.data.ele_nos.forEach((eno, i) => {
+    const r = nvmap[eno];
+    cObj.set(r ? (NV_COLORS[r.grade] || 0x7b1fa2) : 0xb9c2cb);
+    attr.setXYZ(2 * i, cObj.r, cObj.g, cObj.b);
+    attr.setXYZ(2 * i + 1, cObj.r, cObj.g, cObj.b);
+  });
+  attr.needsUpdate = true;
+  // (ろ)以上の柱に金物ランク色の円柱を重ねる ((い)は線色のみ)
+  if (V3V.group) {
+    V3V.scene.remove(V3V.group);
+    V3V.group = null;
+  }
+  if (!V3V.lineObj.geometry.boundingSphere) {
+    V3V.lineObj.geometry.computeBoundingSphere();
+  }
+  const R = (V3V.lineObj.geometry.boundingSphere.radius || 10) / 140;
+  V3V.group = new THREE.Group();
+  const mats = {};
+  V3V.data.ele_nos.forEach((eno, i) => {
+    const r = nvmap[eno];
+    if (!r || r.grade === 'い') return;
+    if (!mats[r.grade]) {
+      mats[r.grade] = new THREE.MeshBasicMaterial(
+        {color: NV_COLORS[r.grade] || 0x7b1fa2, depthTest: false});
+    }
+    const a = new THREE.Vector3(V3V.data.lines[6 * i],
+                                V3V.data.lines[6 * i + 1],
+                                V3V.data.lines[6 * i + 2]);
+    const b = new THREE.Vector3(V3V.data.lines[6 * i + 3],
+                                V3V.data.lines[6 * i + 4],
+                                V3V.data.lines[6 * i + 5]);
+    const d = b.clone().sub(a);
+    const len = d.length();
+    if (!(len > 0)) return;
+    const cyl = new THREE.Mesh(
+      new THREE.CylinderGeometry(R, R, len, 6), mats[r.grade]);
+    cyl.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0), d.normalize());
+    cyl.position.copy(a.clone().add(b).multiplyScalar(0.5));
+    cyl.renderOrder = 10;
+    V3V.group.add(cyl);
+  });
+  V3V.scene.add(V3V.group);
+  renderNvLegend();
+}
+
+async function runNValueDxf() {
+  setMsg('nv_msg', '伏図DXFを生成しています...', '');
+  try {
+    const j = await api('/api/n_value', {
+      mgt_path: $('mgt_path').value,
+      brace_baisu: $('nv_brace').value,
+      sumi_override: NVSUMI,
+      dxf: true});
+    NV = j;
+    renderNValue(j);
+    if (j.dxf_url) {
+      $('nv_msg').innerHTML += ' <a class="dl" href="' + j.dxf_url +
+        '"><b>' + esc(j.dxf_name) + '</b></a> (階別伏図に柱ごとの' +
+        'N値・金物ランクを色分け注記)';
+    }
+    if (V3V && V3V.lineObj) applyNv3D();
+  } catch (e) { setMsg('nv_msg', esc(e.message), 'msg-err'); }
+}
+
+function renderNvLegend() {
+  const box = $('nv_legend');
+  if (!box) return;
+  const RANGES = [['い', 'N≦0'], ['ろ', '≦0.65'], ['は', '≦1.0'],
+                  ['に', '≦1.4'], ['ほ', '≦1.6'], ['へ', '≦1.8'],
+                  ['と', '≦2.8'], ['ち', '≦3.7'], ['り', '≦4.7'],
+                  ['ぬ', '≦5.6'], ['－', '5.6超']];
+  const DARK = {'と': 1, 'ち': 1, 'り': 1, 'ぬ': 1, '－': 1};
+  const cnt = {};
+  if (NV) NV.columns.forEach(r => { cnt[r.grade] = (cnt[r.grade] || 0) + 1; });
+  box.innerHTML = '凡例 (告示記号 / N値 / 本数): ' + RANGES.map(([g, rng]) => {
+    const hex = '#' + (NV_COLORS[g] | 0x1000000).toString(16).slice(1);
+    return '<span style="display:inline-block;margin:2px 3px;' +
+      'padding:1px 8px;border-radius:3px;background:' + hex +
+      ';color:' + (DARK[g] ? '#fff' : '#223') + '">(' + g + ') ' + rng +
+      (cnt[g] ? ' × ' + cnt[g] : '') + '</span>';
+  }).join('') +
+  '<span style="margin-left:6px">グレーの柱=(い) 金物ランクなし・' +
+  '灰色の細線=柱以外の部材</span>';
+  box.style.display = 'block';
+}
+
 // ---------------- モデル図PDF ----------------
 async function runPlotModel() {
   setMsg('model_msg', '', ''); $('model_pdfs').innerHTML = '';
