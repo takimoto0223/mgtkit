@@ -2090,7 +2090,9 @@ def api_struct_info():
         return jsonify({'error': err}), 400
     try:
         from mgtkit.dxf_struct import (load_struct_model, plan_levels,
-                                       auto_frames, plan_keys)
+                                       auto_frames, plan_keys, plan_key_z,
+                                       wood_top_z, WOOD_TOP_TOL,
+                                       plan_key_is_flat)
         notes = []
         with _capture_notes(notes):
             M = load_struct_model(p['mgt_path'],
@@ -2099,6 +2101,26 @@ def api_struct_info():
             levels = plan_levels(M)
             frames = auto_frames(M)
             plans = plan_keys(M)
+            # 木造の伏図2枚用: 各候補のレベルと最上階か
+            top_z = wood_top_z(M)
+            for pl in plans:
+                try:
+                    z = plan_key_z(M, pl['key'])
+                    pl['z'] = float(z)
+                    pl['top'] = bool(top_z is not None
+                                     and z >= top_z - WOOD_TOP_TOL)
+                    pl['flat'] = plan_key_is_flat(M, pl['key'])
+                except (ValueError, IndexError):
+                    pl['z'] = None
+                    pl['top'] = True
+                    pl['flat'] = False
+        try:
+            from mgtkit.dxf_list import list_categories
+            with _capture_notes(notes):
+                list_cats = list_categories(M)
+        except Exception as e:  # noqa: BLE001
+            notes.append('部材リストの断面を読めませんでした: %s' % e)
+            list_cats = []
         kinds = {'column': 0, 'beam': 0, 'brace': 0}
         for m in M.members:
             kinds[m['kind']] = kinds.get(m['kind'], 0) + 1
@@ -2108,7 +2130,8 @@ def api_struct_info():
                         'frames': [{'key': f['key'], 'label': f['label'],
                                     'n_col': f['n_col']} for f in frames],
                         'n_members': len(M.members), 'kinds': kinds,
-                        'n_pin': pins, 'notes': notes})
+                        'n_pin': pins, 'list_categories': list_cats,
+                        'notes': notes})
     except Exception as e:  # noqa: BLE001
         return _error_response(e)
 
@@ -2126,6 +2149,7 @@ def api_struct_preview():
         with _capture_notes(notes):
             out_dir = _out_dir(p, 'dxf')
         out_path = os.path.join(out_dir, '_struct_preview.png')
+        pinfo = {}
         scale = p.get('scale')
         scale = int(scale) if scale else None
         with _PLOT_LOCK, _capture_notes(notes):
@@ -2133,10 +2157,16 @@ def api_struct_preview():
                 p['mgt_path'], out_path, str(p.get('kind') or 'axis'),
                 p.get('key'), paper=str(p.get('paper') or 'A3'),
                 scale=scale, pin_paper_mm=float(p.get('pin_mm', 1.5)),
-                limit_sec_no=float(p.get('limit_sec_no', 9000)))
+                limit_sec_no=float(p.get('limit_sec_no', 9000)),
+                grids=list(p.get('grids') or []),
+                wood=bool(p.get('wood')), sheet=p.get('sheet') or None,
+                level_keys=list(p.get('level_lines') or []),
+                text_paper_mm=float(p.get('text_mm', 2.5)),
+                page=int(p.get('page') or 1), info=pinfo)
         return jsonify({'png_url': _register_file(out_path)
                         + '&t=%d' % int(os.path.getmtime(out_path)),
-                        'scale': n, 'notes': notes})
+                        'scale': n, 'pages': pinfo.get('pages'),
+                        'page': pinfo.get('page'), 'notes': notes})
     except Exception as e:  # noqa: BLE001
         return _error_response(e)
 
@@ -2163,7 +2193,12 @@ def api_struct_dxf():
                 pin_paper_mm=float(p.get('pin_mm', 1.5)),
                 text_paper_mm=float(p.get('text_mm', 2.5)),
                 limit_sec_no=float(p.get('limit_sec_no', 9000)),
-                one_file=bool(p.get('one_file', True)))
+                one_file=bool(p.get('one_file', True)),
+                grids=list(p.get('grids') or []),
+                wood=bool(p.get('wood')),
+                level_keys=list(p.get('level_lines') or []),
+                list_out=bool(p.get('list_categories')),
+                list_categories=list(p.get('list_categories') or []))
         files = [{'name': os.path.basename(f),
                   'url': _register_file(f) + '&dl=1'} for f in made]
         return jsonify({'files': files, 'info': info, 'out_dir': out_dir,

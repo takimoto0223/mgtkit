@@ -344,6 +344,27 @@ def find_index_rough(base_data, search):
     return index
 
 
+def read_mgt_text(path):
+    """mgt / mgtx を文字コード自動判定で読み、改行を \\n に揃えた文字列を返す.
+
+    MIDAS Gen の mgt と Gen NX が書く mgtx は CP932 だが、外部ツールが書いた
+    mgtx は UTF-8 のことがある。BOM付きUTF-8 → UTF-8(厳密) → CP932(置換あり)
+    の順に試す。日本語を含む CP932 のファイルが UTF-8 として正しく読めることは
+    まず無いので、この順で取り違えない。ASCII のみのファイルはどれで読んでも同じ。
+    """
+    with open(path, 'rb') as f:
+        raw = f.read()
+    if raw.startswith(b'\xef\xbb\xbf'):
+        text = raw[3:].decode('utf-8', errors='replace')
+    else:
+        try:
+            text = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            text = raw.decode('cp932', errors='replace')
+    # open() のテキストモード(universal newlines)と同じ改行の扱いにする
+    return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
 def loadtxt_tolerant(path):
     """数値テキストの寛容読込 (応力txt等のユーザー入力ファイル用).
 

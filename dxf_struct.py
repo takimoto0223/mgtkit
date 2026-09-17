@@ -26,7 +26,7 @@ import os
 
 import numpy as np
 
-from .util import find_index
+from .util import find_index, read_mgt_text
 from .mgt import (mgtopen_node, mgtopen_element,
                   mgtopen_group, mgtopen_unit_2015, mgtopen_framerls,
                   space_erace)
@@ -51,6 +51,29 @@ LAYER_SEC = {   # 断面 (ブロックINSERT)
 }
 LAYER_TEXT = ('S-Red10', 1)     # 赤
 LAYER_TITLE = ('S-Red10', 1)
+LAYER_GRID = ('S-Gray09芯線', 8)  # 通り芯 (一点鎖線・グレー)。丸記号と通り名は LAYER_TEXT
+LAYER_WALL = ('S-Orange40', 30)   # 木造柱伏図の立上り壁 (struct_cad と同じ)
+DASHED_SUFFIX = '破線'            # 木造柱伏図の梁: 部材レイヤ名 + '破線' (例 S-木_20破線)
+BEAM_DASHED_PAPER_MM = (3.0, -1.5)  # 破線 (線, 空き) 紙面mm
+
+# 木造の伏図2枚 (struct_cad の mode=wood と同じ規則)
+#   最上階以外: 梁伏図 (梁=実線+梁符号 / 柱=断面のみ) と 柱伏図 (梁=破線・符号なし /
+#               柱=符号つき / その床から立ち上がる壁) の2枚
+#   最上階   : 伏図1枚 (梁符号・柱符号とも)
+#   柱は「その床から上へ伸びる柱」。下の柱は、ピンで分かれるとき・上に柱が無いときだけ×印
+WOOD_TOP_TOL = 0.05       # 最上階判定の許容差 [m]
+WALL_INCLINE_DEG = 60.0   # これ以上傾いた面要素を壁とみなす
+WALL_BASE_TOL = 0.3       # 壁の下端と床レベルの許容差 [m]
+WALL_HATCH_PAPER_MM = 2.5  # 木造軸組図の壁ハッチ (ANSI31) の線間隔 (紙面mm)
+ANSI31_SPACING = 3.175     # ezdxf の ANSI31 の線間隔 (尺度1のとき)
+
+# 通り芯 (寸法はすべて紙面mm。縮尺を掛けて実寸にする)
+GRID_OVERHANG_PAPER_MM = 5.0    # 図の外形からの線の出
+GRID_BUBBLE_R_PAPER_MM = 4.0    # 丸記号の半径
+GRID_TEXT_PAPER_MM = 3.5        # 通り名の文字高さ
+GRID_DASHDOT_PAPER_MM = (8.0, -1.0, 0.0, -1.0)  # 一点鎖線 (線, 空き, 点, 空き)
+# 軸組図のレベル線 (通り芯と同じレイヤ・線種。▽記号とレベル名はまだ描かない)
+LEVEL_FLAT_TOL = 0.3      # 節点Zの広がりがこれ未満のフロアを「水平な床」とみなす [m]
 
 SCALE_SERIES = [20, 25, 30, 40, 50, 60, 75, 100, 150, 200, 250, 300,
                 400, 500, 600, 750, 1000]
@@ -88,11 +111,9 @@ def _material_classes_lenient(mgt_path):
     STEEL→STEEL / CONC・SRC→RC / USER→名前にW-,W_,CLTがあればWOOD、
     それ以外はOTHER。
     """
-    import io as _io
     out = {}
     try:
-        with _io.open(mgt_path, encoding='cp932', errors='replace') as f:
-            lines = f.read().splitlines()
+        lines = read_mgt_text(mgt_path).split('\n')
     except OSError:
         return out
     ins = False
@@ -356,6 +377,10 @@ def _merge_collinear(members):
             members[i] = merged
             members[j] = None
             changed = True
+            # 連結すると部材 i の端点と向きが変わり、ends (端点→部材・端) が
+            # 古くなる。古い ends のまま続けると端を取り違えて区間が欠けるので、
+            # 1回連結するごとに ends を作り直す (2026-09-17 修正)
+            break
         if changed:
             members = [m for m in members if m is not None]
     return [m for m in members if m is not None]
@@ -688,6 +713,168 @@ def axis_line_fit(M, gname):
     return center, u, set(int(n) for n in node_nos)
 
 
+# ---------------------------------------------------------------------------
+# 通り芯
+# ---------------------------------------------------------------------------
+
+def grid_lines(M, keys):
+    """通り芯にするキー → 平面上の直線のリスト.
+
+    keys は auto_frames のキー ('G:<グループ名>' / 'X=<v>' / 'Y=<v>')。
+    戻り値: list of dict {key, label, p (2,) [m], u (2,) 単位ベクトル}
+    同じ直線になるもの (グループ名違いの重複など) は先に出たものだけ残す。
+    """
+    out = []
+    for key in (keys or []):
+        key = str(key)
+        try:
+            p, u, _nodes, _name = _frame_geometry(M, key)
+        except (ValueError, IndexError):
+            _note_once(M, '注意: 通り芯 %s の位置を決められないため描きません' % key)
+            continue
+        p = np.asarray(p, dtype=float)
+        u = np.asarray(u, dtype=float)
+        u = u / float(np.hypot(u[0], u[1]))
+        dup = False
+        for g in out:
+            parallel = abs(float(u[0] * g['u'][1] - u[1] * g['u'][0])) < 1e-3
+            dist = abs(float((p[0] - g['p'][0]) * g['u'][1]
+                             - (p[1] - g['p'][1]) * g['u'][0]))
+            if parallel and dist < FRAME_TOL:
+                dup = True
+                _note_once(M, '注意: 通り芯 %s は %s と同じ位置のため省略します'
+                           % (frame_label(M, key).split(' ')[0], g['label']))
+                break
+        if dup:
+            continue
+        out.append({'key': key, 'label': frame_label(M, key).split(' ')[0],
+                    'p': p, 'u': u})
+    return out
+
+
+def _note_once(M, msg):
+    """図ごとに同じ注意が並ばないよう、モデル単位で 1 回だけ出す."""
+    seen = getattr(M, '_notes_seen', None)
+    if seen is None:
+        seen = M._notes_seen = set()
+    if msg not in seen:
+        seen.add(msg)
+        print(msg)
+
+
+def _grid_extra_paper_mm(grids):
+    """auto_scale 用: 通り芯で図の外に増える紙面寸法 (両側の線の出 + 丸記号)."""
+    if not grids:
+        return 0.0
+    return 2 * GRID_OVERHANG_PAPER_MM + 2 * GRID_BUBBLE_R_PAPER_MM
+
+
+GRID_HIT_TOL_MM = 100.0  # 図の範囲からこの距離 [mm 実寸] までに通る通り芯を描く
+
+
+def model_plan_bbox_mm(M):
+    """建物全体の平面範囲 (x0, y0, x1, y1) [mm]. 全部材 (ダミー断面は部材化されない) の端点から.
+
+    伏図の通り芯は、部分的なフロアでもこの範囲で描く (全階で通り芯の長さ・位置を揃える)。
+    """
+    if not hasattr(M, '_plan_bbox_mm'):
+        xs, ys = [], []
+        for m in M.members:
+            for pnt in (m['p1'], m['p2']):
+                xs.append(float(pnt[0]) * 1000.0)
+                ys.append(float(pnt[1]) * 1000.0)
+        M._plan_bbox_mm = ((min(xs), min(ys), max(xs), max(ys)) if xs else None)
+    return M._plan_bbox_mm
+
+
+def _grids_for_plan(lines, bbox, n_scale):
+    """伏図 (X, Y [mm]) の通り芯. 丸記号は縦の通りなら下端、横の通りなら左端.
+
+    bbox: 部材の外形 (x0, y0, x1, y1)。図と交わらない通り (部分的な床の外の通り) は描かない。
+    """
+    if not lines:
+        return []
+    x0, y0, x1, y1 = bbox
+    ext = GRID_OVERHANG_PAPER_MM * n_scale
+    r = GRID_BUBBLE_R_PAPER_MM * n_scale
+    out = []
+    for g in lines:
+        p = g['p'] * 1000.0
+        u = g['u']
+        # 直線 p + t*u のうち図の範囲 (GRID_HIT_TOL_MM 広げた矩形) を通る区間
+        tlo, thi = -np.inf, np.inf
+        hit = True
+        for k, (lo, hi) in enumerate(((x0 - GRID_HIT_TOL_MM, x1 + GRID_HIT_TOL_MM),
+                                      (y0 - GRID_HIT_TOL_MM, y1 + GRID_HIT_TOL_MM))):
+            if abs(u[k]) < 1e-12:
+                if not (lo <= p[k] <= hi):
+                    hit = False
+                continue
+            ta, tb = sorted(((lo - p[k]) / u[k], (hi - p[k]) / u[k]))
+            tlo, thi = max(tlo, ta), min(thi, tb)
+        if not hit or tlo > thi:
+            continue  # 図と交わらない通り
+        e1 = p + u * (float(tlo) + GRID_HIT_TOL_MM - ext)
+        e2 = p + u * (float(thi) - GRID_HIT_TOL_MM + ext)
+        if abs(u[1]) >= abs(u[0]):
+            start, other = (e1, e2) if e1[1] <= e2[1] else (e2, e1)
+        else:
+            start, other = (e1, e2) if e1[0] <= e2[0] else (e2, e1)
+        d = start - other
+        d = d / float(np.hypot(d[0], d[1]))
+        c = start + d * r
+        out.append({'label': g['label'],
+                    'p1': (float(e1[0]), float(e1[1])),
+                    'p2': (float(e2[0]), float(e2[1])),
+                    'bubble': (float(c[0]), float(c[1])), 'r': r})
+    return out
+
+
+def _levels_for_elevation(levels, bbox, n_scale):
+    """軸組図 (s, Z [mm]) のレベル線. 構面の高さの範囲にあるものだけ、図の左右へ線の出を付けて描く."""
+    if not levels:
+        return []
+    s_min, z_min, s_max, z_max = bbox
+    ext = GRID_OVERHANG_PAPER_MM * n_scale
+    out = []
+    for label, z in levels:
+        if z < z_min - GRID_HIT_TOL_MM or z > z_max + GRID_HIT_TOL_MM:
+            continue
+        out.append({'label': label, 'p1': (float(s_min - ext), float(z)),
+                    'p2': (float(s_max + ext), float(z))})
+    return out
+
+
+def _grids_for_elevation(lines, center, u, bbox, n_scale):
+    """軸組図 (s, Z [mm]) の通り芯. この構面と交わる通りだけを縦線で描き、丸記号は下端.
+
+    bbox: 部材の外形 (s0, z0, s1, z1)。節点=梁天端なので、下端は節点ではなく外形で決める。
+    """
+    if not lines:
+        return []
+    s_min, z_min, s_max, z_max = bbox
+    ext = GRID_OVERHANG_PAPER_MM * n_scale
+    r = GRID_BUBBLE_R_PAPER_MM * n_scale
+    tol = GRID_HIT_TOL_MM
+    out = []
+    seen = []
+    for g in lines:
+        x = _line_intersect(center, u, g['p'], g['u'])
+        if x is None:
+            continue  # 構面と平行 (この構面自身など)
+        s = float((x[0] - center[0]) * u[0] + (x[1] - center[1]) * u[1]) * 1000.0
+        if s < s_min - tol or s > s_max + tol:
+            continue
+        if any(abs(s - v) < 1.0 for v in seen):
+            continue
+        seen.append(s)
+        zb = z_min - ext
+        out.append({'label': g['label'], 'p1': (s, float(zb)),
+                    'p2': (s, float(z_max + ext)),
+                    'bubble': (s, float(zb - r)), 'r': r})
+    return out
+
+
 def _member_quad(q1, q2, half_w, cut1, cut2):
     """中心線 q1→q2 (mm) を両端 cut 短縮した矩形4隅にする.
 
@@ -719,10 +906,11 @@ def _line_intersect(p1, d1, p2, d2):
     return np.asarray(p1, dtype=float) + np.asarray(d1, dtype=float) * t
 
 
-def auto_scale(width_mm, height_mm, paper='A3'):
+def auto_scale(width_mm, height_mm, paper='A3', extra_paper_mm=0.0):
+    """用紙に収まる縮尺. extra_paper_mm: 図の外に付く通り芯などの紙面寸法 (縦横とも)."""
     pw, ph = PAPER_MM.get(paper, PAPER_MM['A3'])
-    aw = pw - 2 * PAPER_MARGIN_MM
-    ah = ph - 2 * PAPER_MARGIN_MM - 10.0
+    aw = pw - 2 * PAPER_MARGIN_MM - extra_paper_mm
+    ah = ph - 2 * PAPER_MARGIN_MM - 10.0 - extra_paper_mm
     need = max(width_mm / max(aw, 1.0), height_mm / max(ah, 1.0))
     for s in SCALE_SERIES:
         if s >= need:
@@ -746,6 +934,14 @@ class _FigBuilder(object):
         self.lines = {}
         self.inserts = []         # (code, b_mm, d_mm, is_round, (x,y), rot, mclass)
         self.texts = []           # ((x,y), txt, ang, mclass)
+        self.grids = []           # {label, p1, p2, bubble, r} 通り芯
+        self.rects_dashed = {}    # 木造柱伏図の破線の梁 {mclass: [corners]}
+        self.inserts_down = []    # 木造伏図の下柱 (×印のみ) inserts と同じ形
+        self.walls = []           # 木造の壁 [corners] (柱伏図=立上り壁 / 軸組図=壁パネル)
+        self.wall_hatch = False   # True なら walls に斜線ハッチを付ける (軸組図)
+        self.levels = []          # 軸組図のレベル線 {label, p1, p2}
+        self.level_spec = []      # (表示名, Z[mm]) → _finish_fig で levels にする
+        self.grid_spec = ([], None)  # (通り芯の直線, 図の種類) → _finish_fig で grids にする
         self._ins_seen = set()
 
     def add_rect(self, mclass, corners):
@@ -796,11 +992,16 @@ def _upward(n):
 # ---------------------------------------------------------------------------
 
 def build_elevation(M, key, pin_paper_mm=1.5, scale=None, paper='A3',
-                    text_paper_mm=2.5):
+                    text_paper_mm=2.5, grids=None, levels=None, wood=False):
     """軸組図の2D図形を組み立てる. 座標系: (構面内s, Z) [mm].
 
     key: 'X=<座標>' / 'Y=<座標>' (自動検出通り) または 'G:<グループ名>'
+    grids: 通り芯として描く通りのキー (auto_frames のキー)。この構面と交わるものだけ描く
+    levels: レベル線にするフロアのキー (plan_keys のキー)。構面の高さの範囲にあるものだけ描く
+    wood: True なら壁パネル (外形・斜線ハッチ・板厚符号) も描く
     """
+    grid_ls = grid_lines(M, grids)
+    level_ls = level_lines(M, levels)
     center, u, node_set, gname = _frame_geometry(M, str(key))
     theta = math.atan2(u[1], u[0])
 
@@ -821,9 +1022,14 @@ def build_elevation(M, key, pin_paper_mm=1.5, scale=None, paper='A3',
     arr = np.asarray(pts)
     w = float(arr[:, 0].max() - arr[:, 0].min())
     h = float(arr[:, 1].max() - arr[:, 1].min())
-    n_scale = int(scale) if scale else auto_scale(w, h, paper)
+    extra = _grid_extra_paper_mm(grid_ls)
+    if level_ls:
+        extra = max(extra, 2 * GRID_OVERHANG_PAPER_MM)
+    n_scale = int(scale) if scale else auto_scale(w, h, paper, extra)
     F = _FigBuilder(M, n_scale, pin_paper_mm * n_scale / 1000.0,
                     text_paper_mm * n_scale)
+    F.grid_spec = (grid_ls, ('elev', center, u))
+    F.level_spec = level_ls
 
     def q_of(node_no):
         p = M.node_xyz[int(node_no)]
@@ -950,6 +1156,14 @@ def build_elevation(M, key, pin_paper_mm=1.5, scale=None, paper='A3',
             pos = (s_of(M.node_xyz[int(node_no)]) * 1000, pz * 1000)
             F.add_insert(m2, pos, m2['beta'])
 
+    # ---- 木造: 壁パネル (外形 + 斜線ハッチ + 板厚符号、パネル1枚ごと) ----
+    if wood:
+        for poly, (cx, cy), name in _wood_elevation_walls(M, node_set, s_of):
+            F.walls.append(poly)
+            F.wall_hatch = True
+            if name:
+                F.texts.append(((float(cx), float(cy)), name, 0.0, 'WOOD'))
+
     return _finish_fig(F, arr, '軸組図 %s  S=1/%d (%s)'
                        % (gname, n_scale, paper), n_scale, w, h)
 
@@ -1001,11 +1215,47 @@ def _apply_miter(quad, i, ei, j, ej):
 def _finish_fig(F, arr, title, n_scale, w, h):
     xs = list(arr[:, 0])
     ys = list(arr[:, 1])
-    for (_c, b, d, _r, (x, y), _rot, _mc) in F.inserts:
+    for (_c, b, d, _r, (x, y), _rot, _mc) in F.inserts + F.inserts_down:
         xs += [x - b / 2, x + b / 2]
         ys += [y - d, y]
+    for corners in F.walls:
+        xs += [c[0] for c in corners]
+        ys += [c[1] for c in corners]
+    grid_ls, kind = F.grid_spec
+    if grid_ls or F.level_spec:
+        # 通り芯の位置決めだけは部材の外形 (矩形・線) も含めた範囲で行う。
+        # 図の bounds (配置・見出し位置) は通り芯なしのときと変えない。
+        gx, gy = list(xs), list(ys)
+        for rect_list in list(F.rects.values()) + list(F.rects_dashed.values()):
+            for corners in rect_list:
+                gx += [c[0] for c in corners]
+                gy += [c[1] for c in corners]
+        for seg_list in F.lines.values():
+            for p1, p2 in seg_list:
+                gx += [p1[0], p2[0]]
+                gy += [p1[1], p2[1]]
+        bbox = (min(gx), min(gy), max(gx), max(gy))
+        if kind[0] == 'elev':
+            F.grids = _grids_for_elevation(grid_ls, kind[1], kind[2], bbox, n_scale)
+            F.levels = _levels_for_elevation(F.level_spec, bbox, n_scale)
+        else:
+            gb = model_plan_bbox_mm(F.M)
+            if gb:
+                bbox = (min(bbox[0], gb[0]), min(bbox[1], gb[1]),
+                        max(bbox[2], gb[2]), max(bbox[3], gb[3]))
+            F.grids = _grids_for_plan(grid_ls, bbox, n_scale)
+    for lv in F.levels:
+        xs += [lv['p1'][0], lv['p2'][0]]
+        ys += [lv['p1'][1], lv['p2'][1]]
+    for g in F.grids:
+        (bx, by), r = g['bubble'], g['r']
+        xs += [g['p1'][0], g['p2'][0], bx - r, bx + r]
+        ys += [g['p1'][1], g['p2'][1], by - r, by + r]
     return {'rects': F.rects, 'lines': F.lines, 'inserts': F.inserts,
-            'texts': F.texts, 'extent': (w, h), 'scale': n_scale,
+            'texts': F.texts, 'grids': F.grids,
+            'rects_dashed': F.rects_dashed, 'inserts_down': F.inserts_down,
+            'walls': F.walls, 'wall_hatch': F.wall_hatch, 'levels': F.levels,
+            'extent': (w, h), 'scale': n_scale,
             'title': title,
             'bounds': (min(xs), min(ys), max(xs), max(ys))}
 
@@ -1038,23 +1288,325 @@ def plan_keys(M):
             for z in plan_levels(M)]
 
 
+def _group_floor_nodes(M, gname):
+    """床グループの節点. NODE_LIST が空なら ELEM_LIST の梁の節点で代える."""
+    nodes, eles = _group_arrays(M, gname)
+    if nodes:
+        return list(nodes)
+    out = set()
+    for m in M.members:
+        if m['kind'] != 'column' and _member_in_group(m, eles):
+            out.update([int(m['n1']), int(m['n2'])] + list(m.get('mid_nodes', [])))
+    return [n for n in out if n in M.node_xyz]
+
+
+def plan_key_z(M, key):
+    """伏図キー → 床レベル Z [m]. グループは節点Zの平均 (struct_cad と同じ)."""
+    key = str(key)
+    if key.startswith('G:'):
+        nodes = _group_floor_nodes(M, key[2:])
+        zs = [float(M.node_xyz[n][2]) for n in nodes]
+        if not zs:
+            raise ValueError('グループ %s に節点がありません' % key[2:])
+        return sum(zs) / len(zs)
+    return float(key)
+
+
+def plan_key_is_flat(M, key):
+    """伏図キーが水平な床か (勾配屋根などはレベル線の既定から外す)."""
+    key = str(key)
+    if not key.startswith('G:'):
+        return True
+    zs = [float(M.node_xyz[n][2]) for n in _group_floor_nodes(M, key[2:])]
+    return bool(zs) and (max(zs) - min(zs)) < LEVEL_FLAT_TOL
+
+
+def level_lines(M, keys):
+    """レベル線にするフロアのキー → list of (表示名, Z [mm]). 同じ高さは先の方だけ."""
+    out = []
+    for key in (keys or []):
+        key = str(key)
+        try:
+            z = plan_key_z(M, key) * 1000.0
+        except (ValueError, IndexError):
+            _note_once(M, '注意: レベル %s の高さを決められないため描きません' % key)
+            continue
+        label = key[2:] if key.startswith('G:') else '%+.3f' % float(key)
+        dup = next((lb for lb, zz in out if abs(zz - z) < 1.0), None)
+        if dup is not None:
+            _note_once(M, '注意: レベル %s は %s と同じ高さのため省略します'
+                       % (label, dup))
+            continue
+        out.append((label, z))
+    return out
+
+
+def wood_top_z(M):
+    """木造の最上階レベル: 伏図候補 (選択に関係なくモデル全体) の最大Z."""
+    zs = []
+    for p in plan_keys(M):
+        try:
+            zs.append(plan_key_z(M, p['key']))
+        except (ValueError, IndexError):
+            continue
+    return max(zs) if zs else None
+
+
+def wood_plan_sheets(M, key, top_z=None):
+    """木造での伏図の枚数: 最上階は ['full']、それ以外は ['beam', 'column']."""
+    if top_z is None:
+        top_z = wood_top_z(M)
+    z = plan_key_z(M, key)
+    if top_z is None or z >= top_z - WOOD_TOP_TOL:
+        return ['full']
+    return ['beam', 'column']
+
+
+def _wood_plan_columns(M, floor_nodes):
+    """床節点に置く柱 (struct_cad _columns_at_node と同じ規則).
+
+    戻り値: list of (member index, 節点番号, down, 符号を付けるか)
+      - 節点を貫通する通し柱 → その柱1本 (上柱扱い)
+      - 上柱と下柱が別部材で、どちらかがその節点でピン → 上柱+下柱
+      - 剛で分かれているだけ → 上柱のみ / 片側しか無ければその側
+      down=True は下柱 (×印のみ)。符号は上柱 (通し柱) にだけ付ける。
+    """
+    out = []
+    for node in sorted(set(int(n) for n in floor_nodes)):
+        if node not in M.node_xyz:
+            continue
+        nz = float(M.node_xyz[node][2])
+        up, down, through = [], [], None
+        for j in M.node_members.get(node, []):
+            m = M.members[j]
+            if m['kind'] != 'column':
+                continue
+            if node in (int(m['n1']), int(m['n2'])):
+                far = m['p2'] if int(m['n1']) == node else m['p1']
+                pinned = m['pin1'] if int(m['n1']) == node else m['pin2']
+                if far[2] > nz + Z_TOL:
+                    up.append((j, pinned))
+                elif far[2] < nz - Z_TOL:
+                    down.append((j, pinned))
+            elif _column_through(M, m, nz):
+                through = j
+        if through is not None:
+            out.append((through, node, False, True))
+            continue
+        pin_split = bool(up) and bool(down) and any(
+            pinned for _j, pinned in up + down)
+        if up:
+            out.append((up[0][0], node, False, True))
+        if down and (pin_split or not up):
+            out.append((down[0][0], node, True, False))
+    return out
+
+
+def _thickness_table(mgt_path):
+    """*THICKNESS を寛容に読む → {厚さID: (板厚[m], 名称)}.
+
+    VALUE型: iTHK, TYPE, [NAME,] bSAME, THIK-IN, ... 。名称の有無どちらも読む
+    (struct_cad read/thickness.py と同じ規則)。
+    """
+    out = {}
+    ins = False
+    for ln in read_mgt_text(mgt_path).split('\n'):
+        st = ln.strip()
+        if st.startswith('*'):
+            ins = st.startswith('*THICKNESS')
+            continue
+        if not ins or not st or st.startswith(';'):
+            continue
+        f = [x.strip() for x in ln.split(',')]
+        if len(f) < 2 or _is_number(f[1]):
+            continue  # 続き行
+        try:
+            tid = int(float(f[0]))
+        except ValueError:
+            continue
+        val, name = 0.0, ''
+        for t in f[1:]:
+            if _is_number(t):
+                val = float(t)
+                break
+            if not name and t.upper() not in ('VALUE', 'STIFFENED', 'USER',
+                                              'YES', 'NO', 'DB'):
+                name = t
+        out[tid] = (val, name)
+    return out
+
+
+def _is_number(t):
+    try:
+        float(t)
+        return True
+    except ValueError:
+        return False
+
+
+def _surface_elements(mgt_path):
+    """*ELEMENT の PLATE / WALL 行 → list of (要素番号, 厚さID, [節点...])."""
+    out = []
+    ins = False
+    for ln in read_mgt_text(mgt_path).split('\n'):
+        st = ln.strip()
+        if st.startswith('*'):
+            ins = st.startswith('*ELEMENT')
+            continue
+        if not ins or not st or st.startswith(';'):
+            continue
+        f = [x.strip() for x in ln.split(',')]
+        if len(f) < 7 or f[1].upper() not in ('PLATE', 'WALL'):
+            continue
+        try:
+            nodes = [int(float(v)) for v in f[4:8] if v and float(v) > 0]
+            out.append((int(float(f[0])), int(float(f[3])), nodes))
+        except ValueError:
+            continue
+    return out
+
+
+def _ensure_surfaces(M):
+    """面要素 (PLATE/WALL) と板厚表をモデルに読み込んでおく (1回だけ)."""
+    if not hasattr(M, '_surfaces'):
+        M._surfaces = _surface_elements(M.mgt_path)
+        M._thickness = _thickness_table(M.mgt_path)
+
+
+def _wood_elevation_walls(M, node_set, s_of):
+    """軸組図に描く壁パネル → list of (投影ポリゴン[(s,z) mm], 重心, 板厚名称).
+
+    壁 = 節点がすべてこの構面の節点に含まれる PLATE/WALL 要素 (部材の選び方と同じ)。
+    パネル 1 枚ごと (struct_cad axis_elevation と同じ)。
+    """
+    _ensure_surfaces(M)
+    out = []
+    for _ele, tid, nodes in M._surfaces:
+        if len(nodes) < 3 or any(n not in node_set or n not in M.node_xyz
+                                 for n in nodes):
+            continue
+        poly = [(s_of(M.node_xyz[n]) * 1000.0, float(M.node_xyz[n][2]) * 1000.0)
+                for n in nodes]
+        area2 = sum(poly[i][0] * poly[(i + 1) % len(poly)][1]
+                    - poly[(i + 1) % len(poly)][0] * poly[i][1]
+                    for i in range(len(poly)))
+        if abs(area2) < 1.0:
+            continue  # 構面に対して真横を向いた面 (投影が線になる)
+        cx = sum(p[0] for p in poly) / len(poly)
+        cy = sum(p[1] for p in poly) / len(poly)
+        _t, name = M._thickness.get(tid, (0.0, ''))
+        out.append((poly, (cx, cy), name))
+    return out
+
+
+def _plane_inclination_deg(pts):
+    """節点群にフィットした面の水平面からの傾き [deg] (0=水平, 90=鉛直)."""
+    pts = np.asarray(pts, dtype=float)
+    if len(pts) < 3:
+        return 90.0 if np.ptp(pts[:, 2]) > 1e-6 else 0.0
+    q = pts - pts.mean(axis=0)
+    w, v = np.linalg.eigh(q.T @ q)
+    if w[1] <= 1e-9 * max(w[2], 1e-12):
+        return 90.0 if np.ptp(pts[:, 2]) > 1e-6 else 0.0
+    nz = abs(float(v[2, 0]))
+    return math.degrees(math.acos(min(1.0, nz)))
+
+
+def _wood_rising_walls(M, fz, floor_xy_box):
+    """床レベル fz から立ち上がる壁 → list of (corners[mm], 中点[mm], 角度, 名称).
+
+    壁 = 60度以上傾いた PLATE/WALL 要素で、下端が fz にあり、平面位置が
+    その床の範囲内のもの。矩形は struct_cad _wall_rect と同じ:
+    外面を下の梁の外側の縁 (床の重心から遠い側) に合わせ、板厚だけ内側へ広げる。
+    """
+    _ensure_surfaces(M)
+    x0, y0, x1, y1 = floor_xy_box
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    out = []
+    for _ele, tid, nodes in M._surfaces:
+        pts = [M.node_xyz[n] for n in nodes if n in M.node_xyz]
+        if len(pts) < 3:
+            continue
+        if _plane_inclination_deg(pts) < WALL_INCLINE_DEG:
+            continue
+        zmin = min(float(p[2]) for p in pts)
+        if abs(zmin - fz) > WALL_BASE_TOL:
+            continue
+        mx = sum(float(p[0]) for p in pts) / len(pts)
+        my = sum(float(p[1]) for p in pts) / len(pts)
+        if not (x0 - 0.1 <= mx <= x1 + 0.1 and y0 - 0.1 <= my <= y1 + 0.1):
+            continue
+        t, name = M._thickness.get(tid, (0.0, ''))
+        if t <= 0.0:
+            continue
+        # 平面上の線分 = 最も離れた2点
+        uniq = list(dict.fromkeys((round(float(p[0]), 4), round(float(p[1]), 4))
+                                  for p in pts))
+        if len(uniq) < 2:
+            continue
+        best, bd = None, -1.0
+        for i in range(len(uniq)):
+            for j in range(i + 1, len(uniq)):
+                d = (uniq[i][0] - uniq[j][0]) ** 2 + (uniq[i][1] - uniq[j][1]) ** 2
+                if d > bd:
+                    bd, best = d, (uniq[i], uniq[j])
+        (ax, ay), (bx, by) = best
+        L = math.hypot(bx - ax, by - ay)
+        if L < 1e-9:
+            continue
+        ux, uy = (bx - ax) / L, (by - ay) / L
+        nx, ny = -uy, ux
+        if nx * ((ax + bx) / 2 - cx) + ny * ((ay + by) / 2 - cy) < 0:
+            nx, ny = -nx, -ny   # 外向き (床の重心から遠い側)
+        # 下端2節点を結ぶ梁の平面見付け幅 (無ければ板厚)
+        bottom = set(n for n in nodes if n in M.node_xyz
+                     and abs(float(M.node_xyz[n][2]) - zmin) < 1e-6)
+        support = t
+        if len(bottom) >= 2:
+            for j in M.node_members.get(next(iter(bottom)), []):
+                m = M.members[j]
+                if m['kind'] == 'column':
+                    continue
+                mn = set([int(m['n1']), int(m['n2'])] + list(m.get('mid_nodes', [])))
+                if bottom <= mn:
+                    support = _beam_width_plan(m) * 2.0
+                    break
+        outer = support / 2.0
+        inner = outer - t
+        corners = [((ax + nx * outer) * 1000, (ay + ny * outer) * 1000),
+                   ((bx + nx * outer) * 1000, (by + ny * outer) * 1000),
+                   ((bx + nx * inner) * 1000, (by + ny * inner) * 1000),
+                   ((ax + nx * inner) * 1000, (ay + ny * inner) * 1000)]
+        mid = (((ax + bx) / 2 + nx * outer) * 1000, ((ay + by) / 2 + ny * outer) * 1000)
+        ang = math.degrees(math.atan2(uy, ux))
+        out.append((corners, mid, ang, (nx, ny), name))
+    return out
+
+
 def build_plan(M, level, pin_paper_mm=1.5, scale=None, paper='A3',
-               text_paper_mm=2.5):
+               text_paper_mm=2.5, grids=None, wood_sheet=None, top_z=None):
     """伏図の2D図形を組み立てる. 座標系: (X, Y) [mm].
 
     level: 'G:<グループ名>' (グループのELEM_LISTの部材のみ作図)
            または梁天端レベル [m] (数値)
+    grids: 通り芯として描く通りのキー (auto_frames のキー)
+    wood_sheet: None=木造以外 (従来どおり) / 木造では 'full' (最上階) /
+                'beam' (梁伏図) / 'column' (柱伏図)
     """
+    grid_ls = grid_lines(M, grids)
+    wood = wood_sheet is not None
+    level_key = level
     if isinstance(level, str) and level.startswith('G:'):
         gname = level[2:]
-        _nodes, eles = _group_arrays(M, gname)
+        grp_nodes, eles = _group_arrays(M, gname)
         beam_idx = [i for i, m in enumerate(M.members)
                     if m['kind'] in ('beam', 'brace')
                     and _member_in_group(m, eles)]
         col_idx = [i for i, m in enumerate(M.members)
                    if m['kind'] == 'column' and _member_in_group(m, eles)]
         title = '伏図 %s' % gname
-        if not beam_idx and not col_idx:
+        floor_nodes = _group_floor_nodes(M, gname)
+        if not beam_idx and not col_idx and not wood:
             raise ValueError('グループ %s に描画できる部材がありません'
                              ' (ELEM_LIST を確認してください)' % gname)
     else:
@@ -1068,25 +1620,54 @@ def build_plan(M, level, pin_paper_mm=1.5, scale=None, paper='A3',
                    and (abs(max(m['p1'][2], m['p2'][2]) - level) < Z_TOL
                         or _column_through(M, m, level))]
         title = '伏図 レベル%+.3fm' % level
-        if not beam_idx and not col_idx:
+        floor_nodes = set()
+        for i in beam_idx:
+            floor_nodes.update([int(M.members[i]['n1']), int(M.members[i]['n2'])]
+                               + list(M.members[i].get('mid_nodes', [])))
+        for n, p in M.node_xyz.items():
+            if abs(float(p[2]) - level) < Z_TOL and M.node_members.get(int(n)):
+                floor_nodes.add(int(n))
+        if not beam_idx and not col_idx and not wood:
             raise ValueError('レベル %.3fm に描画できる部材がありません'
                              % level)
+
+    if wood:
+        # 木造: 柱は「その床から上へ伸びる柱」(struct_cad 方式) で選び直す
+        wood_cols = _wood_plan_columns(M, floor_nodes)
+        if wood_sheet == 'beam':
+            title = title.replace('伏図', '梁伏図', 1)
+        elif wood_sheet == 'column':
+            title = title.replace('伏図', '柱伏図', 1)
+        if not beam_idx and not wood_cols:
+            raise ValueError('%s に描画できる部材がありません' % title)
 
     pts = []
     for i in beam_idx:
         m = M.members[i]
         pts.append(m['p1'][:2] * 1000)
         pts.append(m['p2'][:2] * 1000)
-    for i in col_idx:
-        m = M.members[i]
-        top = m['p1'] if m['p1'][2] > m['p2'][2] else m['p2']
-        pts.append(top[:2] * 1000)
+    if wood:
+        for _j, node, _down, _lab in wood_cols:
+            pts.append(M.node_xyz[node][:2] * 1000)
+    else:
+        for i in col_idx:
+            m = M.members[i]
+            top = m['p1'] if m['p1'][2] > m['p2'][2] else m['p2']
+            pts.append(top[:2] * 1000)
     arr = np.asarray(pts)
     w = float(arr[:, 0].max() - arr[:, 0].min())
     h = float(arr[:, 1].max() - arr[:, 1].min())
-    n_scale = int(scale) if scale else auto_scale(w, h, paper)
+    sw, sh = w, h
+    gb = model_plan_bbox_mm(M) if grid_ls else None
+    if gb:
+        # 通り芯は建物全体の範囲で描くので、縮尺もその範囲が収まるように選ぶ
+        sw = max(float(arr[:, 0].max()), gb[2]) - min(float(arr[:, 0].min()), gb[0])
+        sh = max(float(arr[:, 1].max()), gb[3]) - min(float(arr[:, 1].min()), gb[1])
+    n_scale = int(scale) if scale else auto_scale(
+        sw, sh, paper, _grid_extra_paper_mm(grid_ls))
     F = _FigBuilder(M, n_scale, pin_paper_mm * n_scale / 1000.0,
                     text_paper_mm * n_scale)
+    F.grid_spec = (grid_ls, ('plan',))
     beam_set = set(beam_idx)
 
     # マイター (柱の無いコーナー)
@@ -1139,7 +1720,8 @@ def build_plan(M, level, pin_paper_mm=1.5, scale=None, paper='A3',
             r = _member_quad(q1, q2, 0.0, cut1, cut2)
             if r:
                 F.add_line(m['mclass'], r[0], r[1])
-                F.add_beam_text(m, r[0], r[1], np.array([0.0, 0.0]))
+                if wood_sheet != 'column':
+                    F.add_beam_text(m, r[0], r[1], np.array([0.0, 0.0]))
             continue
         r = _member_quad(q1, q2, _beam_width_plan(m) * 1000, cut1, cut2)
         if r is None:
@@ -1157,23 +1739,65 @@ def build_plan(M, level, pin_paper_mm=1.5, scale=None, paper='A3',
     for i, r in quad.items():
         m = M.members[i]
         a1, a2, uu, nn, corners = r
+        if wood_sheet == 'column':
+            F.rects_dashed.setdefault(m['mclass'], []).append(
+                [(float(c[0]), float(c[1])) for c in corners])
+            continue  # 柱伏図の梁は破線・符号なし
         F.add_rect(m['mclass'], corners)
         F.add_beam_text(m, a1, a2, _upward(nn))
 
     # 柱断面 (断面ブロック、β回転、基点=天端中央→中心合わせ補正)
-    for i in col_idx:
-        m = M.members[i]
-        top = (m['p1'] if m['p1'][2] > m['p2'][2] else m['p2'])[:2] * 1000
+    def _put_column(m, xy, down=False, label=True):
         rot = m['beta'] + 90.0  # β=0で幅BがY方向 (規約反転 2026-07-13)
         rad = math.radians(rot)
         off = np.array([-math.sin(rad), math.cos(rad)]) * (m['d'] * 1000 / 2)
-        F.add_insert(m, (top[0] + off[0], top[1] + off[1]), rot)
-        rb = math.radians(m['beta'])
-        half_y = (abs(math.cos(rb)) * m['b']
-                  + abs(math.sin(rb)) * m['d']) * 1000 / 2
-        F.texts.append(((float(top[0]),
-                         float(top[1] + half_y + 0.15 * F.th)),
-                        m['code'], 0.0, m['mclass']))
+        pos = (xy[0] + off[0], xy[1] + off[1])
+        if down:
+            key = (m['code'], round(float(pos[0])), round(float(pos[1])), 'down')
+            if key not in F._ins_seen:
+                F._ins_seen.add(key)
+                F.inserts_down.append((m['code'], m['b'] * 1000, m['d'] * 1000,
+                                       m['is_round'], (float(pos[0]), float(pos[1])),
+                                       float(rot), m['mclass']))
+        else:
+            F.add_insert(m, pos, rot)
+        if label:
+            rb = math.radians(m['beta'])
+            half_y = (abs(math.cos(rb)) * m['b']
+                      + abs(math.sin(rb)) * m['d']) * 1000 / 2
+            F.texts.append(((float(xy[0]),
+                             float(xy[1] + half_y + 0.15 * F.th)),
+                            m['code'], 0.0, m['mclass']))
+
+    if wood:
+        for j, node, down, lab in wood_cols:
+            _put_column(M.members[j], M.node_xyz[node][:2] * 1000, down=down,
+                        label=lab and wood_sheet != 'beam')
+    else:
+        for i in col_idx:
+            m = M.members[i]
+            top = (m['p1'] if m['p1'][2] > m['p2'][2] else m['p2'])[:2] * 1000
+            _put_column(m, top)
+
+    # 木造の柱伏図: その床から立ち上がる壁 (板厚の矩形 + 板厚符号)
+    if wood_sheet == 'column':
+        fz = plan_key_z(M, level_key)
+        xs = [float(M.node_xyz[n][0]) for n in floor_nodes if n in M.node_xyz]
+        ys = [float(M.node_xyz[n][1]) for n in floor_nodes if n in M.node_xyz]
+        if xs:
+            for corners, mid, ang, (nx, ny), name in _wood_rising_walls(
+                    M, fz, (min(xs), min(ys), max(xs), max(ys))):
+                F.walls.append(corners)
+                if not name:
+                    continue
+                a = ang
+                if a > 90 or a <= -90:
+                    a += 180
+                up = (-math.sin(math.radians(a)), math.cos(math.radians(a)))
+                pos = (mid[0] + nx * 0.15 * F.th, mid[1] + ny * 0.15 * F.th)
+                if nx * up[0] + ny * up[1] < 0:   # 外向きが文字の下向き → 文字高さ分さらに外へ
+                    pos = (pos[0] + nx * F.th, pos[1] + ny * F.th)
+                F.texts.append(((float(pos[0]), float(pos[1])), name, a, 'WOOD'))
 
     return _finish_fig(F, arr, '%s  S=1/%d (%s)'
                        % (title, n_scale, paper), n_scale, w, h)
@@ -1187,10 +1811,35 @@ def _new_doc():
     import ezdxf
     doc = ezdxf.new('R2010', setup=True)
     for name, color in (list(LAYER_DEF.values()) + list(LAYER_SEC.values())
-                        + [LAYER_TEXT, LAYER_TITLE]):
+                        + [LAYER_TEXT, LAYER_TITLE, LAYER_GRID]):
         if name not in doc.layers:
             doc.layers.add(name, color=color)
     return doc
+
+
+def _scaled_linetype(doc, prefix, paper_pattern, n_scale):
+    """紙面寸法のパターンに縮尺を焼き込んだ線種を定義して名前を返す.
+
+    線種尺度 (LTSCALE/CELTSCALE) の扱いは CAD ごとに違うため、
+    図の縮尺ごとに別の線種を定義する。
+    """
+    name = '%s_S%d' % (prefix, int(n_scale))
+    if name not in doc.linetypes:
+        pat = [float(v) * n_scale for v in paper_pattern]
+        total = sum(abs(v) for v in pat)
+        doc.linetypes.add(name, pattern=[total] + pat,
+                          description='%s 1/%d' % (prefix, int(n_scale)))
+    return name
+
+
+def _grid_linetype(doc, n_scale):
+    """縮尺ごとの一点鎖線 (通り芯)."""
+    return _scaled_linetype(doc, 'GRID_DASHDOT', GRID_DASHDOT_PAPER_MM, n_scale)
+
+
+def _ensure_layer(doc, name, color):
+    if name not in doc.layers:
+        doc.layers.add(name, color=color)
 
 
 def _block_name(code):
@@ -1199,7 +1848,7 @@ def _block_name(code):
     return 'sec_' + (s or 'X')
 
 
-def _ensure_sec_block(doc, code, b_mm, d_mm, is_round):
+def _ensure_sec_block(doc, code, b_mm, d_mm, is_round, down=False):
     """断面ブロック (基点=天端中央、矩形/円+対角×) を定義して名前を返す.
 
     同じ符号で寸法違いの断面がある場合 (例: 柱WC3と梁WC3) は
@@ -1210,10 +1859,10 @@ def _ensure_sec_block(doc, code, b_mm, d_mm, is_round):
         reg = {}
         doc._mgtkit_sec_reg = reg
     key = (str(code), round(float(b_mm), 1), round(float(d_mm), 1),
-           bool(is_round))
+           bool(is_round), bool(down))
     if key in reg:
         return reg[key]
-    name = _block_name(code)
+    name = _block_name(code) + ('_down' if down else '')
     if name in doc.blocks:
         name = '%s_%dx%d' % (_block_name(code), round(b_mm), round(d_mm))
         n2 = name
@@ -1225,6 +1874,12 @@ def _ensure_sec_block(doc, code, b_mm, d_mm, is_round):
     reg[key] = name
     blk = doc.blocks.new(name)
     attr = {'layer': '0'}
+    if down:
+        # 下柱: 外形なしの×印のみ (struct_cad の <符号>_section2 と同じ表現)
+        hb = (d_mm if is_round else b_mm) / 2.0
+        blk.add_line((hb, 0.0), (-hb, -d_mm), dxfattribs=attr)
+        blk.add_line((hb, -d_mm), (-hb, 0.0), dxfattribs=attr)
+        return name
     if is_round:
         r = d_mm / 2.0
         blk.add_circle((0.0, -r), r, dxfattribs=attr)
@@ -1247,6 +1902,20 @@ def _fig_to_msp(fig, msp, text_paper_mm=2.5, title_paper_mm=5.0,
     ox, oy = origin
     n = fig['scale']
     th = text_paper_mm * n
+    if fig.get('prims'):
+        from .dxf_list import prims_to_msp
+        prims_to_msp(fig['prims'], msp, origin)
+    walls = fig.get('walls') or []
+    if walls:
+        _ensure_layer(doc, LAYER_WALL[0], LAYER_WALL[1])
+    for corners in walls:
+        pts = [(x + ox, y + oy) for (x, y) in corners]
+        if fig.get('wall_hatch'):
+            hatch = msp.add_hatch(dxfattribs={'layer': LAYER_WALL[0]})
+            hatch.set_pattern_fill('ANSI31', scale=WALL_HATCH_PAPER_MM * n
+                                   / ANSI31_SPACING)
+            hatch.paths.add_polyline_path(pts, is_closed=True)
+        msp.add_lwpolyline(pts, close=True, dxfattribs={'layer': LAYER_WALL[0]})
     for mclass, rect_list in fig.get('rects', {}).items():
         layer = LAYER_DEF[mclass][0]
         for corners in rect_list:
@@ -1263,11 +1932,46 @@ def _fig_to_msp(fig, msp, text_paper_mm=2.5, title_paper_mm=5.0,
         name = _ensure_sec_block(doc, code, b, d, is_round)
         msp.add_blockref(name, (x + ox, y + oy), dxfattribs={
             'layer': LAYER_SEC[mclass][0], 'rotation': rot})
+    for (code, b, d, is_round, (x, y), rot, mclass) in fig.get('inserts_down', []):
+        name = _ensure_sec_block(doc, code, b, d, is_round, down=True)
+        msp.add_blockref(name, (x + ox, y + oy), dxfattribs={
+            'layer': LAYER_SEC[mclass][0], 'rotation': rot})
+    dashed = fig.get('rects_dashed') or {}
+    if dashed:
+        lt_d = _scaled_linetype(doc, 'BEAM_DASHED', BEAM_DASHED_PAPER_MM, n)
+    for mclass, rect_list in dashed.items():
+        layer = LAYER_DEF[mclass][0] + DASHED_SUFFIX
+        _ensure_layer(doc, layer, LAYER_DEF[mclass][1])
+        for corners in rect_list:
+            msp.add_lwpolyline(
+                [(x + ox, y + oy) for (x, y) in corners], close=True,
+                dxfattribs={'layer': layer, 'linetype': lt_d})
+
     for (pos, txt, ang, mclass) in fig['texts']:
         t = msp.add_text(txt, dxfattribs={
             'layer': LAYER_TEXT[0], 'height': th, 'rotation': ang})
         t.set_placement((pos[0] + ox, pos[1] + oy),
                         align=TextEntityAlignment.BOTTOM_CENTER)
+    grids = fig.get('grids') or []
+    levels = fig.get('levels') or []
+    if grids or levels:
+        lt = _grid_linetype(doc, n)
+        gh = GRID_TEXT_PAPER_MM * n
+    for lv in levels:
+        msp.add_line((lv['p1'][0] + ox, lv['p1'][1] + oy),
+                     (lv['p2'][0] + ox, lv['p2'][1] + oy),
+                     dxfattribs={'layer': LAYER_GRID[0], 'linetype': lt})
+    for g in grids:
+        msp.add_line((g['p1'][0] + ox, g['p1'][1] + oy),
+                     (g['p2'][0] + ox, g['p2'][1] + oy),
+                     dxfattribs={'layer': LAYER_GRID[0], 'linetype': lt})
+        bx, by = g['bubble']
+        msp.add_circle((bx + ox, by + oy), g['r'],
+                       dxfattribs={'layer': LAYER_TEXT[0]})
+        t = msp.add_text(g['label'], dxfattribs={
+            'layer': LAYER_TEXT[0], 'height': gh})
+        t.set_placement((bx + ox, by + oy),
+                        align=TextEntityAlignment.MIDDLE_CENTER)
     x0, y0, x1, y1 = fig['bounds']
     tt = msp.add_text(fig['title'], dxfattribs={
         'layer': LAYER_TITLE[0], 'height': title_paper_mm * n})
@@ -1278,8 +1982,16 @@ def _fig_to_msp(fig, msp, text_paper_mm=2.5, title_paper_mm=5.0,
 def export_struct_dxf(mgt_path, out_dir, axes=None, levels=None,
                       paper='A3', scale=None, pin_paper_mm=1.5,
                       text_paper_mm=2.5, limit_sec_no=9000.0,
-                      one_file=True):
-    """構造図DXFの一括生成."""
+                      one_file=True, grids=None, wood=False, level_keys=None,
+                      list_out=False, list_categories=None):
+    """構造図DXFの一括生成.
+
+    grids: 通り芯として描く通りのキー
+    wood : True なら木造 (最上階以外の伏図を梁伏図・柱伏図の2枚にする)
+    level_keys: 軸組図にレベル線を描くフロアのキー
+    list_out: True なら部材リスト図も出す (dxf_list.py)
+    list_categories: 部材リストに載せる区分 (S / W / OTHER / RC / RCB)。None なら全部
+    """
     os.makedirs(out_dir, exist_ok=True)
     M = load_struct_model(mgt_path, limit_sec_no=limit_sec_no)
     figs = []
@@ -1287,19 +1999,29 @@ def export_struct_dxf(mgt_path, out_dir, axes=None, levels=None,
         try:
             figs.append(('axis', g,
                          build_elevation(M, g, pin_paper_mm, scale, paper,
-                                         text_paper_mm)))
+                                         text_paper_mm, grids, level_keys,
+                                         wood=wood)))
         except ValueError as e:
             print('注意: %s' % e)
+    top_z = wood_top_z(M) if wood else None
     for lv in (levels or []):
         try:
-            figs.append(('plan', lv,
-                         build_plan(M, lv, pin_paper_mm, scale,
-                                    paper, text_paper_mm)))
+            sheets = wood_plan_sheets(M, lv, top_z) if wood else [None]
+            for sh in sheets:
+                figs.append(('plan', (lv, sh),
+                             build_plan(M, lv, pin_paper_mm, scale,
+                                        paper, text_paper_mm, grids,
+                                        wood_sheet=sh, top_z=top_z)))
         except ValueError as e:
             print('注意: %s' % e)
+    if list_out:
+        from .dxf_list import build_list_figures
+        for cat, fig in build_list_figures(M, scale, paper, text_paper_mm,
+                                           categories=list_categories):
+            figs.append(('list', cat, fig))
     if not figs:
-        raise ValueError('描画できる図がありません (通り・レベルの選択を'
-                         '確認してください)')
+        raise ValueError('描画できる図がありません (通り・レベルの選択や'
+                         '部材リストの出力を確認してください)')
 
     base = os.path.splitext(os.path.basename(mgt_path))[0]
     made = []
@@ -1324,10 +2046,15 @@ def export_struct_dxf(mgt_path, out_dir, axes=None, levels=None,
             _fig_to_msp(fig, doc.modelspace(), text_paper_mm)
             if kind == 'axis':
                 label = '軸組_%s' % frame_label(M, str(key)).split(' ')[0]
-            elif str(key).startswith('G:'):
-                label = '伏図_%s' % str(key)[2:]
+            elif kind == 'list':
+                label = 'リスト_%s' % fig['title'].split('  ')[0].replace(' ', '')
             else:
-                label = '伏図_%+.3f' % float(key)
+                key, sheet = key
+                if str(key).startswith('G:'):
+                    label = '伏図_%s' % str(key)[2:]
+                else:
+                    label = '伏図_%+.3f' % float(key)
+                label += {'beam': '_梁', 'column': '_柱'}.get(sheet, '')
             label = str(label).replace('/', '_').replace('\\', '_')
             out = os.path.join(out_dir, '%s_%s.dxf' % (base, label))
             doc.saveas(out)
@@ -1341,7 +2068,11 @@ def export_struct_dxf(mgt_path, out_dir, axes=None, levels=None,
 # ---------------------------------------------------------------------------
 
 def preview_png(mgt_path, out_path, kind, key, paper='A3', scale=None,
-                pin_paper_mm=1.5, limit_sec_no=9000.0):
+                pin_paper_mm=1.5, limit_sec_no=9000.0, grids=None,
+                wood=False, sheet=None, level_keys=None, text_paper_mm=2.5,
+                page=1, info=None):
+    """用紙プレビュー PNG. 部材リスト (kind='list', key=区分) は page 枚目を描き、
+    info (dict) に 'pages' (その区分の図の枚数) を入れる."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -1349,10 +2080,28 @@ def preview_png(mgt_path, out_path, kind, key, paper='A3', scale=None,
     _setup_japanese_font()
 
     M = load_struct_model(mgt_path, limit_sec_no=limit_sec_no)
-    if kind == 'axis':
-        fig_d = build_elevation(M, key, pin_paper_mm, scale, paper)
+    if kind == 'list':
+        from .dxf_list import build_list_figures
+        figs_l = build_list_figures(M, scale, paper, text_paper_mm,
+                                    categories=[str(key)])
+        if not figs_l:
+            raise ValueError('部材リストの %s に載せる断面がありません' % key)
+        page = min(max(int(page or 1), 1), len(figs_l))
+        if info is not None:
+            info['pages'] = len(figs_l)
+            info['page'] = page
+        fig_d = figs_l[page - 1][1]
+    elif kind == 'axis':
+        fig_d = build_elevation(M, key, pin_paper_mm, scale, paper,
+                                text_paper_mm, grids=grids, levels=level_keys,
+                                wood=wood)
     else:
-        fig_d = build_plan(M, key, pin_paper_mm, scale, paper)
+        wood_sheet = None
+        if wood:
+            sheets = wood_plan_sheets(M, key)
+            wood_sheet = sheet if sheet in sheets else sheets[0]
+        fig_d = build_plan(M, key, pin_paper_mm, scale, paper, text_paper_mm,
+                           grids=grids, wood_sheet=wood_sheet)
     n = fig_d['scale']
     pw, ph = PAPER_MM.get(paper, PAPER_MM['A3'])
     fw, fh = pw * n, ph * n
@@ -1399,6 +2148,43 @@ def preview_png(mgt_path, out_path, kind, key, paper='A3', scale=None,
                     [corners[1][1], corners[3][1]], color=col, lw=0.5)
             ax.plot([corners[0][0], corners[2][0]],
                     [corners[0][1], corners[2][1]], color=col, lw=0.5)
+    if fig_d.get('prims'):
+        from .dxf_list import prims_to_axes
+        # 文字の大きさを実寸に合わせる: 図の横幅 9in に 用紙幅×1.1 が入る
+        pt_per_mm = 9 * 72.0 / (fw * 1.1)
+        prims_to_axes(fig_d['prims'], ax, pt_per_mm)
+    for mclass, rect_list in fig_d.get('rects_dashed', {}).items():
+        for corners in rect_list:
+            xs = [p[0] for p in corners] + [corners[0][0]]
+            ys = [p[1] for p in corners] + [corners[0][1]]
+            ax.plot(xs, ys, color=colors[mclass], lw=0.7, ls='--')
+    for corners in fig_d.get('walls', []):
+        xs = [p[0] for p in corners] + [corners[0][0]]
+        ys = [p[1] for p in corners] + [corners[0][1]]
+        if fig_d.get('wall_hatch'):
+            # 部材と符号が読めるよう、壁は薄い色で背面に描く
+            ax.fill(xs, ys, fill=False, hatch='////', ec='#f5c48a', lw=0.4,
+                    zorder=0)
+        else:
+            ax.plot(xs, ys, color='#e07b00', lw=0.9)
+    for (code, b, d, is_round, (x, y), rot, mclass) in fig_d.get('inserts_down', []):
+        rad = math.radians(rot)
+        c, s_ = math.cos(rad), math.sin(rad)
+        hb = (d if is_round else b) / 2.0
+        for (px1, py1), (px2, py2) in (((hb, 0), (-hb, -d)), ((hb, -d), (-hb, 0))):
+            ax.plot([x + px1 * c - py1 * s_, x + px2 * c - py2 * s_],
+                    [y + px1 * s_ + py1 * c, y + px2 * s_ + py2 * c],
+                    color=colors[mclass], lw=0.5)
+    for lv in fig_d.get('levels', []):
+        ax.plot([lv['p1'][0], lv['p2'][0]], [lv['p1'][1], lv['p2'][1]],
+                color='#999', lw=0.6, ls='-.')
+    for g in fig_d.get('grids', []):
+        ax.plot([g['p1'][0], g['p2'][0]], [g['p1'][1], g['p2'][1]],
+                color='#999', lw=0.6, ls='-.')
+        ax.add_patch(plt.Circle(g['bubble'], g['r'], fill=False, ec='#d33',
+                                lw=0.6))
+        ax.text(g['bubble'][0], g['bubble'][1], g['label'], fontsize=6,
+                color='#d33', ha='center', va='center')
     for (pos, txt, ang, mclass) in fig_d.get('texts', []):
         ax.text(pos[0], pos[1], txt, fontsize=6, color='#444',
                 ha='center', va='bottom', rotation=ang,
@@ -1411,6 +2197,7 @@ def preview_png(mgt_path, out_path, kind, key, paper='A3', scale=None,
     ax.set_xlim(cx - fw / 2 - pad, cx + fw / 2 + pad)
     ax.set_ylim(cy - fh / 2 - pad, cy + fh / 2 + pad)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=110)
+    # 部材リストは文字が小さいので高い解像度で出す
+    fig.savefig(out_path, dpi=180 if kind == 'list' else 110)
     plt.close(fig)
     return out_path, n

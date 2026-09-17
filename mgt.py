@@ -6,7 +6,7 @@ wall/mgtopen_wall.m, wall/mgtopen_RCwall.m, wall/wall_unit.m,
 および MIDAS/node_index_get.m。
 
 共通事項:
-- mgtファイルは CP932。open(filename, encoding='cp932', errors='replace') で読む。
+- mgtファイルは CP932 (外部生成の mgtx は UTF-8 のことがある)。_lines() が文字コードを自動判定して読む。
 - 戻り値の数値行列は numpy.ndarray (float)。列の意味はMATLAB版と同一。
 - 節点番号・要素番号・断面番号等のID値はデータ値なので 1-based のまま保持。
 - MATLABのcell配列に対応する戻り値は Python の list。
@@ -17,9 +17,12 @@ wall/mgtopen_wall.m, wall/mgtopen_RCwall.m, wall/wall_unit.m,
   関数は、Python版では行リストの範囲外アクセスで IndexError となる。
 """
 
+import io
+
 import numpy as np
 
 from .util import (
+    read_mgt_text,
     find_index,
     find_zero_index,
     space_erace,
@@ -35,9 +38,11 @@ from .util import (
 # ---------------------------------------------------------------------------
 
 def _lines(filename):
-    """mgtファイルを読み、fgets相当の行リスト(改行付き)を返す。CP932。"""
-    with open(filename, encoding='cp932', errors='replace') as f:
-        return f.readlines()
+    """mgtファイルを読み、fgets相当の行リスト(改行付き)を返す。
+
+    文字コードは CP932 / UTF-8 を自動判定 (util.read_mgt_text)。
+    """
+    return io.StringIO(read_mgt_text(filename)).readlines()
 
 
 def _tlinenum(tline):

@@ -22,6 +22,8 @@
   fieldset { border: 1px solid #ccd; background: #fff; border-radius: 4px;
              margin: 0 0 12px; padding: 10px 14px; }
   legend { font-weight: bold; color: #2b4a6f; padding: 0 6px; }
+  fieldset.subbox { background: #f7f9fc; margin: 10px 0; }
+  fieldset.subbox > legend { color: #3b5b80; }
   label.inline { margin-right: 14px; white-space: nowrap; }
   input[type=text], input[type=number], select {
       border: 1px solid #aab; border-radius: 3px; padding: 5px 7px;
@@ -116,6 +118,9 @@
                 background: #fafbfd; padding: 2px 10px 6px; }
   details.adv > summary { cursor: pointer; color: #2b4a6f; font-size: 13px;
                           font-weight: 600; padding: 6px 0; }
+  /* 旧版 (非推奨) の機能: 目立たせない */
+  details.adv.legacy { background: #f6f6f7; border-color: #e2e2e6; }
+  details.adv.legacy > summary { color: #7a7f87; font-weight: normal; }
   .rcglab { display: inline-block; min-width: 8em; }
   table.res td.rcgcell { text-align: left; }
   .rcgpair { white-space: nowrap; }
@@ -858,77 +863,139 @@
 <!-- ============ タブ5: DXF ============ -->
 <section class="tab" id="tab-dxf">
   <fieldset>
-    <legend>DXF出力 (モデル構成図 + 部材リスト図)</legend>
+    <legend>構造図DXF (新規版: 二重線・ピン接合表現・材質レイヤ・縮尺自動・部材リスト)</legend>
+    <fieldset class="subbox">
+      <legend>1. 構造種別と読み込み</legend>
+      <div class="row"><b>構造種別</b>
+        <label class="inline"><input type="radio" name="sdx_mode" value="other"
+          checked onchange="refreshStructPrevSel()"> 木造以外 (伏図1枚)</label>
+        <label class="inline"><input type="radio" name="sdx_mode" value="wood"
+          onchange="refreshStructPrevSel()"> 木造 (伏図2枚: 梁伏図・柱伏図)</label>
+      </div>
+      <div class="row">
+        <span class="hint">木造では最上階以外の伏図を2枚にします。梁伏図=梁は実線と梁符号、
+          柱は断面のみ / 柱伏図=梁は破線 (レイヤ …破線)、柱符号、その床から立ち上がる壁
+          (レイヤ S-Orange40・板厚符号)。柱はその床から上へ伸びる柱を描き、下の柱は
+          ピンで分かれるとき・上に柱が無いときだけ×印。最上階は1枚。軸組図には壁パネル
+          (外形・斜線ハッチ: レイヤ S-Orange40、板厚符号: パネル1枚ごと) を描きます。</span>
+      </div>
+      <div class="row">
+        <label class="inline">ダミー材断面番号下限
+          <input type="number" id="sdx_limit" value="9000"
+            oninput="$('sdx_list_limit').textContent = this.value"></label>
+        <span class="hint">この番号以上の断面は伏図・軸組図・部材リストに描きません (読込の前に設定)</span>
+      </div>
+      <div class="row">
+        <button class="sub" onclick="loadStructInfo()">読込</button>
+        <span class="hint">mgtのグループ定義から通り(軸組図)・フロア(伏図)の候補、部材リストの区分、部材集計を読み込みます</span>
+      </div>
+      <div id="sdx_info_msg"></div>
+      <div class="row"><span class="hint">MATLAB互換版とは別の新規実装です。
+        剛接合は連続、ピン接合(*FRAME-RLSの曲げ解放)は部材端を紙面上一定距離だけ
+        離して描画。分割部材(*UNIT)は一本化。レイヤは材質×部材/断面
+        (S-木_20, S-木断面_30, S-RC伏_20, S-RC軸_30, S-鉄骨_20,
+        S-鉄骨断面_30)、テキストは S-Red10。図形は実寸mm(1:1)で、縮尺は注記サイズ・ピン離隔に反映されます。</span>
+      </div>
+    </fieldset>
+    <fieldset class="subbox">
+      <legend>2. 軸組図の設定</legend>
+      <div class="row"><b>軸組図にする通り</b>
+        <button class="sub" onclick="checkAll('sdxframe',true)">全選択</button>
+        <button class="sub" onclick="checkAll('sdxframe',false)">全解除</button>
+        <span class="hint">mgtのグループ (節点が一直線のもの) を通りとして
+          使います。グループ未登録の場合のみ柱位置から自動検出します。</span>
+      </div>
+      <div class="groupbox" id="sdx_axes_box"><span class="hint">
+        「読込」で通り一覧を表示します</span></div>
+      <div class="row"><b>軸組図のレベル線</b>
+        <button class="sub" onclick="checkAll('sdxlvline',true)">全選択</button>
+        <button class="sub" onclick="checkAll('sdxlvline',false)">全解除</button>
+        <span class="hint">チェックしたフロアの高さに一点鎖線を引きます
+          (レイヤ S-Gray09芯線)。構面の高さの範囲にあるものだけ。
+          既定は水平な床のみ (勾配屋根などは外しています)。▽記号とレベル名はまだ出しません。</span>
+      </div>
+      <div class="groupbox" id="sdx_lvlines_box"><span class="hint">
+        「読込」でフロア一覧を表示します</span></div>
+    </fieldset>
+    <fieldset class="subbox">
+      <legend>3. 伏図の設定</legend>
+      <div class="row"><b>伏図にするフロア</b>
+        <button class="sub" onclick="checkAll('sdxlevel',true)">全選択</button>
+        <button class="sub" onclick="checkAll('sdxlevel',false)">全解除</button>
+      </div>
+      <div class="groupbox" id="sdx_levels_box"><span class="hint">
+        「読込」でフロア一覧を表示します</span></div>
+    </fieldset>
+    <fieldset class="subbox">
+      <legend>4. 部材リストの設定</legend>
+      <div class="row"><b>部材リストに載せる区分</b>
+        <button class="sub" onclick="checkAll('sdxlistcat',true);refreshStructPrevSel()">全選択</button>
+        <button class="sub" onclick="checkAll('sdxlistcat',false);refreshStructPrevSel()">全解除</button>
+        <span class="hint">RC柱・RC梁はmgtの配筋データがある断面を配筋付きで描きます。縮尺(自動)は1/10から用紙に収まる大きさを選びます。「1. 構造種別と読み込み」のダミー材断面番号下限 (現在 <span id="sdx_list_limit">9000</span>) 以上の断面は載せません。</span>
+      </div>
+      <div class="groupbox" id="sdx_listcats_box"><span class="hint">「読込」で区分と断面数を表示します</span></div>
+    </fieldset>
+    <fieldset class="subbox">
+      <legend>5. 出力設定</legend>
+      <div class="row"><b>通り芯として描く通り</b> <span class="hint">(軸組図・伏図 共通)</span>
+        <button class="sub" onclick="checkAll('sdxgrid',true)">全選択</button>
+        <button class="sub" onclick="checkAll('sdxgrid',false)">全解除</button>
+        <span class="hint">チェックした通りを一点鎖線と丸記号で描きます
+          (レイヤ S-Gray09芯線)。伏図は部分的なフロアでも建物全体の範囲で全通りを描き、
+        軸組図はその構面と交わる通りだけ。
+          「柱脚」などの通りでないグループは外してください。</span>
+      </div>
+      <div class="groupbox" id="sdx_grids_box"><span class="hint">
+        「読込」で通り一覧を表示します</span></div>
+      <div class="row">
+        <label class="inline">縮尺
+          <select id="sdx_scale">
+            <option value="" selected>自動 (図ごと)</option>
+            <option value="50">1/50</option><option value="75">1/75</option>
+            <option value="100">1/100</option><option value="150">1/150</option>
+            <option value="200">1/200</option><option value="300">1/300</option>
+          </select></label>
+        <label class="inline">用紙
+          <select id="sdx_paper">
+            <option value="A1">A1</option><option value="A2">A2</option>
+            <option value="A3" selected>A3</option>
+            <option value="A4">A4</option></select></label>
+        <label class="inline">ピン離隔(紙面mm)
+          <input type="number" id="sdx_pin" value="1.5" step="0.5"
+            style="width:60px"></label>
+        <label class="inline">文字高さ(紙面mm)
+          <input type="number" id="sdx_text" value="2.5" step="0.5"
+            style="width:60px"></label>
+        <label class="inline">出力
+          <select id="sdx_onefile">
+            <option value="1" selected>1ファイルに整列</option>
+            <option value="0">図ごとにファイル</option></select></label>
+      </div>
+      <div class="row">
+        <label class="inline">プレビュー対象
+          <select id="sdx_prev_sel" style="min-width:12em" onchange="SDX_PREV_PAGE = 1"></select></label>
+        <button class="sub" onclick="runStructPreview()">用紙プレビュー</button>
+        <button class="act" onclick="runStructDxf()">構造図DXF生成</button>
+      </div>
+      <div id="sdx_msg"></div>
+      <div id="sdx_prev" style="max-width:760px"></div>
+      <div id="sdx_files"></div>
+    </fieldset>
+  </fieldset>
+  <details class="adv legacy">
+    <summary>旧版 DXF出力 (MATLAB互換・非推奨): モデル構成図 + 部材リスト図</summary>
+    <div class="row"><span class="hint">新しく図面を作るときは、上の「構造図DXF (新規版)」を使ってください。
+      旧版は MATLAB 版と同じ出力が必要なときだけ使います。</span></div>
     <div class="row">
       <label class="inline">符号文字サイズ
         <input type="number" id="d_fontsize" value="400"></label>
       <label class="inline">ダミー材断面番号下限
         <input type="number" id="d_limit" value="9000"></label>
-      <button class="act" onclick="runDxf()">生成</button>
+      <button class="sub" onclick="runDxf()">旧版で生成</button>
     </div>
-  </fieldset>
-  <div id="dxf_msg"></div>
-  <div id="dxf_out"></div>
-  <fieldset>
-    <legend>構造図DXF (新規版β: 二重線・ピン接合表現・材質レイヤ・縮尺自動)</legend>
-    <div class="row"><span class="hint">MATLAB互換版とは別の新規実装です。
-      剛接合は連続、ピン接合(*FRAME-RLSの曲げ解放)は部材端を紙面上一定距離だけ
-      離して描画。分割部材(*UNIT)は一本化。レイヤは材質×部材/断面
-      (S-木_20, S-木断面_30, S-RC伏_20, S-RC軸_30, S-鉄骨_20,
-      S-鉄骨断面_30)、テキストは S-Red10。図形は実寸mm(1:1)で、縮尺は注記サイズ・ピン離隔に反映されます。</span>
-    </div>
-    <div class="row">
-      <button class="sub" onclick="loadStructInfo()">レベル読込</button>
-      <span class="hint">mgtのグループ定義から通り(軸組図)とフロア(伏図)の
-        候補と部材集計を読み込みます</span>
-    </div>
-    <div id="sdx_info_msg"></div>
-    <div class="row"><b>軸組図にする通り</b>
-      <button class="sub" onclick="checkAll('sdxframe',true)">全選択</button>
-      <button class="sub" onclick="checkAll('sdxframe',false)">全解除</button>
-      <span class="hint">mgtのグループ (節点が一直線のもの) を通りとして
-        使います。グループ未登録の場合のみ柱位置から自動検出します。</span>
-    </div>
-    <div class="groupbox" id="sdx_axes_box"><span class="hint">
-      「レベル読込」で通り一覧を表示します</span></div>
-    <div class="row"><b>伏図にするフロア</b>
-      <span class="groupbox-inline" id="sdx_levels_box">
-        <span class="hint">「レベル読込」で表示します</span></span>
-    </div>
-    <div class="row">
-      <label class="inline">縮尺
-        <select id="sdx_scale">
-          <option value="" selected>自動 (図ごと)</option>
-          <option value="50">1/50</option><option value="75">1/75</option>
-          <option value="100">1/100</option><option value="150">1/150</option>
-          <option value="200">1/200</option><option value="300">1/300</option>
-        </select></label>
-      <label class="inline">用紙
-        <select id="sdx_paper">
-          <option value="A1">A1</option><option value="A2">A2</option>
-          <option value="A3" selected>A3</option>
-          <option value="A4">A4</option></select></label>
-      <label class="inline">ピン離隔(紙面mm)
-        <input type="number" id="sdx_pin" value="1.5" step="0.5"
-          style="width:60px"></label>
-      <label class="inline">符号文字(紙面mm)
-        <input type="number" id="sdx_text" value="2.5" step="0.5"
-          style="width:60px"></label>
-      <label class="inline">出力
-        <select id="sdx_onefile">
-          <option value="1" selected>1ファイルに整列</option>
-          <option value="0">図ごとにファイル</option></select></label>
-    </div>
-    <div class="row">
-      <label class="inline">プレビュー対象
-        <select id="sdx_prev_sel" style="min-width:12em"></select></label>
-      <button class="sub" onclick="runStructPreview()">用紙プレビュー</button>
-      <button class="act" onclick="runStructDxf()">構造図DXF生成</button>
-    </div>
-    <div id="sdx_msg"></div>
-    <div id="sdx_prev" style="max-width:760px"></div>
-    <div id="sdx_files"></div>
-  </fieldset>
+    <div id="dxf_msg"></div>
+    <div id="dxf_out"></div>
+  </details>
 </section>
 
 <!-- ============ タブ6: 数量集計 ============ -->

@@ -77,9 +77,12 @@ sections はMATLABのcell相当の list 長17 (index 0 は未使用、1..16 を�
   検定側では断面形式コード19000として TL2_analysis に振り分けられる。
 """
 
+import io
 import math
 
 import numpy as np
+
+from .util import read_mgt_text
 
 try:
     from .util import space_erace  # 並行作業中の util.py (同挙動)
@@ -392,7 +395,7 @@ def mgtopen_section(filename):
     L2_rows = []  # mgtkit拡張: 二丁山形鋼(2L)
 
     # %%%%%%%%%% 断面情報取得 %%%%%%%%%%
-    with open(filename, 'r', encoding='cp932', errors='replace') as fid:
+    with io.StringIO(read_mgt_text(filename)) as fid:
         while True:
             tline = fid.readline()
             if tline == '':

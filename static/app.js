@@ -1725,37 +1725,77 @@ function collectCaseTypes() {
 // ---------------- 構造図DXF (新規版) ----------------
 let SDX_LEVELS = [];
 let SDX_FRAMES = [];
+let SDX_LISTCATS = [];
+let SDX_PREV_PAGE = 1;
 
 function refreshStructPrevSel() {
   const sel = $('sdx_prev_sel');
   if (!sel) return;
-  const opts = [];
-  SDX_FRAMES.forEach(f =>
-    opts.push('<option value="axis:' + esc(f.key) + '">軸組 ' +
-              esc(f.label) + '</option>'));
-  SDX_LEVELS.forEach(pl =>
-    opts.push('<option value="plan:' + esc(pl.key) + '">伏図 ' +
-              esc(pl.label) + '</option>'));
-  sel.innerHTML = opts.join('');
+  const prev = sel.value;
+  const groups = [];
+  const axis = SDX_FRAMES.map(f =>
+    '<option value="axis:' + esc(f.key) + '">軸組 ' + esc(f.label) + '</option>');
+  if (axis.length) groups.push('<optgroup label="軸組図">' + axis.join('') + '</optgroup>');
+  const wood = structWood();
+  const plan = [];
+  SDX_LEVELS.forEach(pl => {
+    if (wood && pl.top === false) {
+      plan.push('<option value="plan_beam:' + esc(pl.key) + '">梁伏図 ' +
+                esc(pl.label) + '</option>');
+      plan.push('<option value="plan_column:' + esc(pl.key) + '">柱伏図 ' +
+                esc(pl.label) + '</option>');
+    } else {
+      plan.push('<option value="plan:' + esc(pl.key) + '">伏図 ' +
+                esc(pl.label) + '</option>');
+    }
+  });
+  if (plan.length) groups.push('<optgroup label="伏図">' + plan.join('') + '</optgroup>');
+  const cats = checkedVals('sdxlistcat');
+  const lists = SDX_LISTCATS.filter(c => cats.includes(c.key)).map(c =>
+    '<option value="list:' + esc(c.key) + '">' + esc(c.label) + '</option>');
+  if (lists.length) groups.push('<optgroup label="部材リスト">' + lists.join('') + '</optgroup>');
+  sel.innerHTML = groups.join('');
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  SDX_PREV_PAGE = 1;
 }
 
 async function loadStructInfo() {
   setMsg('sdx_info_msg', '', '');
   try {
     const j = await api('/api/struct_info',
-      {mgt_path: $('mgt_path').value});
+      {mgt_path: $('mgt_path').value,
+       limit_sec_no: +$('sdx_limit').value});
     SDX_LEVELS = j.plans ||
       (j.levels || []).map(z => ({key: String(z),
                                   label: (+z).toFixed(3) + 'm'}));
     SDX_FRAMES = j.frames || [];
+    SDX_LISTCATS = j.list_categories || [];
+    // 区分ごとのチェック。「その他」は配筋も形状情報も少ないので既定で外す
+    $('sdx_listcats_box').innerHTML = SDX_LISTCATS.map(c =>
+      '<label><input type="checkbox" class="sdxlistcat" value="' + esc(c.key) + '"' +
+      (c.key !== 'OTHER' ? ' checked' : '') + ' onchange="refreshStructPrevSel()"> ' +
+      esc(c.label) + ' <span class="hint">' + c.n + '断面</span></label>').join(' ') ||
+      '<span class="hint">載せる断面がありません</span>';
+    $('sdx_list_limit').textContent = $('sdx_limit').value;
     $('sdx_axes_box').innerHTML = SDX_FRAMES.map(f =>
       '<label><input type="checkbox" class="sdxframe" value="' +
       esc(f.key) + '"' + (f.n_col >= 2 ? ' checked' : '') + '> ' +
       esc(f.label) + ' <span class="hint">柱' + f.n_col + '</span></label>'
       ).join(' ') || '<span class="hint">柱が見つかりません</span>';
+    $('sdx_grids_box').innerHTML = SDX_FRAMES.map(f =>
+      '<label><input type="checkbox" class="sdxgrid" value="' +
+      esc(f.key) + '"' + (f.n_col >= 2 ? ' checked' : '') + '> ' +
+      esc(f.label) + '</label>'
+      ).join(' ') || '<span class="hint">通りの候補がありません</span>';
+    $('sdx_lvlines_box').innerHTML = SDX_LEVELS.map(pl =>
+      '<label><input type="checkbox" class="sdxlvline" value="' +
+      esc(pl.key) + '"' + (pl.flat ? ' checked' : '') + '> ' + esc(pl.label) +
+      (pl.z != null ? ' <span class="hint">' + (+pl.z).toFixed(3) + 'm</span>' : '') +
+      '</label>').join(' ') ||
+      '<span class="hint">フロアの候補が見つかりません</span>';
     $('sdx_levels_box').innerHTML = SDX_LEVELS.map(pl =>
       '<label><input type="checkbox" class="sdxlevel" value="' +
-      esc(pl.key) + '"> ' + esc(pl.label) + '</label>').join(' ') ||
+      esc(pl.key) + '" checked> ' + esc(pl.label) + '</label>').join(' ') ||
       '<span class="hint">伏図の候補が見つかりません</span>';
     setMsg('sdx_info_msg', '部材 ' + j.n_members + ' (柱' + j.kinds.column +
            '/梁' + j.kinds.beam + '/斜材' + j.kinds.brace + ')・ピン端あり ' +
@@ -1766,13 +1806,22 @@ async function loadStructInfo() {
   } catch (e) { setMsg('sdx_info_msg', esc(e.message), 'msg-err'); }
 }
 
+function structWood() {
+  const r = document.querySelector('input[name="sdx_mode"]:checked');
+  return !!r && r.value === 'wood';
+}
+
 function structCommon() {
   return {mgt_path: $('mgt_path').value,
     paper: $('sdx_paper').value,
     scale: $('sdx_scale').value || null,
     pin_mm: +$('sdx_pin').value,
     text_mm: +$('sdx_text').value,
-    limit_sec_no: +($('m_limit') ? $('m_limit').value : 9000)};
+    grids: checkedVals('sdxgrid'),
+    wood: structWood(),
+    level_lines: checkedVals('sdxlvline'),
+    list_categories: checkedVals('sdxlistcat'),
+    limit_sec_no: +$('sdx_limit').value};
 }
 
 async function runStructPreview() {
@@ -1784,14 +1833,29 @@ async function runStructPreview() {
     const [kind, key] = [v.slice(0, v.indexOf(':')),
                          v.slice(v.indexOf(':') + 1)];
     const req = structCommon();
-    req.kind = kind; req.key = key;
+    req.kind = kind.startsWith('plan') ? 'plan' : kind; req.key = key;
+    req.sheet = kind.startsWith('plan_') ? kind.slice(5) : null;
+    req.page = kind === 'list' ? SDX_PREV_PAGE : 1;
     const j = await api('/api/struct_preview', req);
+    let pageNav = '';
+    if (kind === 'list' && j.pages) {
+      SDX_PREV_PAGE = j.page || 1;
+      pageNav = ' ／ ' + SDX_PREV_PAGE + '/' + j.pages + '枚目' +
+        (SDX_PREV_PAGE > 1 ? ' <button class="sub" onclick="structPrevPage(-1)">前の図</button>' : '') +
+        (SDX_PREV_PAGE < j.pages ? ' <button class="sub" onclick="structPrevPage(1)">次の図</button>' : '');
+    }
     setMsg('sdx_msg', 'プレビュー: 縮尺 1/' + j.scale +
-           ' (自動選定の場合はここで確認して固定できます)', 'msg-ok');
+           ' (自動選定の場合はここで確認して固定できます)' + pageNav, 'msg-ok');
     $('sdx_msg').innerHTML += notesHtml(j.notes);
-    $('sdx_prev').innerHTML = '<img src="' + j.png_url +
+    // 同じ秒に続けて描くと URL が同じになり古い画像が出るので、要求ごとに変える
+    $('sdx_prev').innerHTML = '<img src="' + j.png_url + '&r=' + Date.now() +
       '" style="width:100%;border:1px solid #ccc">';
   } catch (e) { setMsg('sdx_msg', esc(e.message), 'msg-err'); }
+}
+
+function structPrevPage(d) {
+  SDX_PREV_PAGE = Math.max(1, SDX_PREV_PAGE + d);
+  runStructPreview();
 }
 
 async function runStructDxf() {
@@ -1802,8 +1866,10 @@ async function runStructDxf() {
     req.levels = checkedVals('sdxlevel');
     req.one_file = $('sdx_onefile').value === '1';
     if ((!req.axes || !req.axes.length) &&
-        (!req.levels || !req.levels.length)) {
-      setMsg('sdx_msg', '構面またはレベルを選択してください。', 'msg-err');
+        (!req.levels || !req.levels.length) &&
+        (!req.list_categories || !req.list_categories.length)) {
+      setMsg('sdx_msg', '軸組図の通り・伏図のフロア・部材リストのいずれかを選択してください。',
+             'msg-err');
       return;
     }
     const j = await api('/api/struct_dxf', req);
