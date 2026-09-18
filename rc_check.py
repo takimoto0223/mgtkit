@@ -268,7 +268,8 @@ def E_RC_AIJ(Fc):
 # 壁柱の断面解析 (SA_RW4_HMD.m / SA_RW4Qratio.m)
 # ===========================================================================
 
-def SA_RW4_HMD(Nd, Form, steelbar, HOOP, Fc, timecase):
+def SA_RW4_HMD(Nd, Form, steelbar, HOOP, Fc, timecase,
+               v_di_alt=0.0):
     """msrc/structural_function/RC/RC_section_analysis/wall/SA_RW4_HMD.m の逐語移植.
 
     戻り値: (M_AL, maxN)  maxNは長さ2のndarray (MATLABの maxN(1),maxN(2))
@@ -302,6 +303,10 @@ def SA_RW4_HMD(Nd, Form, steelbar, HOOP, Fc, timecase):
     if steelbar[0] == 1:  # 端部補強筋なしの場合
         di_main = steelbar[2]; SD_main = steelbar[5]
         a = Area_steelbar(di_main, 1)
+        if v_di_alt > 0:
+            # 交互配筋 (径違いを交互): 1本あたり断面積を2径の平均で評価
+            # (原典に無い拡張。既定 v_di_alt=0 では従来どおり)
+            a = (a + Area_steelbar(v_di_alt, 1)) / 2.0
         ai = steelbar[4] * a
 
         num = steelbar[1]
@@ -533,7 +538,8 @@ def SA_RW4_HMD(Nd, Form, steelbar, HOOP, Fc, timecase):
 
 
 # %%%%%%%%%RC■断面柱の許容せん断力算定
-def SA_RW4Qratio(Form, L, steelbar, HOOP, Fc, stress, timecase, QL, qup_wall, RCQ):
+def SA_RW4Qratio(Form, L, steelbar, HOOP, Fc, stress, timecase, QL, qup_wall, RCQ,
+                 h_di_alt=0.0):
     """msrc/structural_function/RC/RC_section_analysis/wall/SA_RW4Qratio.m の逐語移植.
 
     戻り値: (ratio_Q, ALW_Q, Qs1)  ratio_Qは(n,2)のndarray（MATLABと同次元）
@@ -564,7 +570,12 @@ def SA_RW4Qratio(Form, L, steelbar, HOOP, Fc, stress, timecase, QL, qup_wall, RC
     SD_support = HOOP[4]
     cover_depth = HOOP[5]
     wft = ALST_steelbar_KJ([di_support, SD_support])
-    aw = Area_steelbar(di_support, 2)  # Fyせん断補強筋本数
+    if h_di_alt > 0:
+        # 交互配筋 (径違いを交互): 1ピッチあたり2本を各径1本ずつの和で評価
+        # (原典に無い拡張。既定 h_di_alt=0 では従来どおり2本)
+        aw = Area_steelbar(di_support, 1) + Area_steelbar(h_di_alt, 1)
+    else:
+        aw = Area_steelbar(di_support, 2)  # Fyせん断補強筋本数
 
     # 断面情報（配筋断面積，許容応力度など）
     f_c = ALST_RC_AIJ(Fc)
@@ -1766,7 +1777,8 @@ def SA_RCSR_Qratio(Form, L, steelbar, HOOP, Fc, stress, timecase, QL,
 
 def SA_RW4_HMD_text(ele_length, steelbar_y, steelbar_z, HOOP, Fc, stress, timecase,
                     QL, ele_no, section_no, qup_wall, reduction, LOAS_CASE_NAME, Form_Q, WL_ef,
-                    sectionsize, RCQ, section_name, walldesign_index, v_pitch, v_num, method_rcw=None):
+                    sectionsize, RCQ, section_name, walldesign_index, v_pitch, v_num, method_rcw=None,
+                    v_di_alt=0.0, h_di_alt=0.0):
     """SA_RW4_HMD_text.m の逐語移植
     RC壁の断面算定詳細のテキスト出力
     軸力(N)＋曲げ(MM)，せん断(Q)に対する断面算定
@@ -1782,7 +1794,8 @@ def SA_RW4_HMD_text(ele_length, steelbar_y, steelbar_z, HOOP, Fc, stress, timeca
             e[ie - 1] = 10 ** 6
         else:
             e[ie - 1] = abs(S[ie - 1, 3]) / S[ie - 1, 0] * 1000
-        M_AL[ie - 1, 0] = SA_RW4_HMD(S[ie - 1, 0], Form_y, steelbar_y, HOOP, Fc, timecase)[0]
+        M_AL[ie - 1, 0] = SA_RW4_HMD(S[ie - 1, 0], Form_y, steelbar_y, HOOP, Fc, timecase,
+                                     v_di_alt=v_di_alt)[0]
         if e[ie - 1] == 0:
             if S[ie - 1, 0] > 0:  # 圧縮
                 ratio_output[ie - 1, 0] = abs(S[ie - 1, 3]) * 10 ** 6 / abs(M_AL[ie - 1, 0])
@@ -1798,7 +1811,8 @@ def SA_RW4_HMD_text(ele_length, steelbar_y, steelbar_z, HOOP, Fc, stress, timeca
             e[ie - 1] = 10 ** 6
         else:
             e[ie - 1] = abs(S[ie - 1, 4]) / S[ie - 1, 0] * 1000
-        M_AL[ie - 1, 1] = SA_RW4_HMD(S[ie - 1, 0], Form_z, steelbar_z, A_HOOP, Fc, timecase)[0]
+        M_AL[ie - 1, 1] = SA_RW4_HMD(S[ie - 1, 0], Form_z, steelbar_z, A_HOOP, Fc, timecase,
+                                     v_di_alt=v_di_alt)[0]
         if e[ie - 1] == 0:
             if S[ie - 1, 0] > 0:  # 圧縮
                 ratio_output[ie - 1, 1] = abs(S[ie - 1, 4]) * 10 ** 6 / abs(M_AL[ie - 1, 1])
@@ -1808,7 +1822,8 @@ def SA_RW4_HMD_text(ele_length, steelbar_y, steelbar_z, HOOP, Fc, stress, timeca
             ratio_output[ie - 1, 1] = abs(S[ie - 1, 4]) * 10 ** 6 / abs(M_AL[ie - 1, 1])
 
     # せん断(Q)に対する断面算定
-    ratio_Q, ALW_Q, Qs1 = SA_RW4Qratio(Form_Q, ele_length, steelbar_y, HOOP, Fc, stress, timecase, QL, qup_wall, RCQ)
+    ratio_Q, ALW_Q, Qs1 = SA_RW4Qratio(Form_Q, ele_length, steelbar_y, HOOP, Fc, stress, timecase, QL, qup_wall, RCQ,
+                                       h_di_alt=h_di_alt)
     ratio_output[:, 2:4] = np.asarray(ratio_Q, dtype=float)
     ratio_output[:, 2:4] = ratio_output[:, 2:4] / reduction
     ratio_output[1, :] = 0
@@ -1834,8 +1849,15 @@ def SA_RW4_HMD_text(ele_length, steelbar_y, steelbar_z, HOOP, Fc, stress, timeca
     cover_depth = HOOP[5]
 
     aw = np.zeros(2)
-    aw[0] = Area_steelbar(di_support, HOOP[2])  # Fyせん断補強筋本数
-    aw[1] = Area_steelbar(di_support, HOOP[3])  # Fzせん断補強筋数
+    if h_di_alt > 0:
+        # 交互配筋: 1本あたりを2径の平均で評価 (原典に無い拡張)
+        _aw1 = (Area_steelbar(di_support, 1)
+                + Area_steelbar(h_di_alt, 1)) / 2.0
+        aw[0] = _aw1 * HOOP[2]
+        aw[1] = _aw1 * HOOP[3]
+    else:
+        aw[0] = Area_steelbar(di_support, HOOP[2])  # Fyせん断補強筋本数
+        aw[1] = Area_steelbar(di_support, HOOP[3])  # Fzせん断補強筋数
 
     # 主筋情報：steelbar = [type 総本数num_steel，径D，壁長さ方向本数nv，壁厚方向本数nh, SD]
     num = steelbar_z[1]
@@ -1878,6 +1900,11 @@ def SA_RW4_HMD_text(ele_length, steelbar_y, steelbar_z, HOOP, Fc, stress, timeca
     else:
         raise ValueError('配筋情報ミス')
     a = Area_steelbar(di_main, 1)
+    if v_di_alt > 0:
+        a = (a + Area_steelbar(v_di_alt, 1)) / 2.0  # 交互配筋 (拡張)
+    # 交互配筋の表記 (0=なし)
+    _v_alt = ('・D' + _num2str(v_di_alt) + '交互') if v_di_alt > 0 else ''
+    _h_alt = ('・D' + _num2str(h_di_alt) + '交互') if h_di_alt > 0 else ''
 
     if walldesign_index == 1:
         text = ['RC壁の断面算定内容（最大検定値の検定内容）']
@@ -1906,14 +1933,14 @@ def SA_RW4_HMD_text(ele_length, steelbar_y, steelbar_z, HOOP, Fc, stress, timeca
     text.append('　　')
     text.append('*****配筋情報*****')
     if walldesign_index == 1:
-        text.append('縦筋配筋　：' + _num2str(num - 4) + '-D' + _num2str(di_main) + '　横筋　：D' + _num2str(di_support) + '@' + _num2str(pitch))
+        text.append('縦筋配筋　：' + _num2str(num - 4) + '-D' + _num2str(di_main) + _v_alt + '　横筋　：D' + _num2str(di_support) + _h_alt + '@' + _num2str(pitch))
     elif walldesign_index == 2:
         if method_rcw == 1:
-            text.append('縦端部補強筋両側合計：' + _num2str(nsp) + '-D' + _num2str(di_sp) + '　縦筋 :' + _num2str(v_num) + '-D' + _num2str(di_main) + '@' + _num2str(v_pitch) + '　横筋　：' + _num2str(v_num) + '-D' + _num2str(di_support) + '@' + _num2str(pitch))  # 2410607金澤追記
+            text.append('縦端部補強筋両側合計：' + _num2str(nsp) + '-D' + _num2str(di_sp) + '　縦筋 :' + _num2str(v_num) + '-D' + _num2str(di_main) + _v_alt + '@' + _num2str(v_pitch) + '　横筋　：' + _num2str(v_num) + '-D' + _num2str(di_support) + _h_alt + '@' + _num2str(pitch))  # 2410607金澤追記
         elif method_rcw == 2:
             text.append('縦筋合計(縦筋配筋)：' + _num2str(num) + '-D' + _num2str(di_main) + '(' + _num2str(v_num) + '-D' + _num2str(di_main) + '@' + _num2str(v_pitch) + ')　　横筋　：' + _num2str(v_num) + '-D' + _num2str(di_support) + '@' + _num2str(pitch))
         elif method_rcw == 3:
-            text.append('縦端部補強筋両側合計：' + _num2str(nsp) + '-D' + _num2str(di_sp) + '　縦筋 :' + _num2str(v_num) + '-D' + _num2str(di_main) + '@' + _num2str(v_pitch) + '　横筋　：' + _num2str(v_num) + '-D' + _num2str(di_support) + '@' + _num2str(pitch))
+            text.append('縦端部補強筋両側合計：' + _num2str(nsp) + '-D' + _num2str(di_sp) + '　縦筋 :' + _num2str(v_num) + '-D' + _num2str(di_main) + _v_alt + '@' + _num2str(v_pitch) + '　横筋　：' + _num2str(v_num) + '-D' + _num2str(di_support) + _h_alt + '@' + _num2str(pitch))
 
     text.append('　　')
     text.append('　　')
@@ -3331,7 +3358,7 @@ def SA_RC4TAPERcolumnratioHMD_text(Form_ymin, Form_y, Form_z, ele_length,
 
 
 def rcw_input_row(sec_no, sections, mode, sd, di, bar_interval, di2,
-                  bar_interval2, num_rebar=2):
+                  bar_interval2, num_rebar=2, v_di_alt=0, h_di_alt=0):
     """RCW_input.m の RCWcolumns 1行を作る (ダイアログ→引数化).
 
     mode=1: 鉄筋径とピッチを指定して配筋 (端部補強筋は縦筋の一段太径4本相当を
@@ -3342,6 +3369,7 @@ def rcw_input_row(sec_no, sections, mode, sd, di, bar_interval, di2,
 
     RCWcolumns列: [断面番号, タイプ(1|2), 本数, 縦筋径, 列数sd, nh, 横筋径,
                    横筋ピッチ, sd, sd, 縦筋ピッチ] (221014國江11列)
+    12・13列目 (原典拡張): 交互配筋の縦筋第2径・横筋第2径 (0=交互なし)
     """
     sections = np.atleast_2d(np.asarray(sections, dtype=float))
     if mode == 1:
@@ -3359,11 +3387,13 @@ def rcw_input_row(sec_no, sections, mode, sd, di, bar_interval, di2,
             nh = math.floor(dw / bar_interval) + 3
         return [float(sec_no), 1.0, float(sd * nh), float(di), float(sd),
                 float(nh), float(di2), float(bar_interval2), float(sd),
-                float(sd), float(bar_interval)]
+                float(sd), float(bar_interval),
+                float(v_di_alt), float(h_di_alt)]
     elif mode == 2:
         return [float(sec_no), 2.0, float(num_rebar * 2), float(di), float(sd),
                 float(num_rebar * 2 / sd), float(di2), float(bar_interval2),
-                float(sd), float(sd), float(bar_interval)]
+                float(sd), float(sd), float(bar_interval),
+                float(v_di_alt), float(h_di_alt)]
     raise ValueError('RCW_input: mode は 1(径とピッチ指定) か 2(端部補強筋指定)')
 
 
@@ -4189,6 +4219,13 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
 
         if sectionsize[len(sectionsize) - 2] == 2000:  # 中実角断面の検定
             wj = wall_judge - 1  # 0-based行
+            # 交互配筋 (径違い交互) の第2径 (12・13列目、0=なし。原典拡張)
+            if RCWcolumns.shape[1] >= 13:
+                v_di_alt = float(RCWcolumns[wj, 11])
+                h_di_alt = float(RCWcolumns[wj, 12])
+            else:
+                v_di_alt = 0.0
+                h_di_alt = 0.0
 
             if walldesign_index == 1:  # 耐力壁付きラーメンの壁
                 Fc = np.array([Fc[1], 0.0])  # 普通コンとする
@@ -4216,7 +4253,8 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                     else:
                         e[ie] = abs(stress[ie, 3]) / stress[ie, 0] * 1000
                     M, maxN = SA_RW4_HMD(stress[ie, 0], Form_y, steelbar_y,
-                                         HOOP, Fc, timecase)
+                                         HOOP, Fc, timecase,
+                                         v_di_alt=v_di_alt)
                     if e[ie] == 0:
                         if stress[ie, 0] > 0:  # 圧縮
                             ratio_output[ie, 0] = abs(stress[ie, 0]) * 10 ** 3 / abs(maxN[0])
@@ -4243,7 +4281,8 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                         e[ie] = abs(stress[ie, 4]) / stress[ie, 0] * 1000
                     A_HOOP = np.concatenate([HOOP[0:5], [sectionsize[0] / 2]])
                     M, maxN = SA_RW4_HMD(stress[ie, 0], Form_z, steelbar_z,
-                                         A_HOOP, Fc, timecase)
+                                         A_HOOP, Fc, timecase,
+                                         v_di_alt=v_di_alt)
                     if e[ie] == 0:
                         if stress[ie, 0] > 0:  # 圧縮
                             ratio_output[ie, 1] = abs(stress[ie, 0]) * 10 ** 3 / abs(maxN[0])
@@ -4266,7 +4305,8 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                                    [WL_ef[5], sectionsize[0]]])
                 rq, ALW_Q, Qs1 = SA_RW4Qratio(Form_Q, ele_length, steelbar_y,
                                               HOOP, Fc, stress, timecase, QL,
-                                              qup_wall, RCQ)
+                                              qup_wall, RCQ,
+                                              h_di_alt=h_di_alt)
                 ratio_output[:, 2:4] = np.atleast_2d(rq)
                 ratio_output[:, 2:4] = ratio_output[:, 2:4] / reduction
                 ratio_output[1, :] = 0
@@ -4278,7 +4318,8 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                         ele_length, steelbar_y, steelbar_z, HOOP, Fc, stress,
                         timecase, QL, ele_no, section_no, qup_wall, reduction,
                         LOAD_CASE_NAME, Form_Q, WL_ef, sectionsize, RCQ,
-                        pick_section_name, walldesign_index, v_pitch, v_num)
+                        pick_section_name, walldesign_index, v_pitch, v_num,
+                        v_di_alt=v_di_alt, h_di_alt=h_di_alt)
 
             elif walldesign_index == 2:  # 壁式の壁
                 Fc = np.array([Fc[1], 0.0])  # 普通コンとする
@@ -4311,7 +4352,8 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                     else:
                         e[ie] = abs(stress[ie, 3]) / stress[ie, 0] * 1000
                     M, maxN = SA_RW4_HMD(stress[ie, 0], Form_y, steelbar_y,
-                                         HOOP, Fc, timecase)
+                                         HOOP, Fc, timecase,
+                                         v_di_alt=v_di_alt)
                     if e[ie] == 0:
                         if stress[ie, 0] > 0:  # 圧縮
                             ratio_output[ie, 0] = abs(stress[ie, 0]) * 10 ** 3 / abs(maxN[0])
@@ -4386,7 +4428,8 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                         e[ie] = abs(stress[ie, 4]) / stress[ie, 0] * 1000
                     A_HOOP = np.concatenate([HOOP[0:5], [sectionsize[0] / 2]])
                     M, maxN = SA_RW4_HMD(stress[ie, 0], Form_z, steelbar_z,
-                                         A_HOOP, Fc, timecase)
+                                         A_HOOP, Fc, timecase,
+                                         v_di_alt=v_di_alt)
                     if e[ie] == 0:
                         if stress[ie, 0] > 0:  # 圧縮
                             ratio_output[ie, 1] = abs(stress[ie, 0]) * 10 ** 3 / abs(maxN[0])
@@ -4406,7 +4449,8 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                                    [WL_ef[5], sectionsize[0]]])
                 rq, ALW_Q, Qs1 = SA_RW4Qratio(Form_Q, ele_length, steelbar_y,
                                               HOOP, Fc, stress, timecase, QL,
-                                              qup_wall, RCQ)
+                                              qup_wall, RCQ,
+                                              h_di_alt=h_di_alt)
                 ratio_output[:, 2:4] = np.atleast_2d(rq)
                 ratio_output[:, 2:4] = ratio_output[:, 2:4] / reduction
                 ratio_output[1, :] = 0
@@ -4419,7 +4463,7 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                         timecase, QL, ele_no, section_no, qup_wall, reduction,
                         LOAD_CASE_NAME, Form_Q, WL_ef, sectionsize, RCQ,
                         pick_section_name, walldesign_index, v_pitch, v_num,
-                        method_rcw)
+                        method_rcw, v_di_alt=v_di_alt, h_di_alt=h_di_alt)
         else:
             raise ValueError('ERROR:RC壁断面形状設定ミス (断面番号%d)'
                              % int(section_no))
