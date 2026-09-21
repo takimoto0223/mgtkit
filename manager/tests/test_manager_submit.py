@@ -828,6 +828,23 @@ class TestClaudeHelperTruncation:
                 < prompt.index('## ご利用にあたっての制限事項')
                 < prompt.index('## 変更ファイルの説明'))
 
+    def test_prompt_asks_for_noun_ending_release_notes(self, monkeypatch):
+        """更新内容・制限事項は体言止めで書かせる (2026-09 管理者指示).
+
+        この 2 節はそのまま正式版のリリースノートになる。タイトルと
+        ファイル別説明が既に体言止めなので、本文の口調をそろえる。
+        """
+        from manager import claude_helper
+        calls = []
+        monkeypatch.setattr(
+            claude_helper, '_client',
+            lambda strict=False: _fake_claude_client(
+                'end_turn', '# タイトル\n\n## 更新内容\n\n- a', calls))
+        claude_helper.generate_pr_body('追加: a.py', 'diff', 'v1.1')
+        prompt = calls[0]['messages'][0]['content']
+        assert '2 節とも、各項目の文末は体言止め' in prompt
+        assert '敬体は使わないでください' in prompt
+
     def test_pr_body_has_room_for_every_section(self, monkeypatch):
         """PR 本文の上限は 4 節すべてを書き切れる大きさであること.
 
