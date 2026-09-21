@@ -20,6 +20,13 @@ log = logging.getLogger(__name__)
 
 _MAX_DIFF_CHARS = 30000
 
+# PR 本文の長さの上限 (トークン)。「更新内容」「ご利用にあたっての
+# 制限事項」に加えて「影響範囲」「変更ファイルの説明」(変更ファイル
+# 1 件につき 1 行) まで書き切る必要がある。30 件規模の提出では 2000
+# では足りず、制限事項の途中で文章が切れていた (提出 #176)。
+# 実際に使われなかった分は課金されないので余裕を持たせる
+_PR_BODY_MAX_TOKENS = 16000
+
 
 class ClaudeError(Exception):
     """Claude API 呼び出しの失敗。str() はそのまま画面に出す日本語."""
@@ -93,23 +100,42 @@ def _record_usage(response):
 
 
 def _generate(prompt, max_tokens=1500, strict=False):
-    """本文を 1 つ作る。strict=True なら失敗を ClaudeError で知らせる."""
+    """本文を 1 つ作る。strict=True なら失敗を ClaudeError で知らせる.
+
+    長さの上限で打ち切られた文章 (stop_reason=max_tokens) は文の途中で
+    切れている。以前はこれを成功として扱っていたため、尻切れの本文が
+    そのまま PR 本文 → β版の確認画面 → 正式版のリリースノートまで
+    進んでいた (提出 #176 で発覚)。切れた文章は返さない。
+
+    応答は streaming で受ける。上限を上げても 10 分の HTTP タイムアウト
+    に当たらない (SDK の非 streaming ガードにも引っかからない) ため。
+    """
     client = _client(strict=strict)
     if client is None:
         return None
     try:
         import anthropic
-        response = client.messages.create(
+        with client.messages.stream(
             model=_model(),
             max_tokens=max_tokens,
             messages=[{'role': 'user', 'content': prompt}],
-        )
+        ) as stream:
+            response = stream.get_final_message()
         _record_usage(response)
         if response.stop_reason == 'refusal':
             log.warning('Claude が生成を辞退しました')
             return _failed(strict, 'Claude が文章の作成を辞退しました。'
                                    '手入力に切り替えて提出してください。',
                            'stop_reason=refusal')
+        if response.stop_reason == 'max_tokens':
+            log.warning('Claude の文章が長さの上限 (%s トークン) で'
+                        '切れました', max_tokens)
+            return _failed(strict, 'Claude の文章が途中で切れました '
+                                   '(長さの上限に達しました)。'
+                                   'もう一度試すか、手入力に切り替えて'
+                                   'ください。',
+                           'stop_reason=max_tokens (max_tokens=%s)'
+                           % max_tokens)
         text = next((b.text for b in response.content if b.type == 'text'),
                     None)
         if not text or not text.strip():
@@ -233,6 +259,10 @@ def generate_fix(failure_log, files):
         if response.stop_reason == 'refusal':
             log.warning('Claude が修正生成を辞退しました')
             return None
+        if response.stop_reason == 'max_tokens':
+            # 途中で切れたファイル全文を書き戻すと壊れる。使わない
+            log.warning('Claude の修正案が長さの上限で切れました')
+            return None
         text = next((b.text for b in response.content if b.type == 'text'),
                     None)
         return _json.loads(text) if text else None
@@ -279,7 +309,9 @@ def generate_conflict_explanation(conflict_files):
         'どの機能同士がぶつかっているか」を日本語で平易に説明してください。\n'
         '例:「main.py で、あなたの機能a(CSV出力)と、最新版の機能b(ログ強化)が'
         '同じ関数を変更しています」。説明のみ出力。\n\n%s'
-        % '\n\n'.join(parts), max_tokens=1000) or \
+        # 説明の長さは衝突したファイル数で伸びる (プロンプト側に行数の
+        # 指定がない)。切れて定型文へ落ちないよう余裕を持たせる
+        % '\n\n'.join(parts), max_tokens=2000) or \
         '提出された変更と最新版が同じ箇所を変更しています: ' + \
         '、'.join(conflict_files)
 
@@ -339,6 +371,10 @@ def generate_merge(conflict_files, policy_instruction):
             response = stream.get_final_message()
         _record_usage(response)
         if response.stop_reason == 'refusal':
+            return None
+        if response.stop_reason == 'max_tokens':
+            # 途中で切れた統合結果を書き戻すと壊れる。使わない
+            log.warning('Claude の統合結果が長さの上限で切れました')
             return None
         text = next((b.text for b in response.content if b.type == 'text'),
                     None)
@@ -400,4 +436,4 @@ def generate_pr_body(diff_summary, diff_text, base_version, notes='',
         'Markdown 本文のみを出力してください。\n\n'
         '%s\n\n# 変更ファイル一覧\n%s\n\n# 変更差分(抜粋)\n%s'
         % (base_version, notes, diff_summary, diff_text[:_MAX_DIFF_CHARS]))
-    return _generate(prompt, max_tokens=2000, strict=strict)
+    return _generate(prompt, max_tokens=_PR_BODY_MAX_TOKENS, strict=strict)

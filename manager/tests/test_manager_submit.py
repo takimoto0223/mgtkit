@@ -702,6 +702,56 @@ class TestTitleLine:
         assert submit.title_line(None) == ''
 
 
+class _FakeBlock:
+    type = 'text'
+
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeResponse:
+    usage = None
+
+    def __init__(self, stop_reason, text=''):
+        self.stop_reason = stop_reason
+        self.content = [_FakeBlock(text)] if text else []
+
+
+class _FakeStream:
+    """client.messages.stream(...) の戻り (コンテキストマネージャ)."""
+
+    def __init__(self, response):
+        self._response = response
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_final_message(self):
+        return self._response
+
+
+def _fake_claude_client(stop_reason, text='', calls=None):
+    """_generate が使う最小の Claude クライアント.
+
+    calls を渡すと messages.stream に渡された引数 (max_tokens など) を
+    記録する。
+    """
+
+    class _Messages:
+        def stream(self, **kwargs):
+            if calls is not None:
+                calls.append(kwargs)
+            return _FakeStream(_FakeResponse(stop_reason, text))
+
+    class _Client:
+        messages = _Messages()
+
+    return _Client()
+
+
 class TestClaudeHelperStrict:
     """提出の自動作成ルート (strict) は失敗の理由を持って止まる."""
 
@@ -716,23 +766,60 @@ class TestClaudeHelperStrict:
         # try の中で送出した ClaudeError が「予期しないエラー」に
         # 化けないこと (except Exception に飲まれない)
         from manager import claude_helper
-
-        class _Resp:
-            stop_reason = 'refusal'
-            content = []
-            usage = None
-
-        class _Messages:
-            def create(self, **k):
-                return _Resp()
-
-        class _Client:
-            messages = _Messages()
-
-        monkeypatch.setattr(claude_helper, '_client',
-                            lambda strict=False: _Client())
+        monkeypatch.setattr(
+            claude_helper, '_client',
+            lambda strict=False: _fake_claude_client('refusal'))
         with pytest.raises(claude_helper.ClaudeError, match='辞退'):
             claude_helper._generate('x', strict=True)
+
+
+class TestClaudeHelperTruncation:
+    """長さの上限で切れた文章は成功として扱わない (提出 #176).
+
+    尻切れの本文をそのまま返すと、PR 本文 → β版の確認画面 →
+    正式版のリリースノートまで文の途中で切れたまま進んでしまう。
+    """
+
+    def test_truncated_text_raises_in_strict(self, monkeypatch):
+        from manager import claude_helper
+        monkeypatch.setattr(
+            claude_helper, '_client',
+            lambda strict=False: _fake_claude_client(
+                'max_tokens', '## 更新内容\n\n- 書き出し書式は DXF のバージョ'))
+        with pytest.raises(claude_helper.ClaudeError,
+                           match='途中で切れました') as e:
+            claude_helper._generate('x', strict=True)
+        assert 'max_tokens' in e.value.detail
+
+    def test_truncated_text_is_not_returned(self, monkeypatch):
+        # 定型文フォールバックのルートでも、切れた文章は使わない
+        from manager import claude_helper
+        monkeypatch.setattr(
+            claude_helper, '_client',
+            lambda strict=False: _fake_claude_client('max_tokens', '途中まで'))
+        assert claude_helper._generate('x') is None
+
+    def test_complete_text_is_returned(self, monkeypatch):
+        from manager import claude_helper
+        monkeypatch.setattr(
+            claude_helper, '_client',
+            lambda strict=False: _fake_claude_client('end_turn', ' 全文 '))
+        assert claude_helper._generate('x') == '全文'
+
+    def test_pr_body_has_room_for_every_section(self, monkeypatch):
+        """PR 本文の上限は 4 節すべてを書き切れる大きさであること.
+
+        「変更ファイルの説明」は変更ファイル 1 件につき 1 行あり、
+        30 件規模の提出では 2000 トークンでは足りなかった。
+        """
+        from manager import claude_helper
+        calls = []
+        monkeypatch.setattr(
+            claude_helper, '_client',
+            lambda strict=False: _fake_claude_client(
+                'end_turn', '# タイトル\n\n## 更新内容\n\n- a', calls))
+        claude_helper.generate_pr_body('追加: a.py', 'diff', 'v1.1')
+        assert calls and calls[0]['max_tokens'] >= 8000
 
     def test_status_hints_are_user_facing(self):
         from manager import claude_helper
