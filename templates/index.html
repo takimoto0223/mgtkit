@@ -601,6 +601,11 @@
     <div class="frow"><span class="flabel">truss_stress (任意)</span>
       <input type="text" id="c_truss_stress_path" class="path">
       <button class="sub" onclick="pickFile('c_truss_stress_path')">ファイルの選択</button>
+      <label class="inline" title="「検定しない」でトラス要素 (ブレース) の長期応力を0として検定します (長期検定比は0、水平組合せの長期分も0。MATLAB版の実行時質問と同じで既定は検定する)">長期
+        <select id="c_tr_long">
+          <option value="1" selected>検定する</option>
+          <option value="0">検定しない</option>
+        </select></label>
     </div>
     <div class="frow"><span class="flabel">plate_stress (任意)</span>
       <input type="text" id="c_plate_stress_path" class="path">

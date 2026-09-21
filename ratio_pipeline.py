@@ -1699,12 +1699,30 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
                                 and np.asarray(sections[2]).size) else np.zeros((0, 3))
     for sec_no_key in sorted(rcw_settings, key=float):
         s = rcw_settings[sec_no_key]
+        _va = float(s.get('v_di2', 0) or 0)
+        _ha = float(s.get('h_di2', 0) or 0)
+        if _va > 0 or _ha > 0:
+            _parts = []
+            if _va > 0:
+                _parts.append('縦筋 D%g・D%g交互'
+                              % (float(s.get('v_di', 10)), _va))
+            if _ha > 0:
+                _parts.append('横筋 D%g・D%g交互'
+                              % (float(s.get('h_di', 10)), _ha))
+            print('注記: 断面%s のRC壁を交互配筋 (%s) として算定します '
+                  '(縦筋=2径の断面積平均、横筋=1ピッチあたり各径1本の和。'
+                  'ピッチは交互込みの実ピッチを入力。原典に無い拡張)'
+                  % (sec_no_key, '、'.join(_parts)))
+            if int(s.get('mode', 1)) == 2 and _va > 0:
+                print('注意: 端部補強筋指定 (mode2) では縦筋の交互は'
+                      '面内NMに反映されません (横筋の交互のみ有効)')
         RCWcolumns.append(rcw_input_row(
             float(sec_no_key), _sb_table,
             int(s.get('mode', 1)), int(s.get('sd', 2)),
             float(s.get('v_di', 10)), float(s.get('v_pitch', 200)),
             float(s.get('h_di', 10)), float(s.get('h_pitch', 200)),
-            num_rebar=float(s.get('num_rebar', 2))))
+            num_rebar=float(s.get('num_rebar', 2)),
+            v_di_alt=_va, h_di_alt=_ha))
     if RCWcolumns:
         RCWcolumns = np.asarray(RCWcolumns, dtype=float)
     else:
@@ -1895,6 +1913,16 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
         plate_stress=plate_stress, load_case_no_plate=load_case_no_plate,
         load_case_index_plate=load_case_index_plate,
         plate_up=plate_up, pl_long=pl_long)
+
+    # トラスの長期検討を行わない (tr_long=0)。組合せ経路 (L+H) では
+    # combine_stress_t 内で長期成分が0になるが、組合せ済み応力の経路
+    # (L+S 等) は原典が応力を素通しするため効かない。オプションの意味を
+    # 保つため、長期検定ケース (timecase 1・9) のトラス応力をここで0に
+    # する (原典に無い拡張。既定 tr_long=None/1 では何もしない)
+    if tr_long == 0 and not _empty(ch_truss_stress):
+        ch_truss_stress = np.asarray(ch_truss_stress, dtype=float).copy()
+        _mL = np.isin(ch_truss_stress[:, 1], (1.0, 9.0))
+        ch_truss_stress[_mL, 2:4] = 0.0
 
     # MIDASratioplot_fig.m: load_direction = [doublecheck(ch(:,2)) load_direction]
     ld_cases = doublecheck(ch_beam_stress[:, 1]).reshape(-1, 1)

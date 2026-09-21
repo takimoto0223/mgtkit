@@ -753,7 +753,7 @@ def export_ratio_detail_tex(result, out_dir, mode='all', extra_rows=None):
     L.append(r'\let\mgtkitDTLof\@oddfoot \let\mgtkitDTLef\@evenfoot')
     L.append(r'\def\@oddhead{\hfil{\small\rightmark}}')
     L.append(r'\def\@evenhead{\hfil{\small\rightmark}}')
-    L.append(r'\def\@oddfoot{}\def\@evenfoot{}')
+    L.append(r'% フッタは触らない (ページ番号は文書側の設定のまま出す)')
     L.append(r'\makeatother')
     L.append(r'% 検定詳細の間だけ本文幅を50pt広げて項目の折返しを減らし、')
     L.append(r'% 広げたブロックを紙面の左右中央に置く (文書の余白設定に')

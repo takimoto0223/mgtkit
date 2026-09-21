@@ -88,7 +88,7 @@ def _check_cache_key(p):
             'qup_mode', 'qup_beam', 'qup_wall', 'qup_src', 'rc',
             'src_cover', 'select_unit',
             'pile_cover', 'pc', 'wall_stress_path', 'plate_stress_path',
-            'plate_up', 'pl_long']
+            'plate_up', 'pl_long', 'tr_long']
     d = {k: p.get(k) for k in keys}
     for f in ('mgt_path', 'beam_stress_path', 'truss_stress_path',
               'wall_stress_path', 'plate_stress_path'):
@@ -514,6 +514,9 @@ def api_scan_case_dir():
         'wall_stress_path': newest('*wall_stress*.txt'),
         'reaction_path': newest('*reaction*.txt'),
         'deformation_path': newest('*deformation*.txt'),
+        # 壁せん断低減 (w_r.txt / 物件名_w_r.txt)。*w_r* にすると
+        # raw_results.txt 等を誤検出するため前方一致系のみ
+        'wall_r_path': newest('w_r*.txt') or newest('*_w_r*.txt'),
     })
 
 
@@ -1443,8 +1446,10 @@ def api_steel_check():
                     'mode': int(row.get('mode', 1)),
                     'sd': int(row.get('sd', 2)),
                     'v_di': float(row.get('v_di', 10)),
+                    'v_di2': float(row.get('v_di2', 0) or 0),
                     'v_pitch': float(row.get('v_pitch', 200)),
                     'h_di': float(row.get('h_di', 10)),
+                    'h_di2': float(row.get('h_di2', 0) or 0),
                     'h_pitch': float(row.get('h_pitch', 200)),
                     'num_rebar': float(row.get('num_rebar', 2))}
             # 梁として配筋指定した断面 (RCG_input.m の引数化):
@@ -1487,8 +1492,49 @@ def api_steel_check():
                     'h_di': float(row.get('h_di', 10)),
                     'h_pitch': float(row.get('h_pitch', 200)),
                     'h_num': float(row.get('h_num', 2))}
+            # 耐震壁のせん断耐力低減。w_r.txt (「断面番号 低減率」の
+            # 2列、タブ/空白区切り) と手入力 (「断面番号:低減率」の
+            # カンマ区切り) の併用可。重複時は手入力を優先
+            wall_r_map = {}
+            _wr_path = (rc.get('wall_r_path') or '').strip()
+            if _wr_path:
+                err = _check_input_file(_wr_path,
+                                        '壁せん断低減(w_r)ファイル')
+                if err:
+                    return jsonify({'error': err}), 400
+                _wr = np.atleast_2d(loadtxt_tolerant(_wr_path))
+                if _wr.size == 0 or _wr.shape[1] < 2:
+                    return jsonify({'error':
+                        '壁せん断低減(w_r)ファイルは「断面番号 低減率」の'
+                        '2列 (タブ/空白区切り) で記述してください: %s'
+                        % _wr_path}), 400
+                for row in _wr:
+                    wall_r_map[float(row[0])] = float(row[1])
+            for tok in str(rc.get('wall_r') or '').replace(
+                    '、', ',').split(','):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                try:
+                    k0, v0 = tok.replace('：', ':').split(':')
+                    wall_r_map[float(k0)] = float(v0)
+                except ValueError:
+                    return jsonify({'error':
+                        '耐震壁のせん断耐力低減は「断面番号:低減率」を'
+                        'カンマ区切りで入力してください (例: 21:0.85)。'
+                        '解釈できない項目: %s' % tok}), 400
+            wall_r = []
+            for sec_no in sorted(wall_r_map):
+                r_val = wall_r_map[sec_no]
+                if not (0 < r_val <= 1.0):
+                    return jsonify({'error':
+                        '耐震壁のせん断耐力低減率は0より大きく1以下で'
+                        '入力してください (断面%g: %g)。1超は耐力の割増に'
+                        'なってしまいます。' % (sec_no, r_val)}), 400
+                wall_r.append([sec_no, r_val])
             rc_params = {
                 'rcw': rcw, 'rcg': rcg, 'rcc': rcc,
+                'wall_r': (wall_r or None),
                 'wall_cover': float(rc.get('wall_cover', 40)),
                 'beam_cover': float(rc.get('beam_cover', 40)),
                 'column_cover': float(rc.get('column_cover', 40)),
@@ -1517,6 +1563,10 @@ def api_steel_check():
                 '(入力値: %s)' % plate_up}), 400
         _plr = p.get('pl_long')
         pl_long = None if _plr in (None, '') else int(_plr)
+        # トラス要素 (ブレース) の長期応力の考慮 (1=考慮/0=しない。
+        # 未指定はパイプライン既定=考慮する)
+        _tlr = p.get('tr_long')
+        tr_long = None if _tlr in (None, '') else int(_tlr)
         # PC検定の設定 (原典のPCダイアログ群の引数化)
         pc_params = None
         if p.get('pc'):
@@ -1604,7 +1654,8 @@ def api_steel_check():
                 wall_stress_path=wall_path,
                 plate_stress_path=plate_path,
                 plate_up=plate_up,
-                pl_long=pl_long)
+                pl_long=pl_long,
+                tr_long=tr_long)
         data = _build_check_json(result)
         data['case_nos'] = [float(v) for v in
                             np.asarray(result.load_case_no).ravel()]

@@ -284,6 +284,18 @@ async function pickCaseDir() {
     for (const [id, v] of Object.entries(map)) {
       if (v) { setPathField(id, v); found.push(v.split(/[\\/]/).pop()); }
     }
+    if (r.wall_r_path) {
+      // RC設定パネルは後から描画されるため、localStorageの設定にも
+      // 書き込んでおく (パネル描画時にそこから初期値が入る)
+      if ($('rc_wall_r_path')) setPathField('rc_wall_r_path', r.wall_r_path);
+      try {
+        const g = JSON.parse(localStorage.getItem('mgtkit_rc_globals'))
+          || {};
+        g.wall_r_path = r.wall_r_path;
+        localStorage.setItem('mgtkit_rc_globals', JSON.stringify(g));
+      } catch (e) { /* localStorage不可でも続行 */ }
+      found.push(r.wall_r_path.split(/[\\/]/).pop());
+    }
     setMsg('mgt_msg', found.length
       ? '一括セット: ' + found.map(esc).join(', ')
       : 'フォルダ内に mgt・応力ファイルが見つかりませんでした',
@@ -1230,9 +1242,15 @@ function rcKindCellHtml(i, s) {
   if (s.kind === 'wall') {
     const w = s.wall;
     return '縦筋 ' + diSelect('rcw_vdi' + i, w.v_di || 10) +
+      diSelectOpts('rcw_vdi2' + i, w.v_di2 || 0, [0, 10, 13, 16, 19, 22],
+                   ['交互なし', '・D10交互', '・D13交互', '・D16交互',
+                    '・D19交互', '・D22交互']) +
       '@<input type="number" id="rcw_vp' + i + '" value="' +
       (w.v_pitch || 200) + '" style="width:60px"> ' +
       '横筋 ' + diSelect('rcw_hdi' + i, w.h_di || 10) +
+      diSelectOpts('rcw_hdi2' + i, w.h_di2 || 0, [0, 10, 13, 16, 19, 22],
+                   ['交互なし', '・D10交互', '・D13交互', '・D16交互',
+                    '・D19交互', '・D22交互']) +
       '@<input type="number" id="rcw_hp' + i + '" value="' +
       (w.h_pitch || 200) + '" style="width:60px"> ' +
       '<select id="rcw_sd' + i + '">' +
@@ -1332,7 +1350,9 @@ function harvestRcRow(tr) {
   if (s.kind === 'wall' && $('rcw_vdi' + i)) {
     s.wall = {mode: +$('rcw_mode' + i).value, sd: +$('rcw_sd' + i).value,
               v_di: +$('rcw_vdi' + i).value, v_pitch: +$('rcw_vp' + i).value,
+              v_di2: ($('rcw_vdi2' + i) ? +$('rcw_vdi2' + i).value : 0),
               h_di: +$('rcw_hdi' + i).value, h_pitch: +$('rcw_hp' + i).value,
+              h_di2: ($('rcw_hdi2' + i) ? +$('rcw_hdi2' + i).value : 0),
               num_rebar: +$('rcw_nr' + i).value};
   } else if (s.kind === 'beam' && $('rcg_udan' + i)) {
     const rd = (p, k) => +$(p + i + '_' + k).value;
@@ -1463,6 +1483,19 @@ function renderRcSections(j) {
     'value="' + (g.beam_cover || 40) + '" style="width:60px">mm</label>' +
     '<label class="inline">柱かぶり <input type="number" id="rc_ccover" ' +
     'value="' + (g.column_cover || 40) + '" style="width:60px">mm</label>' +
+    '</div>' +
+    '<div class="row"><label class="inline">耐震壁のせん断耐力低減 ' +
+    'w_rファイル <input type="text" id="rc_wall_r_path" value="' +
+    esc(g.wall_r_path || '') + '" style="width:300px" ' +
+    'placeholder="w_r.txt (断面番号 低減率 の2列)"></label>' +
+    '<button class="sub" onclick="pickFile(\'rc_wall_r_path\')">' +
+    'ファイルの選択</button>' +
+    '<label class="inline">手入力 (断面番号:低減率) ' +
+    '<input type="text" id="rc_wall_r" value="' +
+    esc(g.wall_r || '') + '" style="width:180px" ' +
+    'placeholder="例: 21:0.85, 22:0.8"></label>' +
+    '<span class="hint">空欄=低減なし。せん断耐力をr倍に低減 ' +
+    '(曲げは対象外)。両方指定時は手入力を優先</span>' +
     '</div>' +
     '<div class="row"><label class="inline">せん断力の割増 (RCルート) ' +
     '<select id="rc_qup"><option value="route1"' +
@@ -1600,6 +1633,8 @@ function collectRcParams() {
     qup_mode: $('rc_qup').value,
     qup_beam: +$('rc_qup_beam').value, qup_wall: +$('rc_qup_wall').value,
     qup_src: +$('rc_qup_src').value,
+    wall_r: ($('rc_wall_r') ? $('rc_wall_r').value : ''),
+    wall_r_path: ($('rc_wall_r_path') ? $('rc_wall_r_path').value : ''),
     l43_mgt: l43_mgt,
     select_unit_zero: $('rc_select_unit').value === '0'};
   if (g.qup_mode === 'custom') {
@@ -1620,6 +1655,8 @@ function collectRcParams() {
           column_cover: g.column_cover,
           qup_mode: g.qup_mode, qup_beam: g.qup_beam, qup_wall: g.qup_wall,
           qup_src: g.qup_src,
+          wall_r: g.wall_r,
+          wall_r_path: g.wall_r_path,
           select_unit: $('rc_select_unit').value};
 }
 
@@ -2064,6 +2101,7 @@ function buildCheckReq() {
     wall_stress_path: $('c_wall_stress_path').value.trim(),
     plate_up: +$('c_plate_up').value,
     pl_long: +$('c_pl_long').value,
+    tr_long: +$('c_tr_long').value,
     pile_cover: +$('c_pile_cover').value,
     src_cover: +$('c_src_cover').value};
   _reqPos(req.src_cover, 'SRCコンクリートかぶり厚');
