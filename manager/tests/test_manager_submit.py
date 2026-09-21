@@ -806,6 +806,28 @@ class TestClaudeHelperTruncation:
             lambda strict=False: _fake_claude_client('end_turn', ' 全文 '))
         assert claude_helper._generate('x') == '全文'
 
+    def test_prompt_asks_only_for_the_sections_we_show(self, monkeypatch):
+        """本文の様式は 3 節。「影響範囲」は作らせない (2026-09 管理者指示).
+
+        マネージャーが読むのは「更新内容」「ご利用にあたっての制限事項」
+        (冒頭の箱とリリースノート) と「変更ファイルの説明」(各ファイルの
+        青枠) だけ。影響範囲はどの画面にも出ず、人は読まない・AI は
+        ソースを読めば分かるため、書かせない。
+        """
+        from manager import claude_helper
+        calls = []
+        monkeypatch.setattr(
+            claude_helper, '_client',
+            lambda strict=False: _fake_claude_client(
+                'end_turn', '# タイトル\n\n## 更新内容\n\n- a', calls))
+        claude_helper.generate_pr_body('追加: a.py', 'diff', 'v1.1')
+        prompt = calls[0]['messages'][0]['content']
+        assert '次の 3 節' in prompt
+        assert '「## 影響範囲」' not in prompt
+        assert (prompt.index('## 更新内容')
+                < prompt.index('## ご利用にあたっての制限事項')
+                < prompt.index('## 変更ファイルの説明'))
+
     def test_pr_body_has_room_for_every_section(self, monkeypatch):
         """PR 本文の上限は 4 節すべてを書き切れる大きさであること.
 
