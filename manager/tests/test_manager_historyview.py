@@ -497,3 +497,202 @@ class TestDateAxis:
         tl, shapes = self._shapes()
         assert len(self._date_labels(shapes)) == len(
             {s['date'] for s in tl['stables']})
+
+
+class TestLineJumps:
+    """線どうしの交差は、横の線が小さな山で跨ぐ (ライン ジャンプ).
+
+    深い段の枝は、浅い段の横の線を縦に横切って降りる。山が無いと
+    どちらの線が曲がって続くのか読めない (管理者指示 2026-10、規約は
+    manager/docs/図の作法.md の 5)。縦の線は切らずに真っ直ぐ通し、
+    本線・きょう線・日付の縦線・合流と分岐には山を入れない。
+    """
+
+    LATER = D(2026, 8, 30)
+    RELEASES = [_rel('v1.3', '2026-08-27'), _rel('v1.2', '2026-08-20'),
+                _rel('v1.1', '2026-08-13'), _rel('v1.0', '2026-08-06')]
+
+    def _canvas(self, merged, pending):
+        tl = history.build_timeline(self.RELEASES, merged, pending,
+                                    today=self.LATER)
+        fig = historyview.build_figure(tl, 'v1.3', self.LATER,
+                                       lambda *a: None)
+        assert fig is not None
+        return _canvas(fig)
+
+    def _two_close_branches(self):
+        # 同じ版 v1.1 から 3 本 = 下の 2 段目・3 段目へ降りる枝が、
+        # 1 段目の長い帯の横の線を 2 本並んで横切る
+        merged = [_merged(150, 'tomiriri', '2026-08-06', '2026-08-13',
+                          'v1.0')]
+        pending = [{'number': n, 'title': 't', 'author': a,
+                    'created_at': d, 'base_version': 'v1.1'}
+                   for n, a, d in ((170, 'y-kunie', '2026-08-25'),
+                                   (171, 'tomiriri', '2026-08-28'),
+                                   (172, 'y-kunie', '2026-08-24'))]
+        return self._canvas(merged, pending)
+
+    def _mixed(self):
+        merged = [_merged(150, 'fujitaka213-sys', '2026-08-06',
+                          '2026-08-13', 'v1.0'),
+                  _merged(151, 'kanazawaryoma817', '2026-08-13',
+                          '2026-08-20', 'v1.1'),
+                  _merged(152, 'kanazawaryoma817', '2026-08-13',
+                          '2026-08-27', 'v1.1')]
+        pending = [{'number': 170, 'title': 't', 'author': 'y-kunie',
+                    'created_at': '2026-08-24', 'base_version': 'v1.0'},
+                   {'number': 171, 'title': 't',
+                    'author': 'fujitaka213-sys',
+                    'created_at': '2026-08-28', 'base_version': 'v1.1'}]
+        return self._canvas(merged, pending)
+
+    @staticmethod
+    def _lines(canvas):
+        """枝の線ごとに (横の直線の区間, 曲線, 山) を図から読み直す.
+
+        枝の線 = 太さ 2.4 の Path。区間は (x0, x1, y)、曲線は 3 次
+        ベジェの 4 点、山は (左端 x, 右端 x, y, 山の要素の並び)。山は
+        上がる 1/4 円 → (平らな上辺) → 下りる 1/4 円 で、上辺は区間に数えない。
+        """
+        out = []
+        for s in _paths(canvas):
+            paint = s.paint
+            if (paint.style != ft.PaintingStyle.STROKE
+                    or abs((paint.stroke_width or 0) - 2.4) > 0.01):
+                continue
+            runs, curves, hops = [], [], []
+            px = py = None
+            hop = None          # 山の途中 = (左端 x, 山の y, 要素)
+            for e in s.elements:
+                if hop is not None:
+                    hop[2].append(e)
+                    if (isinstance(e, cv.Path.ArcTo)
+                            and abs(e.y - hop[1]) < 1e-6):
+                        hops.append((hop[0], e.x, hop[1], hop[2]))
+                        hop = None
+                elif isinstance(e, cv.Path.ArcTo):
+                    hop = (px, py, [e])
+                elif isinstance(e, cv.Path.LineTo):
+                    if abs(e.y - py) < 1e-6 and e.x > px:
+                        runs.append((px, e.x, e.y))
+                elif isinstance(e, cv.Path.CubicTo):
+                    curves.append(((px, py), (e.cp1x, e.cp1y),
+                                   (e.cp2x, e.cp2y), (e.x, e.y)))
+                px, py = e.x, e.y
+            assert hop is None, '山が閉じていません'
+            out.append((runs, curves, hops))
+        return out
+
+    @staticmethod
+    def _curve_points(curve, n=40):
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = curve
+        pts = []
+        for i in range(n + 1):
+            t = i / n
+            u = 1 - t
+            pts.append((u ** 3 * x0 + 3 * u * u * t * x1
+                        + 3 * u * t * t * x2 + t ** 3 * x3,
+                        u ** 3 * y0 + 3 * u * u * t * y1
+                        + 3 * u * t * t * y2 + t ** 3 * y3))
+        return pts
+
+    def _crossings(self, canvas):
+        """(山の無い交差, 山の一覧と、その下を通る他の線の x) を返す."""
+        lines = self._lines(canvas)
+        bare, hops = [], []
+        for i, (runs, _curves, hs) in enumerate(lines):
+            others = [c for j, ln in enumerate(lines) if j != i
+                      for c in ln[1]]
+            for x0, x1, y in runs:
+                for c in others:
+                    x = historyview._cubic_x_at(c, y)
+                    if x is not None and x0 < x < x1:
+                        bare.append((round(x, 1), y))
+            for left, right, y, arc in hs:
+                under = [x for x in (historyview._cubic_x_at(c, y)
+                                     for c in others)
+                         if x is not None and left < x < right]
+                hops.append((left, right, y, arc, under))
+        return bare, hops
+
+    @pytest.mark.parametrize('case', ['_two_close_branches', '_mixed'])
+    def test_every_crossing_has_a_hop(self, case):
+        bare, hops = self._crossings(getattr(self, case)())
+        assert hops, '交差のある図なのに山が 1 つもありません'
+        assert not bare, '山の無い交差があります: %s' % bare
+
+    @pytest.mark.parametrize('case', ['_two_close_branches', '_mixed'])
+    def test_hop_is_an_upward_half_circle_over_a_line(self, case):
+        for left, right, y, arc, under in self._crossings(
+                getattr(self, case)())[1]:
+            # 左 → 右へ時計回りの 1/4 円 2 つ = 上へ膨らむ。高さはどの山も
+            # HOP_R (2 本をまとめて跨ぐ広い山は上辺が平らな橋)
+            r = historyview.HOP_R
+            arcs = [e for e in arc if isinstance(e, cv.Path.ArcTo)]
+            assert len(arcs) == 2 and len(arc) in (2, 3)
+            assert all(a.clockwise and a.radius == r for a in arcs)
+            assert abs(arcs[0].x - (left + r)) < 1e-6
+            assert abs(arcs[0].y - (y - r)) < 1e-6 and arcs[1].y == y
+            if len(arc) == 3:
+                assert abs(arc[1].y - (y - r)) < 1e-6
+            assert right - left >= 2 * r - 1e-6
+            # 山の下には必ず他の線が通り、山の縁から HOP_R 以上内側
+            assert under, '線の通らない所に山があります (x=%.1f)' % left
+            assert min(under) >= left + historyview.HOP_R - 1e-6
+            assert max(under) <= right - historyview.HOP_R + 1e-6
+
+    def test_close_crossings_share_one_flat_bridge(self):
+        # 2 * HOP_R より近い交差は 1 つの山で跨ぐ (小さな山を重ねない)。
+        # 広い山も高さは HOP_R のまま、上辺を平らにした橋にする
+        r = historyview.HOP_R
+        down = [((x, 200), (x, 230), (x, 270), (x, 300)) for x in (100, 105)]
+        hops = historyview._hops_on((50, 200, 250), down)
+        assert hops == [(100 - r, 105 + r)]
+        els = historyview._run_elements((50, 200, 250), hops)
+        assert [type(e).__name__ for e in els] == [
+            'LineTo', 'ArcTo', 'LineTo', 'ArcTo', 'LineTo']
+        assert els[2].y == 250 - r and els[2].x == 105
+        # 同じ版から出る枝は出発を 9 px ずつずらすので、図では離れた山になる
+        hops = self._crossings(self._two_close_branches())[1]
+        assert len(hops) == 2 and all(len(h[4]) == 1 for h in hops)
+
+    @pytest.mark.parametrize('case', ['_two_close_branches', '_mixed'])
+    def test_curves_do_not_cross_each_other(self, case):
+        # 曲線どうしは山で跨げない (斜めに交わると分岐と見分けが付かない)。
+        # 同じ版から出る枝は深い段ほど左から出し、同心に並べて交差を無くす
+        lines = self._lines(getattr(self, case)())
+        polys = [(i, self._curve_points(c))
+                 for i, ln in enumerate(lines) for c in ln[1]]
+
+        def side(a, b, c):
+            return ((b[0] - a[0]) * (c[1] - a[1])
+                    - (b[1] - a[1]) * (c[0] - a[0]))
+
+        def cross(p, q, r, t):
+            return (side(p, q, r) * side(p, q, t) < 0
+                    and side(r, t, p) * side(r, t, q) < 0)
+
+        for a in range(len(polys)):
+            for b in range(a + 1, len(polys)):
+                (i, pa), (j, pb) = polys[a], polys[b]
+                if i == j:
+                    continue
+                assert not any(cross(pa[k], pa[k + 1], pb[m], pb[m + 1])
+                               for k in range(len(pa) - 1)
+                               for m in range(len(pb) - 1)), \
+                    '曲線どうしが交わっています (%.1f, %.1f)' % pa[0]
+
+    def test_vertical_lines_are_not_cut(self):
+        # 山は横の線にだけ入る。縦寄りの曲線は 1 本の曲線のまま通る
+        for _runs, curves, hops in self._lines(self._mixed()):
+            for left, right, y, _arc in hops:
+                assert all(abs(c[0][1] - y) > 1e-6 or c[0][0] > right
+                           or c[3][0] < left for c in curves)
+
+    def test_no_hop_without_crossings(self):
+        # 交差の無い図 (既存の 1 段だけの図) には山を入れない
+        canvas = self._canvas(
+            [_merged(150, 'tomiriri', '2026-08-06', '2026-08-13', 'v1.0')],
+            [])
+        assert not any(isinstance(e, cv.Path.ArcTo)
+                       for p in _paths(canvas) for e in p.elements)

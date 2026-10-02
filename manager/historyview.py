@@ -131,38 +131,27 @@ def _arrow_head(tipx, tipy, ang, color):
     ], paint=_fill(color))
 
 
-def _derivation(base_x, arrow_back, lane, color):
-    """基点ノード → 帯へ降りる (上がる) 滑らかな 1/4 円弧 + 矢先.
+HOP_R = 4               # 線どうしの交差で横の線に入れる山の半径 (= 高さ)
 
-    ノードを縦に出て、水平になってから帯に刺さる (路線図の分岐と
-    同じ形)。基点と帯が近くても遠くても同じ形になり、急角度の
-    直線に見えない。
-    """
+
+def _deriv_geom(base_x, arrow_back, lane):
+    """派生線の形: (1/4 円弧の 3 次曲線の 4 点, 横の区間 (x0, x1, y) か None)."""
     _, line_y = _lane_geom(lane)
     dy = line_y - RAIL_Y
     # 横に取れる幅より広い円弧は描かない。描くと線が矢先を追い越して
     # 「線と矢先がつながっていない」見え方になる (帯の左端は
     # _deriv_lead ぶん空けてあるので、通常は 46 = 一定の形になる)
     dx = min(46, max(0, arrow_back - base_x))
-    elements = [cv.Path.MoveTo(base_x, RAIL_Y),
-                cv.Path.CubicTo(base_x, RAIL_Y + dy * 0.55,
-                                base_x + dx * 0.45, line_y,
-                                base_x + dx, line_y)]
-    if arrow_back > base_x + dx:
-        elements.append(cv.Path.LineTo(arrow_back, line_y))
-    shapes = [cv.Path(elements, paint=_stroke(color, 2.4))]
-    shapes.append(_arrow_head(arrow_back + 9, line_y, 0, color))
-    return shapes
+    curve = ((base_x, RAIL_Y), (base_x, RAIL_Y + dy * 0.55),
+             (base_x + dx * 0.45, line_y), (base_x + dx, line_y))
+    run = ((base_x + dx, arrow_back, line_y)
+           if arrow_back > base_x + dx else None)
+    return curve, run
 
 
-def _merge_arrow(chip_right, node_x, lane, color, big_node):
-    """帯の右端 → 水平に出て 1/4 円弧でノードに縦に刺さる矢印.
-
-    派生 (_derivation) の鏡映で、左右のカーブの滑らかさをそろえる
-    (管理者指示)。矢先はノードの縁に縦向きで刺さる。刺す位置はノードの
-    中心より少し左にする (分岐は右へ出るので、同じ版に出入りがあっても
-    線が重ならない)。
-    """
+def _merge_geom(chip_right, node_x, lane, big_node):
+    """合流線の形: (横の区間 (x0, x1, y) か None, 3 次曲線の 4 点,
+    矢先の先端 (x, y), 矢先の向き)."""
     _, line_y = _lane_geom(lane)
     sign = 1 if lane < 0 else -1    # +1 = 本線より下
     r = 14 if big_node else 9
@@ -172,13 +161,113 @@ def _merge_arrow(chip_right, node_x, lane, color, big_node):
     back_y = RAIL_Y + sign * (edge + 10)    # 矢先の根元 = 曲線の終点
     dy = line_y - back_y
     dx = min(46, max(0, ax - chip_right))
-    elements = [cv.Path.MoveTo(chip_right, line_y)]
-    if ax - dx > chip_right:
-        elements.append(cv.Path.LineTo(ax - dx, line_y))
-    elements.append(cv.Path.CubicTo(ax - dx * 0.45, line_y,
-                                    ax, back_y + dy * 0.55, ax, back_y))
+    run = (chip_right, ax - dx, line_y) if ax - dx > chip_right else None
+    x0 = ax - dx if run else chip_right
+    curve = ((x0, line_y), (ax - dx * 0.45, line_y),
+             (ax, back_y + dy * 0.55), (ax, back_y))
+    return run, curve, (ax, tip_y), math.radians(-90 * sign)
+
+
+def _cubic_x_at(curve, y):
+    """縦に単調な 3 次曲線が高さ y を横切る x。端で触れるだけ・通らないなら None."""
+    (x0, y0), (x1, y1), (x2, y2), (x3, y3) = curve
+    if not min(y0, y3) < y < max(y0, y3):
+        return None
+
+    def at(t, a, b, c, d):
+        u = 1 - t
+        return u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * c + t * t * t * d
+
+    lo, hi = 0.0, 1.0
+    up = y3 > y0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        if (at(mid, y0, y1, y2, y3) < y) == up:
+            lo = mid
+        else:
+            hi = mid
+    return at((lo + hi) / 2, x0, x1, x2, x3)
+
+
+def _hops_on(run, curves):
+    """横の区間 run を他の線の曲線が横切る所に入れる山の [(左端 x, 右端 x)].
+
+    山は交差の x を中心に幅 2 * HOP_R。同じ版から並んで出た枝は
+    縦の線どうしが HOP_R * 2 より近いので、近い交差は 1 つの広い山で
+    まとめて跨ぐ (小さな山が重なって潰れないように)。山が区間の端から
+    はみ出す交差には入れない (線の曲がり始め・矢先と重なるため)。
+    """
+    x0, x1, y = run
+    xs = sorted(x for x in (_cubic_x_at(c, y) for c in curves)
+                if x is not None and x0 + HOP_R <= x <= x1 - HOP_R)
+    hops = []
+    for x in xs:
+        if hops and x - HOP_R < hops[-1][1]:
+            hops[-1] = (hops[-1][0], x + HOP_R)
+        else:
+            hops.append((x - HOP_R, x + HOP_R))
+    return [h for h in hops if h[1] <= x1]
+
+
+def _run_elements(run, hops):
+    """横の区間を左 → 右に描く要素。hops の位置で上へ膨らむ山を挟む.
+
+    縦の線は切らずに真っ直ぐ通し、横の線のほうが跨ぐ (ライン ジャンプ)。
+    山は半径 HOP_R の 1/4 円 2 つ (右向きに進んで時計回り = 画面の上へ
+    膨らむ)。1 本を跨ぐ山は半円、まとめて跨ぐ広い山は上辺を平らにした
+    橋にして、高さをどれも HOP_R にそろえる (広い半円は背が高く不揃い)。
+    """
+    _x0, x1, y = run
+    top = y - HOP_R
+    elements = []
+    for left, right in hops:
+        elements.append(cv.Path.LineTo(left, y))
+        elements.append(cv.Path.ArcTo(left + HOP_R, top, radius=HOP_R,
+                                      clockwise=True))
+        if right - left > 2 * HOP_R:
+            elements.append(cv.Path.LineTo(right - HOP_R, top))
+        elements.append(cv.Path.ArcTo(right, y, radius=HOP_R,
+                                      clockwise=True))
+    elements.append(cv.Path.LineTo(x1, y))
+    return elements
+
+
+def _derivation(base_x, arrow_back, lane, color, hops=()):
+    """基点ノード → 帯へ降りる (上がる) 滑らかな 1/4 円弧 + 矢先.
+
+    ノードを縦に出て、水平になってから帯に刺さる (路線図の分岐と
+    同じ形)。基点と帯が近くても遠くても同じ形になり、急角度の
+    直線に見えない。hops = 横の区間に入れる山 (_hops_on)。
+    """
+    curve, run = _deriv_geom(base_x, arrow_back, lane)
+    (sx, sy), p1, p2, p3 = curve
+    elements = [cv.Path.MoveTo(sx, sy), cv.Path.CubicTo(*p1, *p2, *p3)]
+    if run:
+        elements += _run_elements(run, hops)
+    _, line_y = _lane_geom(lane)
     shapes = [cv.Path(elements, paint=_stroke(color, 2.4))]
-    shapes.append(_arrow_head(ax, tip_y, math.radians(-90 * sign), color))
+    shapes.append(_arrow_head(arrow_back + 9, line_y, 0, color))
+    return shapes
+
+
+def _merge_arrow(chip_right, node_x, lane, color, big_node, hops=()):
+    """帯の右端 → 水平に出て 1/4 円弧でノードに縦に刺さる矢印.
+
+    派生 (_derivation) の鏡映で、左右のカーブの滑らかさをそろえる
+    (管理者指示)。矢先はノードの縁に縦向きで刺さる。刺す位置はノードの
+    中心より少し左にする (分岐は右へ出るので、同じ版に出入りがあっても
+    線が重ならない)。hops = 横の区間に入れる山 (_hops_on)。
+    """
+    run, curve, (tx, ty), ang = _merge_geom(chip_right, node_x, lane,
+                                            big_node)
+    _, line_y = _lane_geom(lane)
+    elements = [cv.Path.MoveTo(chip_right, line_y)]
+    if run:
+        elements += _run_elements(run, hops)
+    _p0, p1, p2, p3 = curve
+    elements.append(cv.Path.CubicTo(*p1, *p2, *p3))
+    shapes = [cv.Path(elements, paint=_stroke(color, 2.4))]
+    shapes.append(_arrow_head(tx, ty, ang, color))
     return shapes
 
 
@@ -416,9 +505,11 @@ def _depart_slots(chips):
             by_base.setdefault(c['base_tag'], []).append(c)
     slots = {}
     for sibs in by_base.values():
-        # 本線に近いレーンから順に、内側の出発位置を使う
+        # 本線から遠いレーンほど左 (ノード寄り) から出す。深く降りる枝が
+        # 浅い枝の内側を通って曲線が同心に並び、曲線どうしが交わらない
+        # (逆の順だと深い枝が浅い枝の曲線を斜めに横切り、分岐に見える)
         for i, c in enumerate(sorted(sibs,
-                                     key=lambda c: (abs(c['lane']),
+                                     key=lambda c: (-abs(c['lane']),
                                                     c['lane']))):
             slots[c['number']] = i
     return slots
@@ -581,9 +672,11 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     shapes.append(cv.Line(X0, RAIL_Y, today_x, RAIL_Y,
                           paint=_stroke(RAIL, 5.5)))
 
-    # 帯と線 (ノードより先に描く)
+    # 帯と線 (ノードより先に描く)。先に全部の線の形を集めて、横の線を
+    # 他の帯の縦寄りの曲線が横切る所に山 (半円) を入れる (図の作法 5)。
+    # 本線・きょう線・日付の縦線は線どうしではないので跨がない
+    geoms = []
     for c in chips:
-        color = history.person_color(c['author'], authors)
         base_x = node_x.get(c['base_tag'])
         if base_x is None:
             continue
@@ -591,11 +684,26 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         # 同じノードから出る枝は出発位置を少しずつ右へずらす
         depart = base_x + DEPART_DX + DEPART_STEP * depart_slots.get(
             c['number'], 0)
-        shapes += _derivation(depart, chip_left - 9, c['lane'], color)
+        d_curve, d_run = _deriv_geom(depart, chip_left - 9, c['lane'])
+        m = None
         if not c['pending']:
             big = c['target_tag'] == current_tag
-            shapes += _merge_arrow(chip_right, node_x[c['target_tag']],
-                                   c['lane'], color, big)
+            m = (node_x[c['target_tag']], big)
+            m_run, m_curve, _tip, _ang = _merge_geom(
+                chip_right, m[0], c['lane'], big)
+        else:
+            m_run = m_curve = None
+        geoms.append((c, depart, chip_left, chip_right, m,
+                      [d_run, m_run], [d_curve, m_curve]))
+    for c, depart, chip_left, chip_right, m, runs, _own in geoms:
+        others = [cu for g in geoms if g[0] is not c for cu in g[6] if cu]
+        d_hops, m_hops = [_hops_on(r, others) if r else [] for r in runs]
+        color = history.person_color(c['author'], authors)
+        shapes += _derivation(depart, chip_left - 9, c['lane'], color,
+                              d_hops)
+        if m:
+            shapes += _merge_arrow(chip_right, m[0], c['lane'], color, m[1],
+                                   m_hops)
         chip_shapes, hit = _chip(c, chip_left, chip_right, color, today_x)
         shapes += chip_shapes
         overlays.append((hit, 'chip', c))
