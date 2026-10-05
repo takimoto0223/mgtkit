@@ -24,6 +24,21 @@ def test_read_tag_out_is_optional(tmp_path):
     assert tabreg.read_tab_tag(str(tmp_path / '_tab_a.html'))['out'] == ''
 
 
+def test_read_tag_order_is_optional(tmp_path):
+    _write(tmp_path, '_tab_a.html', '{# tab: id="a" label="A" #}')
+    assert tabreg.read_tab_tag(str(tmp_path / '_tab_a.html'))['order'] == float('inf')
+
+
+def test_collect_tags_without_order_go_right_in_file_name_order(tmp_path):
+    _write(tmp_path, '_tab_zz.html', '{# tab: id="zz" label="Z" #}')
+    _write(tmp_path, '_tab_aa.html', '{# tab: id="aa" label="A" #}')
+    _write(tmp_path, '_tab_far.html', '{# tab: id="far" label="F" order="9999" #}')
+    _write(tmp_path, '_tab_vw.html', '{# tab: id="vw" label="VW" order="80" #}')
+    tabs, errors = tabreg.collect_tabs(str(tmp_path), BUILTIN)
+    assert errors == []
+    assert [t['id'] for t in tabs] == ['model', 'dxf', 'vw', 'quantity', 'far', 'aa', 'zz']
+
+
 def test_no_tag_is_none(tmp_path):
     _write(tmp_path, '_tab_a.html', '<!-- タブ: A -->')
     assert tabreg.read_tab_tag(str(tmp_path / '_tab_a.html')) is None
@@ -31,7 +46,7 @@ def test_no_tag_is_none(tmp_path):
 
 @pytest.mark.parametrize('first, why', [
     ('{# tab: id="a" order="1" #}', 'label'),
-    ('{# tab: id="a" label="A" #}', 'order'),
+    ('{# tab: id="a" label="A" order="" #}', '数値'),
     ('{# tab: id="a" label="A" order="右端" #}', '数値'),
     ('{# tab: id="a" lable="A" order="1" #}', '知らない項目'),
     ('{# tab: id="a b" label="A" order="1" #}', 'id'),

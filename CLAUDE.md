@@ -31,7 +31,8 @@
 - 画面: `templates/_tab_<x>.html` の**先頭行**に見出し
   `{# tab: id="x" label="表示名" order="150" out="x" #}` を書く → nav のボタン・
   本体の include・出力フォルダ案内文に載る。order は組み込みタブ
-  (app.py の `BUILTIN_TABS`) と既存の見出しを見て、入れたい位置の間の値にする。
+  (app.py の `BUILTIN_TABS`) と既存の見出しを見て、入れたい位置の間の値にする
+  (省略すると右端。省略したタブどうしはファイル名順)。
   JS は `<script src="/static/<x>.js">` をそのテンプレートの末尾に書く
 - 入力欄: 既存の応力ファイル欄と同期するなら `data-sync="beam"` など
   (beam / truss / plate / wall)、記憶と出力先推定の対象にするなら `data-persist`

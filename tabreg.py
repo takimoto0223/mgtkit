@@ -15,7 +15,8 @@
 
    id    nav の data-tab と本体の section id (tab-<id>)
    label nav のボタンの表示名
-   order 並び順 (小さいほど左。組み込みタブの値は app.py の BUILTIN_TABS)
+   order 並び順 (小さいほど左。組み込みタブの値は app.py の BUILTIN_TABS)。
+         省略すると右端 (どの値よりも右)。同じ値・省略どうしはファイル名順
    out   mgtkit_out/ の下に作る出力フォルダ名 (案内文に載せる。無ければ省略)
 """
 import importlib
@@ -110,17 +111,22 @@ def read_tab_tag(path):
     unknown = sorted(set(attrs) - set(_TAG_KEYS))
     if unknown:
         raise ValueError('見出しに知らない項目があります: %s' % ', '.join(unknown))
-    missing = [k for k in ('id', 'label', 'order') if not attrs.get(k)]
+    missing = [k for k in ('id', 'label') if not attrs.get(k)]
     if missing:
         raise ValueError('見出しに %s がありません' % ' / '.join(missing))
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', attrs['id']):
         raise ValueError('見出しの id は英字で始まる英数字・_・- で書いてください: %r'
                          % attrs['id'])
-    try:
-        order = float(attrs['order'])
-    except ValueError:
-        raise ValueError('見出しの order は数値で書いてください: %r'
-                         % attrs['order']) from None
+    if 'order' not in attrs:
+        # order の省略は「右端」。値を探さずに足せるようにする
+        # (同じく省略したタブどうしはファイル名順。collect_tabs 参照)
+        order = float('inf')
+    else:
+        try:
+            order = float(attrs['order'])
+        except ValueError:
+            raise ValueError('見出しの order は数値で書いてください: %r'
+                             % attrs['order']) from None
     return {'id': attrs['id'], 'label': attrs['label'], 'order': order,
             'out': attrs.get('out', '')}
 
@@ -137,7 +143,8 @@ def collect_tabs(templates_dir, builtin=(), skip=(), handwritten=None):
              nav=False、手書きで include 済みのテンプレートは include=False にする
     同じ id が 2 度出てきたら先のもの (組み込み → ファイル名順) だけを残し、
     後のものはエラーにする (nav に同じタブが 2 つ並ばないように)。
-    order が同じなら組み込み → ファイル名順。
+    order が同じなら組み込み → ファイル名順 (order を省略した見出しは右端に、
+    ファイル名順で並ぶ)。
 
     戻り値: (tabs, errors)。tabs の各要素は id / label / order / out /
     template (組み込みタブは None) / nav / include を持つ。
