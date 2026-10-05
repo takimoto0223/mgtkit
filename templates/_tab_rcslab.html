@@ -1,0 +1,118 @@
+{# tab: id="rcslab" label="RCスラブ" order="150" #}
+<!-- ============ タブ: RCスラブの検討書 ============ -->
+<!-- index.html から include される。既存タブ (loadmap / colbase) の markup に合わせてある。 -->
+<section class="tab" id="tab-rcslab">
+  <fieldset style="min-width:0">
+    <legend>板要素の断面力を読み込む</legend>
+    <div class="row"><span class="hint">
+      画面上部の「mgtファイル」欄の mgt (形状・厚さ・グループ) と、MIDAS の
+      結果テーブル「板要素断面力」をテキスト保存した txt を読みます。txt は
+      全ケース・全要素のままでよく、選んだ対象・荷重ケースの要素中心 (中央)
+      の行だけを使います。</span>
+    </div>
+    <div class="row">板要素断面力 txt:
+      <input type="text" id="rs_txt_path" class="path"
+             placeholder="例 plate_stress.txt (タブ区切り、1行目が見出し)">
+      <button class="sub" onclick="pickFile('rs_txt_path')">ファイルの選択</button>
+    </div>
+    <details class="rs-help" style="margin:2px 0 8px 0">
+      <summary>板要素断面力 txt のルール (クリックで開閉)</summary>
+      <div class="hint" style="line-height:1.7;padding:4px 0 0 14px">
+        MIDAS の結果テーブル「板要素断面力」(局所座標系) をテキストで保存した
+        ものを使います。必要な行・列だけに絞る必要はなく、全ケース・全要素を
+        入れたままで構いません。
+        <ol style="margin:4px 0 0 0;padding-left:20px">
+          <li><b>形式</b>: タブ区切り、1行目が見出し。文字コードは UTF-8・
+            Shift_JIS のどちらでも可。</li>
+          <li><b>必要な列</b> (見出し名で探すので列の順番は自由):
+            要素・荷重・節点・Mxx・Myy・Mxy・Mmax・Mmin・角度・Vxx・Vyy
+            (英語の見出し Elem・Load・Node・Angle も可)。
+            「角度」が2列あるときは後ろの列 (曲げの主軸角) を使います。
+            Fxx などほかの列はあっても無視します。</li>
+          <li><b>使う行</b>: 節点が「中央」(Cent) の行 = 要素中心値だけ。
+            節点ごとの行はあっても無視します。</li>
+          <li><b>荷重ケース</b>: 「荷重」列の名前が上の表の「MIDASの荷重
+            ケース」と一致すること。(ST)・(CB) の種別は無視して照合します
+            (1 と 1(ST) は同じ扱い)。表のケースが1つでも txt に無いと
+            エラーになり、txt にあるケース名を表示します。</li>
+          <li><b>単位</b>: 見出しの括弧 (例 Mxx(kN·m/m)、Vxx(kN/m)) から
+            kN・m に換算します (N・tonf、mm・cm も可)。括弧が無い列は
+            kN・m とみなします。</li>
+          <li><b>座標系</b>: 局所座標系 (要素座標系) のテーブルを使って
+            ください。せん断力 Vmax は Vxx と Vyy のうち絶対値の大きい方を
+            要素座標系で選ぶため、全体座標系の表だと値が変わることが
+            あります。</li>
+          <li><b>mgt との対応</b>: 上部の「mgtファイル」欄の mgt と同じ解析の
+            txt を使ってください。要素番号で突き合わせるので、モデルを直した
+            後の古い txt では対応がずれます。対象の要素が txt に無いときは、
+            その要素は図にも検定にも入らず、読み込み結果の注記に件数が
+            出ます。</li>
+        </ol>
+        見本: <code>要素 荷重 節点 Fxx(kN/m) … Mxx(kN·m/m) … Vxx(kN/m)
+        Vyy(kN/m)</code> / <code>31433 1 中央 -1.154 … -10.135 … -7.790
+        -2.033</code>
+      </div>
+    </details>
+
+    <div class="row"><b>荷重ケース</b>
+      <span class="hint">1行目が長期 (大きい図で載せる)、2行目以降が短期です</span>
+    </div>
+    <table class="res" id="rs_cases_tbl" style="width:auto">
+      <thead><tr><th></th><th>検討書の表記</th><th>MIDASの荷重ケース</th>
+        <th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row">
+      <button class="sub" onclick="rsAddCase()">行を追加</button>
+    </div>
+
+    <div class="row"><b>検討対象</b>
+      <label class="inline"><input type="radio" name="rs_kind" value="thick"
+        checked onchange="rsCandidates()"> 板厚 (厚さID) で選ぶ</label>
+      <label class="inline"><input type="radio" name="rs_kind" value="group"
+        onchange="rsCandidates()"> グループで選ぶ</label>
+      <button class="sub" onclick="rsCandidates()">一覧を読み込む</button>
+      <button class="sub" onclick="checkAll('rs_pick',true)">全選択</button>
+      <button class="sub" onclick="checkAll('rs_pick',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="rs_pick_box"><span class="hint">
+      mgt を指定して「一覧を読み込む」を押すと、板要素を含む厚さID
+      (またはグループ) を一覧にします</span></div>
+    <div class="row">
+      <button class="act" onclick="rsFile()">txtから読み込み</button>
+      <button class="sub" onclick="rsLoad()">前回の読み込みデータを使う</button>
+    </div>
+    <div id="rs_fetch_msg"></div>
+  </fieldset>
+
+  <fieldset style="min-width:0">
+    <legend>検討書 (RCスラブの検討)</legend>
+    <div class="row"><span class="hint">
+      曲げモーメント: 要素中心の主曲げ (Mmax・Mmin) を矢印で表示 (正=外向き・
+      負=内向き)。せん断力: Vmax (Vxx・Vyy のうち絶対値の大きい方) の要素中心値
+      コンター。検定の設計用応力は、長期は先頭ケースの最大・最小、短期は最大
+      応力のまとめの値を自動で使います。</span>
+    </div>
+    <div id="rs_secs_box"><span class="hint">
+      読み込みをすると、対象ごとの設定欄を表示します</span>
+    </div>
+    <div class="row">
+      見出し: <input type="text" id="rs_title" value="RCスラブの検討"
+                   style="width:200px">
+      ファイル名: <input type="text" id="rs_file" value="RCスラブの検討"
+                   style="width:200px">.pdf
+      フォント:
+      <select id="rs_font">
+        <option value="Yu Gothic" selected>游ゴシック</option>
+        <option value="Yu Mincho">游明朝</option>
+      </select>
+    </div>
+    <div class="row">
+      <button class="sub emph" onclick="rsCheck()">検定だけ実行</button>
+      <button class="act" onclick="rsPdf()">検討書PDFを作成</button>
+    </div>
+    <div id="rs_msg"></div>
+    <div id="rs_out"></div>
+  </fieldset>
+</section>
+<script src="/static/rcslab.js"></script>
