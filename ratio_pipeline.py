@@ -48,7 +48,8 @@ import os
 
 import numpy as np
 
-from .util import find_index, doublecheck, pick_text, loadtxt_tolerant
+from .util import (find_index, doublecheck, pick_text, loadtxt_tolerant,
+                   load_beam_stress_table)
 from .mgt import (
     mgtopen_node, mgtopen_element, mgtopen_material, mgtopen_length,
     mgtopen_unit_2015, node_index_get, mgtopen_RCbeam, mgtopen_RCcolumn,
@@ -722,15 +723,25 @@ def case_types_to_lcase(num_load_case, load_case_no, case_types):
       種別 'S': 短期荷重（長期鉛直＋水平荷重の組合せ済み応力）→
                 組合せ生成せずそのまま短期として検定 (長期は二重加算しない)。
                 引張専用材等の収束計算済み応力はこれを選ぶ。
-      ケース名省略時: L→'G+P', H→'CASE<番号>', S→'G+P+CASE<番号>'。
+      種別 'M': 中短期荷重（組合せ済み応力。積雪時短期など）→
+                'S' と同様にそのまま検定するが、木部材
+                (w_check の W_SB/W_SR 系) の許容応力度を短期の
+                1.6/2倍とする。鋼材・RC等は短期のまま。壁倍率検定
+                (木造筋かい・面材壁) も長短期同値の原典仕様のため
+                低減の対象外 (詳細文の期別表記のみ中短期)。
+      ケース名省略時: L→'G+P', H→'CASE<番号>', S/M→'G+P+CASE<番号>'。
 
     MATLAB原典の timecase 規約 (>=10:短期 / 1,9:長期 / 他:stop) 上、
-    'S' ケースのケース番号は10以上、'S' と併用する 'L' ケースは
-    ケース番号1かつ先頭ブロックが必要 (冷間成形割増の長期応力参照も
-    先頭ブロックを用いる原典仕様のため)。満たさない場合はエラー。
+    'S'/'M' ケースのケース番号は10以上 ('M' はさらに100未満)、
+    'S'/'M' と併用する 'L' ケースはケース番号1かつ先頭ブロックが必要
+    (冷間成形割増の長期応力参照も先頭ブロックを用いる原典仕様のため)。
+    満たさない場合はエラー。
 
-    戻り値: l_case_ratio_analysis と同一
-      (L_Lcase, H_Lcase, S_Lcase, load_case_name, load_direction)
+    戻り値: (L_Lcase, H_Lcase, S_Lcase, load_case_name, load_direction,
+             M_case_no)
+      先頭5つは l_case_ratio_analysis と同一 ('M' は S_Lcase に含める)。
+      M_case_no は 'M' 指定されたケース番号の set (検定時に木質系の
+      中短期扱いに使う)。
     """
     load_case_no = np.asarray(load_case_no, dtype=float).ravel()
     if num_load_case != load_case_no.size:
@@ -749,6 +760,7 @@ def case_types_to_lcase(num_load_case, load_case_no, case_types):
     L_list = []
     H_list = []
     S_list = []
+    M_case_no = set()
     load_case_name = []
     ld = []
     missing = []
@@ -764,10 +776,11 @@ def case_types_to_lcase(num_load_case, load_case_no, case_types):
         else:
             ctype = str(v).strip().upper()
             cname = ''
-        if ctype not in ('L', 'H', 'S'):
+        if ctype not in ('L', 'H', 'S', 'M'):
             raise RuntimeError(
                 "ケース%gの種別 '%s' が不正です ('L'=長期/'H'=水平のみ/"
-                "'S'=短期(組合せ済み))" % (cno, ctype))
+                "'S'=短期(組合せ済み)/'M'=中短期(組合せ済み))"
+                % (cno, ctype))
         if not cname:
             if ctype == 'L':
                 cname = 'G+P'
@@ -780,7 +793,10 @@ def case_types_to_lcase(num_load_case, load_case_no, case_types):
         elif ctype == 'H':
             H_list.append(pos + 1)
         else:
+            # 'M' (中短期) も応力ブロックの扱いは 'S' と同一
             S_list.append(pos + 1)
+            if ctype == 'M':
+                M_case_no.add(cno)
         load_case_name.append(cname)
         dx, dy = _direction_from_name(cname)
         ld.append([cno, dx, dy])
@@ -794,39 +810,83 @@ def case_types_to_lcase(num_load_case, load_case_no, case_types):
     if H_list and S_list:
         print([L_list, H_list, S_list])
         print(load_case_name)
-        raise RuntimeError("水平荷重('H')と短期荷重('S')は混在できません "
-                           '(MATLAB原典 l_case_ratio_analysis と同一の制約)')
+        raise RuntimeError("水平荷重('H')と短期/中短期荷重('S'/'M')は混在"
+                           'できません (MATLAB原典 l_case_ratio_analysis と'
+                           '同一の制約)')
 
-    # 'S'(組合せ済み)経路は応力ブロックをそのまま検定するため、
+    # 'S'/'M'(組合せ済み)経路は応力ブロックをそのまま検定するため、
     # MATLAB原典の timecase 規約・長期応力参照の前提を満たす必要がある
     if S_list:
         bad = [load_case_no[p - 1] for p in S_list if load_case_no[p - 1] < 10]
         if bad:
             raise RuntimeError(
-                "短期(組合せ済み)'S'指定ケースのケース番号は10以上が必要です"
-                ' (MATLAB原典のtimecase規約: >=10を短期と判別): %s'
+                "短期/中短期(組合せ済み)指定ケースのケース番号は10以上が"
+                '必要です (MATLAB原典のtimecase規約: >=10を短期と判別): %s'
                 % ['%g' % c for c in bad])
+        # 番号10は原典規約で「木部材のみ中短期」と解釈され、種別'S'の
+        # 意図 (全材料短期) と食い違うため明示エラーとする ('M'導入に伴い
+        # 番号10の隠し仕様は封じる。中短期は種別'M'で指定する)
+        bad10 = [load_case_no[p - 1] for p in S_list
+                 if load_case_no[p - 1] == 10
+                 and load_case_no[p - 1] not in M_case_no]
+        if bad10:
+            raise RuntimeError(
+                "ケース番号10を種別'S'(短期)にはできません (原典規約では"
+                '番号10は木部材のみ中短期と解釈され不整合になるため)。'
+                "中短期なら種別'M'を指定し、短期なら11以上の番号に"
+                '振り直してください')
+        bad_m = [c for c in M_case_no if c >= 100]
+        if bad_m:
+            raise RuntimeError(
+                "中短期'M'指定ケースのケース番号は100未満が必要です "
+                '(木質系の中短期判別に900番台のtimecaseを使うため): %s'
+                % ['%g' % c for c in sorted(bad_m)])
         if L_list and (L_list[0] != 1 or load_case_no[L_list[0] - 1] != 1):
             raise RuntimeError(
-                "'S'指定と併用する長期'L'ケースはケース番号1かつ先頭ブロック"
-                'が必要です (MATLAB原典は長期の判別(timecase==1)と冷間成形'
-                '割増の長期応力参照に先頭ブロック=ケース1を用いるため)')
+                "'S'/'M'指定と併用する長期'L'ケースはケース番号1かつ先頭"
+                'ブロックが必要です (MATLAB原典は長期の判別(timecase==1)と'
+                '冷間成形割増の長期応力参照に先頭ブロック=ケース1を'
+                '用いるため)')
 
     return (np.array(L_list, dtype=int), np.array(H_list, dtype=int),
             np.array(S_list, dtype=int), load_case_name,
-            np.asarray(ld, dtype=float) if ld else np.zeros((0, 3)))
+            np.asarray(ld, dtype=float) if ld else np.zeros((0, 3)),
+            M_case_no)
 
 
 def default_case_types(load_case_no):
     """自動判定 (l_case_ratio_analysis) による既定のケース種別一覧を返す.
 
     UI「ケース読込」の初期値用。
-    戻り値: [{'no': ケース番号, 'type': 'L'/'H'/'S', 'name': ケース名}]
+    戻り値: [{'no': ケース番号, 'type': 'L'/'H'/'S'/'M', 'name': ケース名}]
     自動判定が対話必須のケース数 (4,6,8,10以上) では先頭を 'L' (G+P)、
     残りを 'H' とする。
+    例外として、ケース番号(名前)が定番構成 — 1=長期 / 10=中短期(積雪) /
+    21以上=短期 — に収まる場合は、番号ごとに
+    1=L(TL) / 10=M(TL+S) / 21以上=S を既定とする
+    (組合せ済み出力: 長期 + 積雪中短期 + 水平各方向。ユーザー運用の標準)。
     """
     load_case_no = np.asarray(load_case_no, dtype=float).ravel()
     n = int(load_case_no.size)
+
+    # 定番構成の既定 (ユーザー運用の標準パターン):
+    #   名前1 = 長期(L), 名前10 = 中短期(M), 名前21以上 = 短期(S)。
+    # ケース番号がすべて {1, 10, 21以上} に収まる場合に番号ごとに適用する。
+    nos = [float(v) for v in load_case_no]
+    inos = [int(round(v)) for v in nos]
+    if inos and all(v == 1 or v == 10 or v >= 21 for v in inos):
+        # 21〜24 は水平4方向として既知の名前を付す (それ以外は汎用名)
+        HNAME = {21: 'TL+KX', 22: 'TL-KX', 23: 'TL+KY', 24: 'TL-KY'}
+
+        def _std(v):
+            if v == 1:
+                return ('L', 'TL')
+            if v == 10:
+                return ('M', 'TL+S')
+            return ('S', HNAME.get(v, 'TL±E(%d)' % v))  # 21以上=短期
+        return [{'no': float(v), 'type': _std(v)[0], 'name': _std(v)[1]}
+                for v in inos]
+
     try:
         L_Lcase, H_Lcase, S_Lcase, names, _ld = l_case_ratio_analysis(
             n, load_case_no)
@@ -853,6 +913,47 @@ def default_case_types(load_case_no):
                 out.append({'no': float(load_case_no[pos]), 'type': 'H',
                             'name': 'CASE%g' % load_case_no[pos]})
         return out
+
+
+def read_wall_reduction(path):
+    """RC壁せん断耐力低減ファイル (MATLAB w_r.txt) を読む.
+
+    書式: 1行1壁で、空白/タブ区切りの数値。**最後の2列を
+    [要素番号, 低減率] とみなす**。先頭に通し番号列があっても無視する
+    (例 '1  10643  0.724' → 要素10643の低減率0.724)。2列だけの
+    '10643 0.724' も可。
+
+    戻り値: dict {要素番号(int): 低減率(float)}。
+      同じ要素番号が複数回現れた場合は後勝ち。
+      読める行が無ければ空dict。
+    """
+    with open(path, 'rb') as f:
+        raw = f.read()
+    text = None
+    for enc in ('utf-8-sig', 'cp932', 'utf-8'):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        text = raw.decode('utf-8', errors='replace')
+    out = {}
+    for ln in text.splitlines():
+        toks = ln.replace(',', ' ').split()
+        vals = []
+        for t in toks:
+            try:
+                vals.append(float(t))
+            except ValueError:
+                vals = []
+                break  # 数値以外を含む行 (見出し等) はスキップ
+        if len(vals) < 2:
+            continue
+        ele = int(round(vals[-2]))
+        red = float(vals[-1])
+        out[ele] = red
+    return out
 
 
 # ===========================================================================
@@ -1608,6 +1709,12 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
                             'L_43': 梁引張鉄筋比割増(4/3)対象の断面番号list
                             'w_l': 壁有効長さ [断面番号,i端,中央?,…]x5列 または None
                             'wall_r': 壁せん断低減 [断面番号,低減率] または None
+                                    (断面番号ベース。従来仕様)
+                            'wall_r_elem': 壁せん断低減 (要素番号ベース)。
+                                    dict {要素番号: 低減率} または Nx2配列
+                                    [要素番号,低減率]。read_wall_reduction で
+                                    w_r.txt から読める。壁柱(RC柱扱いの壁)に
+                                    要素番号で適用 (wall_r より優先)。
                           RCのせん断割増は qup 引数 (qup_case) で指定する
                           (MATLAB ルート1: {'beam':1.5,'wall':2.0})。
 
@@ -1741,6 +1848,14 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
         L_43 = None
     w_l = rc_params.get('w_l')
     wall_r = rc_params.get('wall_r')
+    # RC壁のせん断耐力低減率 (要素番号→低減率)。w_r.txt を read_wall_reduction
+    # で読んだ dict {要素番号: 低減率}。壁柱(RC柱扱いの壁)に要素番号で適用する。
+    wall_r_elem = rc_params.get('wall_r_elem')
+    if wall_r_elem is not None and not isinstance(wall_r_elem, dict):
+        # Nx2配列 [要素番号, 低減率] でも受ける
+        _wre = np.atleast_2d(np.asarray(wall_r_elem, dtype=float))
+        wall_r_elem = {int(round(r[0])): float(r[1]) for r in _wre} \
+            if _wre.size else None
 
     # ---- SRC配筋情報の設定 (MIDASratioplot_fig.m 71-104行) ----
     #  SRC配筋は mgt (*SRC-BEAM/*SRC-COLUMN) から読む。ユーザー入力は
@@ -1763,8 +1878,8 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
     else:
         SRC_ALW_M = []
 
-    # ---- 梁要素の応力読み込み ----
-    beam_stress = loadtxt_tolerant(beam_stress_path)
+    # ---- 梁要素の応力読み込み (3列目の位置列つき書き出しにも対応) ----
+    beam_stress = load_beam_stress_table(beam_stress_path)
     beam_stress = np.atleast_2d(beam_stress)
 
     # 2行/要素形式（終局）なら3行へ展開 (MIDASratioplot_fig.m)
@@ -1885,13 +2000,14 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
     load_case_no = doublecheck(np.concatenate(_lc_all))
 
     # ---- 荷重ケース種別判定・割増オプション・検定ケース作成 ----
+    M_case_no = set()  # 中短期('M')指定のケース番号 (木質系のみ耐力0.8倍)
     if case_types is None:  # 自動判定 (従来互換)
         (L_Lcase, H_Lcase, S_Lcase, load_case_name,
          load_direction) = l_case_ratio_analysis(num_load_case, load_case_no)
     else:  # ケース種別の明示指定
         (L_Lcase, H_Lcase, S_Lcase, load_case_name,
-         load_direction) = case_types_to_lcase(num_load_case, load_case_no,
-                                               case_types)
+         load_direction, M_case_no) = case_types_to_lcase(
+            num_load_case, load_case_no, case_types)
     qup_beam, qup_wall, qup_beam_src, pm_direction = qup_case(
         L_Lcase, H_Lcase, S_Lcase, qup=qup, pm_direction=pm_direction)
     _raw_case_no = np.asarray(load_case_no, dtype=float).copy()  # 合成前
@@ -2075,6 +2191,11 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
             # 全材料共通で最大ケース名幅まで空白パディングする
             LOAS_CASE_NAME = LCNAME[find_index(ch_load_case_no_beam, timecase)]
             LOAS_CASE_NAME = LOAS_CASE_NAME.ljust(max(len(x) for x in LCNAME))
+            # 中短期('M')ケースは timecase を900番台へ写像する
+            # (w_check の木部材のみ中短期=短期×1.6/2 と解釈。
+            #  他材料は >=10 の規約どおり短期のまま)
+            if float(timecase) in M_case_no:
+                timecase = timecase + 900
 
             # 部材検定用長さの設定
             ij_select = 0
@@ -2187,7 +2308,8 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
                     wall_cover, RCbeam_secNO, wall_r, node, element,
                     load_direction, load_no, ij_select, ij_reverse,
                     LOAS_CASE_NAME_rc, w_l, L_43, RCQ, buck_length,
-                    pick_section_name, walldesign_index_rc, method_rcw)
+                    pick_section_name, walldesign_index_rc, method_rcw,
+                    wall_r_elem=wall_r_elem)
                 maxratios[load_no][section_index, 1:3] = mr
                 maxratios_text[section_index][load_no] = mtext
             elif ele_material[1] == 10:
@@ -2402,6 +2524,8 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
             _lc_w = max(len(x) for x in LCNAME)
             LOAS_CASE_NAME = LCNAME[int(find_index(
                 ch_load_case_no_plate, timecase))].ljust(_lc_w)
+            if float(timecase) in M_case_no:  # 中短期 → 900番台へ写像
+                timecase = timecase + 900
             row = num_section + thick_index
             ratio_one = 0.0
             if ele_material[1] in (1, 2):  # 鉄骨板の検定
@@ -2494,6 +2618,8 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
             _lc_w = max(len(x) for x in LCNAME)
             LOAS_CASE_NAME = LCNAME[int(find_index(
                 ch_load_case_no_wall, timecase))].ljust(_lc_w)
+            if float(timecase) in M_case_no:  # 中短期 → 900番台へ写像
+                timecase = timecase + 900
             row = num_section + thick_index
             ratio_one = np.zeros((2, 4))
             if ele_material[1] in (1, 2):
@@ -2600,6 +2726,8 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
                 section_index = find_index(section_nos, section_no)
                 stress = ch_truss_stress[i, [2, 3]]
                 timecase = ch_truss_stress[i, 1]
+                if float(timecase) in M_case_no:  # 中短期 → 900番台へ写像
+                    timecase = timecase + 900
                 nodei_index, nodej_index = node_index_get(element_no, element,
                                                           node)
                 ele_length = float(np.linalg.norm(

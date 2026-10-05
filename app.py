@@ -1096,6 +1096,7 @@ def _plywood_col_map(result):
 
     長期+水平の合成 (analysis_case) の列順
     [長期, +H1, -H1, +H2, -H2, ...] を L/H_Lcase から再構成する。
+    長期列は木合板検定の対象外のため None のまま。
     """
     raw = [float(v) for v in
            np.atleast_1d(getattr(result, 'raw_case_no', np.zeros(0))).ravel()]
@@ -1125,6 +1126,32 @@ def _plywood_col_map(result):
             if (ci + 1) not in L:
                 cols[ci] = raw[ci]
     return cols
+
+
+def _plywood_plate_ratio(result, res):
+    """木合板検定の壁別検定比を検定比図用の plate_ratio 形式へ展開する.
+
+    戻り値: ndarray [板要素番号, 検定ケース番号, 0, 検定比] (検定ケース
+    ブロック順) または None。壁の検定比を構成する全板要素へ同じ値で
+    展開する。検定ケース→生ケースの対応付けは _plywood_col_map と同じ
+    (長期ケースは対象外のため図では外形線のみ)。
+    """
+    cols = _plywood_col_map(result)
+    case_nos = [float(v) for v in
+                np.atleast_1d(np.asarray(result.load_case_no)).ravel()]
+    rows = []
+    for ci, raw_cs in enumerate(cols):
+        if raw_cs is None or ci >= len(case_nos):
+            continue
+        for w in res['walls']:
+            r = next((x for x in w['cases']
+                      if int(x['case']) == int(raw_cs)), None)
+            if r is None:
+                continue
+            for e in w['eles']:
+                rows.append([float(e), case_nos[ci], 0.0,
+                             float(r['ratio'])])
+    return np.asarray(rows, dtype=float) if rows else None
 
 
 def _plywood_check_rows(result, res):
@@ -1158,6 +1185,8 @@ def _plywood_check_rows(result, res):
             details.append({'ele': '%s %s %s z=%s [要素 %s]'
                             % (w['name'], w['loc'], w['range'], w['zrange'],
                                ','.join(str(e) for e in w['eles'])),
+                            # NG要素コピー用の実要素番号 (ele はラベル文字列)
+                            'eles': [int(e) for e in w['eles']],
                             'vals': vals})
         # 検定詳細文: MATLAB (W_plate_analysis_text) と同じ段組で
         # ケースごとに最大の壁1件のみ出力する
@@ -1282,7 +1311,7 @@ def api_check_cases():
         if err:
             return jsonify({'error': err}), 400
     try:
-        bs = np.atleast_2d(loadtxt_tolerant(p['beam_stress_path']))
+        bs = np.atleast_2d(load_beam_stress_table(p['beam_stress_path']))
         if bs.shape[1] < 2:
             return jsonify({'error': 'beam_stressファイルの列数が不足して'
                                      'います (8列必要)。'}), 400
@@ -1419,7 +1448,7 @@ def api_steel_check():
                     str(row.get('type', 'H')), str(row.get('name', '')))
         # ケース表が古い(別の応力ファイルのもの)場合は明示エラー
         if case_types is not None:
-            _bs = np.atleast_2d(loadtxt_tolerant(p['beam_stress_path']))
+            _bs = np.atleast_2d(load_beam_stress_table(p['beam_stress_path']))
             _cases = _bs[:, 1]
             if truss_path:
                 _ts = np.atleast_2d(loadtxt_tolerant(truss_path))
@@ -1704,6 +1733,8 @@ def api_steel_check():
                             np.asarray(result.load_case_no).ravel()]
         _CHECK_CACHE['key'] = _check_cache_key(p)
         _CHECK_CACHE['result'] = result
+        # 用途=木合板のときの検定比図用の板要素検定比 (後段で設定)
+        _CHECK_CACHE['plywood_plate_ratio'] = None
         # 3D表示のNG部材ハイライト用 (検定タブ)
         data['ratio3d'] = _ratio3d_rows(result)
         data['ratio3d_unit'] = _ratio3d_unit_rows(p['mgt_path'],
@@ -1738,6 +1769,9 @@ def api_steel_check():
                         qa_base=float(p.get('pw_qa', 1.96)))
                     data['sections'].extend(
                         _plywood_check_rows(result, pw_res))
+                    # 検定比図用: 壁別検定比を板要素別へ展開して保持
+                    _CHECK_CACHE['plywood_plate_ratio'] = \
+                        _plywood_plate_ratio(result, pw_res)
                     _pw_csv = plywood_csv(
                         pw_res,
                         os.path.join(_out_dir(p, 'plywood'),
@@ -2335,10 +2369,16 @@ def api_plot_ratio():
             # (検定値の算定に使ったselect_unitとは別。既定ON)
             fig_unit = bool(p.get('fig_unit', True))
             select_unit = 0.0 if fig_unit else float('inf')
+            # 板要素の検定比: MATLAB版板検定 (result.plate_ratio) を優先し、
+            # 無ければ木合板検定 (用途=木合板) の壁別検定比を使う
+            _pr = getattr(result, 'plate_ratio', None)
+            if _pr is None or not np.size(_pr):
+                _pr = _CHECK_CACHE.get('plywood_plate_ratio')
             pdfs = plot_ratio(
                 p['mgt_path'], out_dir,
                 result.beam_ratio, result.truss_ratio,
                 [str(n) for n in result.LCNAME],
+                plate_ratio=_pr,
                 cases_select=cases,
                 axes_select=axes,
                 symbols_select=(p.get('symbols') or None),
