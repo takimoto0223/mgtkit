@@ -129,19 +129,20 @@
   これはβ版です — 試用中の機能が含まれます。問題があればフィードバックをお願いします。
 </div>
 {% endif %}
+{%- if tab_errors %}
+<div style="background:#b91c1c;color:#fff;text-align:center;padding:6px 10px;
+            font-size:13px;font-weight:600;">
+  一部のタブを読み込めなかったため表示していません
+  ({{ tab_errors|map(attribute='name')|join(' / ') }})。
+  ほかのタブはそのまま使えます。原因は黒いウィンドウに出ています。管理者に知らせてください。
+</div>
+{%- endif %}
+{#- タブのボタンは app.py の BUILTIN_TABS と templates/_tab_<x>.html の見出しから作る。
+    新しいタブはここを編集せず、_tab_<x>.html の先頭行に見出しを書く #}
 <nav>
-  <button data-tab="model" class="active">モデル</button>
-  <button data-tab="stress">応力図</button>
-  <button data-tab="qr">QR図 (反力・分担・偏心)</button>
-  <button data-tab="check">断面検定 (S/木/RC/SRC)</button>
-  <button data-tab="ratio">検定比図</button>
-  <button data-tab="tex">TeX表</button>
-  <button data-tab="dxf">DXF</button>
-  <button data-tab="vwdxf">DXF(VW10J)</button>
-  <button data-tab="quantity">数量集計</button>
-  <button data-tab="loadmap">荷重分布図</button>
-  <button data-tab="wallqty">木造壁量計算</button>
-  <button data-tab="nvalue">N値計算</button>
+{%- for t in tabs if t.nav %}
+  <button data-tab="{{ t.id }}"{% if t.active %} class="active"{% endif %}>{{ t.label }}</button>
+{%- endfor %}
 </nav>
 <main>
 
@@ -165,7 +166,7 @@
            placeholder="例: C:\work\壁式事例2 (空欄=mgtと同じフォルダ)">
     <button class="sub" onclick="pickDir('mgt_out_base')">フォルダの選択</button>
     <span class="hint">生成物は &lt;出力先&gt;\mgtkit_out\ のタブ別フォルダ
-      (model / stress / ratio_tex / ratio_plot / tex / dxf / qr) に保存されます。
+      (model / stress / ratio_tex / ratio_plot / tex / dxf / qr{% for t in tabs if t.out %} / {{ t.out }}{% endfor %}) に保存されます。
       mgtを「アップロード」で読み込んだ場合はmgtが一時フォルダ(AppData)扱いに
       なるため、ここに事例フォルダを指定してください。</span>
   </div>
@@ -1004,11 +1005,10 @@
   <div id="qty_out"></div>
 </section>
 
-{% include '_tab_loadmap.html' %}
-
-{% include '_tab_wallqty.html' %}
-{% include '_tab_vwdxf.html' %}
-{% include '_tab_nvalue.html' %}
+{#- 見出しのあるタブ (templates/_tab_<x>.html) の本体。並びは nav と同じ #}
+{%- for t in tabs if t.include %}
+{% include t.template %}
+{%- endfor %}
 
 </main>
 <div id="overlay"><div class="spinner"></div><p>実行中...</p></div>

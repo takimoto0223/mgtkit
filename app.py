@@ -405,6 +405,27 @@ def _parse_heights(p):
 _TAB_PACKAGES, _TAB_ERRORS = _tabreg.discover_blueprints(
     app, sys.modules[__name__], _HERE)
 
+# nav のタブ一覧。本体が index.html に直書きの組み込みタブと、
+# templates/_tab_<x>.html の先頭行の見出し ({# tab: id=... order=... #}) から作る。
+# 見出しのタブは order で組み込みタブの間に入る (vwdxf=80 は DXF と数量集計の間、
+# loadmap=100 / wallqty=200 / nvalue=210 は数量集計の後)
+BUILTIN_TABS = [
+    {'id': 'model', 'label': 'モデル', 'order': 10, 'active': True},
+    {'id': 'stress', 'label': '応力図', 'order': 20},
+    {'id': 'qr', 'label': 'QR図 (反力・分担・偏心)', 'order': 30},
+    {'id': 'check', 'label': '断面検定 (S/木/RC/SRC)', 'order': 40},
+    {'id': 'ratio', 'label': '検定比図', 'order': 50},
+    {'id': 'tex', 'label': 'TeX表', 'order': 60},
+    {'id': 'dxf', 'label': 'DXF', 'order': 70},
+    {'id': 'quantity', 'label': '数量集計', 'order': 90},
+]
+_TABS, _TAB_TAG_ERRORS = _tabreg.collect_tabs(
+    os.path.join(_HERE, 'templates'), BUILTIN_TABS,
+    skip={e['name'] for e in _TAB_ERRORS},
+    handwritten=_tabreg.find_handwritten(
+        os.path.join(_HERE, 'templates', 'index.html')))
+_TAB_ERRORS += _TAB_TAG_ERRORS
+
 
 @app.route('/')
 def index():
@@ -413,7 +434,8 @@ def index():
         ver = int(os.path.getmtime(os.path.join(_HERE, 'static', 'app.js')))
     except OSError:
         ver = 0
-    return render_template('index.html', app_ver=ver, channel=_CHANNEL)
+    return render_template('index.html', app_ver=ver, channel=_CHANNEL,
+                           tabs=_TABS, tab_errors=_TAB_ERRORS)
 
 
 @app.route('/api/file')
