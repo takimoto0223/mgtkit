@@ -12,9 +12,13 @@ figure_stress_axis.m と同一文のため draw_stress.py / draw_model.py の
 
 未対応 (MATLAB版の対応状況に合わせる):
   - 水平構面(伏図)の検定比図 (figure_ratio_floor.m) は応力図と同様に対象外
-  - 壁要素(wall_ratio)・板要素(plate_ratio)の検定比 (検定エンジン未移植)
+  - 壁要素(wall_ratio)の検定比
   - select13(位置別表示)は原典に beam_ratio_plot.m / column_ratio_plot.m が
     存在しない(呼ぶとエラー)ため最大値表示のみ
+
+mgtkit追加機能 (原典に無い):
+  - 板要素(plate_ratio: 面材壁等)の検定比描画。応力図の板要素描画と同様に
+    外形線(85%縮小)+中心に検定比を注記する。
 """
 
 import os
@@ -31,11 +35,12 @@ import matplotlib.pyplot as plt
 
 try:
     from .mgt import (
-        mgtopen_node, mgtopen_element, mgtopen_group, node_index_get,
+        mgtopen_node, mgtopen_element, mgtopen_plate, mgtopen_group,
+        node_index_get,
     )
     from .util import find_index, doublecheck, space_erace
     from .draw_model import (
-        _setup_japanese_font, _finish_figure, _text, _kline,
+        _setup_japanese_font, _finish_figure, _text, _kline, _plate_plot,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
         _resolve_select, _safe_name, column_beam_judge_one, line_projection,
         _save_fig_pdf_or_pgf, _write_pgf_bundle,
@@ -43,11 +48,12 @@ try:
     from .draw_stress import _load_case_split, _unit_add_ysub
 except ImportError:  # スクリプト実行時
     from mgt import (
-        mgtopen_node, mgtopen_element, mgtopen_group, node_index_get,
+        mgtopen_node, mgtopen_element, mgtopen_plate, mgtopen_group,
+        node_index_get,
     )
     from util import find_index, doublecheck, space_erace
     from draw_model import (
-        _setup_japanese_font, _finish_figure, _text, _kline,
+        _setup_japanese_font, _finish_figure, _text, _kline, _plate_plot,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
         _resolve_select, _safe_name, column_beam_judge_one, line_projection,
         _save_fig_pdf_or_pgf, _write_pgf_bundle,
@@ -301,6 +307,10 @@ def _figure_ratio_axis(C, i_axis, i_load, case_no, case_name, out_path):
     element = C['element']
     beam_ratio = C['beam_ratio']
     truss_ratio = C['truss_ratio']
+    plate_ratio = C['plate_ratio']
+    plate = C['plate']
+    load_case_no_plate = C['load_case_no_plate']
+    lci_plate = C['lci_plate']
     lci_beam = C['lci_beam']
     lci_truss = C['lci_truss']
     unit_element = C['unit_element']
@@ -340,6 +350,7 @@ def _figure_ratio_axis(C, i_axis, i_load, case_no, case_name, out_path):
 
     on_axis_truss_index = _mark(truss_ratio, 3)
     on_axis_beam_index = _mark(beam_ratio, 1)
+    _mark(plate_ratio, 4)
 
     ratio_row = np.full(n_el, -1, dtype=int)
     on_axis_element_index = np.full(n_el, -1, dtype=int)
@@ -409,6 +420,34 @@ def _figure_ratio_axis(C, i_axis, i_load, case_no, case_name, out_path):
             srow = ratio_row[i_e]
             plot_r = truss_ratio[srow + lci_truss[i_load], 2:4]
             _truss_ratio_plot(ax, plot_r, ni, nj, nodeM, ratio_fs)
+
+        elif et == 4:  # 板要素 (面材壁等): 外形線+中心に検定比を注記
+            plate_no = axis_elems[i_e]
+            pridx = find_index(plate[:, 0], plate_no)
+            if pridx == -1:
+                print('WARNING: 板要素 %d がmgtの*ELEMENT(PLATE)に'
+                      '見つからないためスキップします' % int(plate_no))
+                continue
+            _plate_plot(ax, plate_no, plate, nodeM, 1, 3)
+            il_p = (int(find_index(load_case_no_plate, float(case_no)))
+                    if np.size(load_case_no_plate) else -1)
+            if il_p < 0:
+                continue  # このケースがplate_ratioに無ければ注記なし
+            p0 = int(lci_plate[il_p])
+            p1 = (int(lci_plate[il_p + 1]) if il_p + 1 < lci_plate.size
+                  else plate_ratio.shape[0])
+            blk = plate_ratio[p0:p1]
+            rows = blk[blk[:, 0] == plate_no]
+            if rows.size == 0:
+                continue
+            val = round(100.0 * float(np.max(rows[:, 3]))) / 100.0
+            node4_no = list(plate[pridx, 3:7])
+            if np.prod(node4_no) == 0:
+                node4_no = node4_no[:3]
+            n4i = [find_index(nodeM[:, 0], nn) for nn in node4_no]
+            center = nodeM[n4i, 1:4].sum(axis=0) / len(node4_no)
+            _text(ax, center[0], center[2], _f2(val),
+                  ha='center', va='middle', fs=ratio_fs)
 
         elif et == 2:
             # NOTE: 原典figure_ratio_axis.mの壁要素(etype2)分岐は全行
@@ -531,6 +570,7 @@ def _figure_ratio_axis(C, i_axis, i_load, case_no, case_name, out_path):
 
 def plot_ratio(mgt_path, out_dir, beam_ratio, truss_ratio,
                case_names,
+               plate_ratio=None,
                cases_select=None,
                axes_select=None, symbols_select=None, heights_select=None,
                select_unit=math.inf, select13=(0, 0),
@@ -549,6 +589,10 @@ def plot_ratio(mgt_path, out_dir, beam_ratio, truss_ratio,
         truss: [要素,ケース,r1,r2] 1行/要素)。
     case_names : list of str
         検定ケース名 (result.LCNAME、ケースブロック順)。
+    plate_ratio : ndarray or None
+        run_steel_check の結果 result.plate_ratio
+        ([要素,ケース,節点,検定比] 節点ごとに1行)。指定すると構面上の
+        板要素 (面材壁等) に外形線+検定比を描く。None=板は図形線のみ。
     cases_select : list of float or None
         描画する検定ケース番号 (beam_ratio 2列目の値)。None=全ケース。
     select_unit : float
@@ -565,10 +609,20 @@ def plot_ratio(mgt_path, out_dir, beam_ratio, truss_ratio,
     beam_ratio = np.atleast_2d(np.asarray(beam_ratio, dtype=float))
     truss_ratio = (np.atleast_2d(np.asarray(truss_ratio, dtype=float))
                    if np.size(truss_ratio) else np.array([]))
+    plate_ratio = (np.atleast_2d(np.asarray(plate_ratio, dtype=float))
+                   if plate_ratio is not None and np.size(plate_ratio)
+                   else np.array([]))
 
     # %%%%%% モデルデータ読み込み %%%%%%
     node = mgtopen_node(mgt_path)
     element = mgtopen_element(mgt_path)
+    plate = (np.atleast_2d(mgtopen_plate(mgt_path)) if np.size(plate_ratio)
+             else np.array([]))
+    if np.size(plate_ratio) and plate.shape[-1] < 7:
+        print('注意: mgtに板要素(*ELEMENT PLATE)が無いため板要素の検定比'
+              '描画をスキップします')
+        plate_ratio = np.array([])
+        plate = np.array([])
     axis_name, axis_element, axis_node = mgtopen_group(mgt_path)
 
     # %%%%%% 検定ケースの区切り検出 %%%%%%
@@ -577,6 +631,10 @@ def plot_ratio(mgt_path, out_dir, beam_ratio, truss_ratio,
         load_case_no_truss, lci_truss = _case_split_blocks(truss_ratio[:, 1])
     else:
         load_case_no_truss, lci_truss = np.array([]), np.array([], dtype=int)
+    if np.size(plate_ratio) > 0:
+        load_case_no_plate, lci_plate = _case_split_blocks(plate_ratio[:, 1])
+    else:
+        load_case_no_plate, lci_plate = np.array([]), np.array([], dtype=int)
 
     load_case_no = load_case_no_beam if load_case_no_beam.size \
         else load_case_no_truss
@@ -640,6 +698,8 @@ def plot_ratio(mgt_path, out_dir, beam_ratio, truss_ratio,
 
     C = dict(node=node, element=element,
              beam_ratio=beam_ratio, truss_ratio=truss_ratio,
+             plate_ratio=plate_ratio, plate=plate,
+             load_case_no_plate=load_case_no_plate, lci_plate=lci_plate,
              lci_beam=lci_beam, lci_truss=lci_truss,
              unit_element=unit_element, uniele_ID=uniele_ID,
              select13=tuple(select13), select_unit=select_unit,
