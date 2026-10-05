@@ -716,7 +716,7 @@ def read_walls(mgt_path, keyword=DEFAULT_KEYWORD, diag_split=False,
                   max(float(p1[0]), float(p2[0])))
             yr = (min(float(p1[1]), float(p2[1])),
                   max(float(p1[1]), float(p2[1])))
-            # ll = 各方向へ算入する壁長。斜め壁は方向余弦で成分に分ける
+            # ll = 各方向へ算入する壁長。斜め壁は L·cos²θ / L·sin²θ で X/Y に振り分ける
             if ang <= DIR_TOL:                  # X方向に通る壁 = X方向に効く
                 wdir, loc, rng = 'X', 'Y=%.3f' % c[1], 'X %.3f〜%.3f' % xr
                 ll = {'X': L, 'Y': 0.0}
@@ -731,8 +731,9 @@ def read_walls(mgt_path, keyword=DEFAULT_KEYWORD, diag_split=False,
                 wdir = '斜め%.0f°' % deg
                 loc = '-'
                 rng = 'X %.3f〜%.3f / Y %.3f〜%.3f' % (xr + yr)
-                ll = ({'X': L * abs(float(u[0])),
-                       'Y': L * abs(float(u[1]))}
+                # 壁量は L·cos²θ / L·sin²θ で振り分ける (Lx + Ly = L)
+                ll = ({'X': L * float(u[0]) ** 2,
+                       'Y': L * float(u[1]) ** 2}
                       if diag_split else {'X': 0.0, 'Y': 0.0})
                 skey = (si, 2, xr[0], yr[0])
             lb = {'X': ll['X'] * beta, 'Y': ll['Y'] * beta}
@@ -858,8 +859,8 @@ def read_walls(mgt_path, keyword=DEFAULT_KEYWORD, diag_split=False,
                      % (n_slope, slope_min))
     n_diag = sum(1 for wl in walls if wl['dir'].startswith('斜め'))
     if n_diag and diag_split:
-        notes.append('平面的に斜めな壁が %d 面あります。方向余弦で X/Y 成分'
-                     'に分けて算入しました (一覧の「X方向L」「Y方向L」欄)。'
+        notes.append('平面的に斜めな壁が %d 面あります。L·cos²θ / L·sin²θ で'
+                     ' X/Y に振り分けて算入しました (一覧の「X方向L」「Y方向L」欄)。'
                      % n_diag)
     elif n_diag:
         notes.append('平面的に斜めな壁が %d 面あります。存在壁量には算入して'
