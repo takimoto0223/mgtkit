@@ -2084,14 +2084,32 @@ async function runQrShear() {
 
 async function runQrDrift() {
   setMsg('qr_dr_msg', '', ''); $('qr_dr_pdfs').innerHTML = '';
+  $('qr_dr_tex').innerHTML = '';
   try {
     const req = qrCommonReq();
     req.delta_case = checkedVals('qdr').map(Number);
+    // 剛心位置層間変形角の評価用: 5.偏心率セクションの剛心設定を流用
+    req.N_case = +$('q_ce_n').value;
+    req.KX_case = +$('q_ce_kx').value;
+    req.KY_case = +$('q_ce_ky').value;
+    req.k_mode = $('q_ce_mode').value;
+    req.brace_baisu = $('q_ce_brace').value;
     const j = await api('/api/qr_drift', req);
     setMsg('qr_dr_msg', 'PDF ' + j.pdfs.length + ' 件を生成しました → ' +
            esc(j.out_dir) + openFolderBtn(j.out_dir), 'msg-ok');
     $('qr_dr_msg').innerHTML += notesHtml(j.notes);
     $('qr_dr_pdfs').innerHTML = pdfListHtml(j.pdfs, 'qdr');
+    let texHtml = '';
+    if (j.tex_lines && j.tex_lines.length) {
+      texHtml += '<h3>層間変形角一覧表 TeX表ソース</h3>' +
+        '<pre class="detailtext">' + esc(j.tex_lines.join('\n')) + '</pre>';
+    }
+    if (j.tex_lines_rs && j.tex_lines_rs.length) {
+      texHtml += '<h3>剛性率結果一覧表 TeX表ソース</h3>' +
+        '<pre class="detailtext">' + esc(j.tex_lines_rs.join('\n')) +
+        '</pre>';
+    }
+    $('qr_dr_tex').innerHTML = texHtml;
   } catch (e) { setMsg('qr_dr_msg', esc(e.message), 'msg-err'); }
 }
 

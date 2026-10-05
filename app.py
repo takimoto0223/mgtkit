@@ -2042,22 +2042,89 @@ def api_qr_drift():
     """QR: 層間変形角PDF."""
     p = request.get_json(force=True)
     try:
-        from mgtkit.draw_qr import plot_qr_drift, _defo_case_positions
+        from mgtkit.draw_qr import (plot_qr_drift, _defo_case_positions,
+                                    calc_qr_center)
         notes = []
         with _capture_notes(notes):
             D = _qr_load(p)
             C = _qr_common(p, D)
             delta_case = _defo_case_positions(D, p.get('delta_case'))
+
+            # 剛心位置層間変形角の評価用: 偏心率(セクション5)の設定が
+            # あれば剛心を計算する (無ければ表の剛心位置列は '--')
+            centers = None
+            gcenters = None
+            try:
+                if p.get('KX_case') and p.get('KY_case'):
+                    k_mode = str(p.get('k_mode') or 'fem')
+                    brace_baisu = None
+                    if k_mode == 'baisu':
+                        from mgtkit.draw_qr import case_positions
+                        N_case = case_positions(D, [p.get('N_case')],
+                                                C['cases_all'])[0]
+                        KX_case = KY_case = N_case
+                        thickness = mgtopen_thickness(p['mgt_path'])
+                        brace_baisu = {}
+                        for tok in str(p.get('brace_baisu') or '').replace(
+                                '、', ',').split(','):
+                            tok = tok.strip()
+                            if not tok or ':' not in tok:
+                                continue
+                            k0, v0 = tok.split(':', 1)
+                            try:
+                                brace_baisu[int(float(k0))] = float(v0)
+                            except ValueError:
+                                continue
+                    else:
+                        N_case = _defo_case_positions(
+                            D, [p.get('N_case')])[0]
+                        KX_case = _defo_case_positions(
+                            D, [p.get('KX_case')])[0]
+                        KY_case = _defo_case_positions(
+                            D, [p.get('KY_case')])[0]
+                        thickness = None
+                    center = calc_qr_center(
+                        D, C['load_case_name'], N_case, KX_case, KY_case,
+                        C['z_point'], C['case_height'], scope=C['scope'],
+                        calc_groups=C['calc_groups'],
+                        limit_sec_no=C['limit'], k_mode=k_mode,
+                        brace_baisu=brace_baisu, thickness=thickness)[2]
+                    centers = center[:, 2:4]
+                    gcenters = center[:, 0:2]
+            except Exception as ce:  # noqa: BLE001
+                print('剛心が計算できないため剛心位置層間変形角は省略します'
+                      ' (%s)' % ce)
+
+            # 剛性率表用: X/Y方向ケース (deformation内の位置)。剛心の計算
+            # 方式に関わらず deformation にあれば使う
+            rigidity_cases = None
+            try:
+                if gcenters is not None and p.get('KX_case') \
+                        and p.get('KY_case'):
+                    rigidity_cases = (
+                        _defo_case_positions(D, [p.get('KX_case')])[0],
+                        _defo_case_positions(D, [p.get('KY_case')])[0])
+            except Exception as ce:  # noqa: BLE001
+                print('X/Y方向ケースが deformation に無いため'
+                      '剛性率表は省略します (%s)' % ce)
+
             out_dir = _out_dir(p, os.path.join('qr', '層間変形角'))
             with _PLOT_LOCK:
-                made = plot_qr_drift(
+                made, tex_lines, tex_lines_rs = plot_qr_drift(
                     D, out_dir, C['load_case_name'], delta_case,
                     C['axes_idx'], C['z_point'], C['case_height'],
                     scope=C['scope'], calc_groups=C['calc_groups'],
                     mergins=C['mergins'], fontsize=C['fontsize'],
                     paper_orient=C['paper_orient'],
-                    paper_size=C['paper_size'], limit_sec_no=C['limit'])
-        return _qr_pdf_json(made, out_dir, notes)
+                    paper_size=C['paper_size'], limit_sec_no=C['limit'],
+                    centers=centers,
+                    drift_limit=float(p.get('drift_limit', 200)),
+                    gcenters=gcenters, rigidity_cases=rigidity_cases)
+        res = _qr_pdf_json(made, out_dir, notes)
+        j = res.get_json()
+        j['tex_lines'] = tex_lines
+        j['tex_lines_rs'] = tex_lines_rs
+        return jsonify(j)
     except Exception as e:  # noqa: BLE001
         return _error_response(e)
 

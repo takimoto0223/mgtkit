@@ -36,6 +36,11 @@ MATLAB版との意図的差異:
     未定義変数 num_z_reac を参照しエラー停止する。x_label は関数内で
     未使用の死にコードのため、本移植ではエラーを再現せずスキップする
     (レポート参照)。
+  - 原典 figure_shear には板要素の処理が無く、板要素でモデル化した壁の
+    せん断力が分担図・総せん断力から漏れる。figure_shear に plate/
+    plate_stress/load_case_index_plate 引数を追加し、支点レベルを下辺と
+    する四角形板要素を「壁」区分へ集計・注記する (2026-08-28 追加、
+    _plate_shear_collect 参照)。
 
 原典疑義 (挙動は変えず # NOTE: 参照):
   - figure_shear.m 205-206行: z1_inode/z2_inode がともに i端節点を参照
@@ -705,6 +710,141 @@ def _pick_link_upper(element, node, top_node, cut_height):
     return element_no_onlink
 
 
+def _plate_shear_collect(plate, plate_stress, load_case_index_plate,
+                         node, z1b, cs, sd_case):
+    """支点レベル z1b を下辺とする四角形板要素 (板壁) のせん断力を抽出する.
+
+    MATLAB原典 figure_shear.m には板要素の処理が無く、板要素でモデル化した
+    壁のせん断力が分担図・総せん断力から漏れるため追加した (2026-08-28)。
+    せん断力は qr_center.py の剛性計算と同じ
+    |Fxy| × 下辺水平長さ × |加力方向との方向余弦| で評価する
+    (板応力 Fxy の符号規約が要素座標系依存のため大きさで扱う。常に正値)。
+
+    戻り値: list[(板要素番号, 下辺節点index1, 下辺節点index2, せん断力)]
+    """
+    out = []
+    if (plate is None or np.size(plate) == 0
+            or plate_stress is None or np.size(plate_stress) == 0
+            or load_case_index_plate is None
+            or np.size(load_case_index_plate) == 0):
+        return out
+    plate = np.atleast_2d(np.asarray(plate, dtype=float))
+    plate_stress = np.atleast_2d(np.asarray(plate_stress, dtype=float))
+    lci = np.asarray(load_case_index_plate, dtype=int).ravel()
+    if cs > lci.size:
+        print('板要素応力に荷重ケース%dのブロックが無いため'
+              '板壁のせん断力を集計できません' % cs)
+        return out
+    sd = _shear_direction4(sd_case)
+    for i_pl in range(plate.shape[0]):
+        pno = plate[i_pl, 0]
+        n4 = plate[i_pl, 3:7]
+        if np.prod(n4) <= 0:  # 三角形要素
+            nidx3 = np.atleast_1d(find_index(node[:, 0], n4[:3]))
+            if np.all(nidx3 >= 0):
+                zc3 = node[nidx3.astype(int), 3]
+                if np.any(zc3 == z1b) and np.any(zc3 > z1b):
+                    print('三角形板要素%dはせん断力分担図で未対応のため'
+                          '除外しました' % int(pno))
+            continue
+        nidx = np.atleast_1d(find_index(node[:, 0], n4))
+        if np.any(nidx < 0):
+            continue
+        nidx = nidx.astype(int)
+        zc = node[nidx, 3]
+        on = np.where(zc == z1b)[0]
+        if on.size != 2 or np.sum(zc > z1b) != 2:
+            continue  # 下辺2節点がこのレベルにある板壁のみ対象
+        i1, i2 = int(nidx[on[0]]), int(nidx[on[1]])
+        dx = node[i2, 1] - node[i1, 1]
+        dy = node[i2, 2] - node[i1, 2]
+        L_H = math.hypot(dx, dy)
+        if L_H == 0:
+            continue
+        q_cos = abs(sd[0] * dx + sd[1] * dy) / L_H
+        st = find_index(plate_stress[:, 0], pno)
+        if st == -1:
+            print('板要素%dの応力が plate_stress にないため'
+                  '除外しました' % int(pno))
+            continue
+        row = st + int(lci[cs - 1])
+        if row >= plate_stress.shape[0] or plate_stress[row, 0] != pno:
+            print('板要素%dの荷重ケース%dの応力行が見つからないため'
+                  '除外しました' % (int(pno), cs))
+            continue
+        p_shear_i = abs(plate_stress[row, 3]) * L_H * q_cos
+        out.append((pno, i1, i2, float(p_shear_i)))
+    return out
+
+
+def _plate_picks_merge(plate_picks, node):
+    """同一直線上で連続する板壁の pick を1本にまとめる (注記の重なり対策).
+
+    壁が長さ方向に複数の板要素へ分割されていると板ごとの注記が同じ線上に
+    重なって読めなくなるため、下辺が平行かつ端点(節点)を共有する pick
+    同士をグループ化し、せん断力を合算して1注記にする。開口などで節点を
+    共有しない同一線上の壁は別グループのまま。
+
+    戻り値: list[(要素番号min, 要素番号max, 端点1(x,y), 端点2(x,y), ΣQ)]
+    """
+    tol = 1e-6
+    n = len(plate_picks)
+    segs = []
+    for (_pno, i1, i2, _q) in plate_picks:
+        segs.append(((float(node[i1, 1]), float(node[i1, 2])),
+                     (float(node[i2, 1]), float(node[i2, 2]))))
+    parent = list(range(n))
+
+    def _find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for a in range(n):
+        a1, a2 = segs[a]
+        da = (a2[0] - a1[0], a2[1] - a1[1])
+        la = math.hypot(da[0], da[1])
+        for b in range(a + 1, n):
+            b1, b2 = segs[b]
+            db = (b2[0] - b1[0], b2[1] - b1[1])
+            lb = math.hypot(db[0], db[1])
+            if abs(da[0] * db[1] - da[1] * db[0]) > tol * la * lb:
+                continue  # 平行でない
+            share = any(abs(pa[0] - pb[0]) <= tol
+                        and abs(pa[1] - pb[1]) <= tol
+                        for pa in (a1, a2) for pb in (b1, b2))
+            if share:
+                parent[_find(a)] = _find(b)
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+    out = []
+    for idxs in groups.values():
+        ids = [int(plate_picks[i][0]) for i in idxs]
+        q_sum = float(sum(plate_picks[i][3] for i in idxs))
+        pts = []
+        for i in idxs:
+            pts.extend(segs[i])
+        p0 = pts[0]
+        dvec = None
+        for i in idxs:
+            s1, s2 = segs[i]
+            d = (s2[0] - s1[0], s2[1] - s1[1])
+            if math.hypot(d[0], d[1]) > tol:
+                dvec = d
+                break
+        if dvec is None:
+            dvec = (1.0, 0.0)
+        tvals = [(pt[0] - p0[0]) * dvec[0] + (pt[1] - p0[1]) * dvec[1]
+                 for pt in pts]
+        pmin = pts[int(np.argmin(tvals))]
+        pmax = pts[int(np.argmax(tvals))]
+        out.append((min(ids), max(ids), pmin, pmax, q_sum))
+    return out
+
+
 def _qsum_add(Q_SUM, c_shear_i, section_no,
               c_section_no, w_section_no, v_section_no):
     """figure_shear.m 333-370行: 断面番号分類によるQ_SUMへの加算.
@@ -742,7 +882,8 @@ def figure_shear(limit_sec_no, stress_fontsize, node,
                  paper_orient, paper_size, case_S, z_point,
                  link, sections, case_height,
                  c_section_no, g_section_no, w_section_no, v_section_no,
-                 sei_direction, out_dir, QR_TeX_txt=None, fig_no=1):
+                 sei_direction, out_dir, QR_TeX_txt=None, fig_no=1,
+                 plate=None, plate_stress=None, load_case_index_plate=None):
     """水平荷重時・せん断力分担図を作成する (figure_shear.m).
 
     1荷重ケース×1レベルセット(case_heightの1要素)=PDF1枚を out_dir へ保存。
@@ -790,6 +931,11 @@ def figure_shear(limit_sec_no, stress_fontsize, node,
       out_dir : PDF保存先ディレクトリ
       QR_TeX_txt : 既存のTeX表行 list[str] (継続呼出し用)。None なら新規。
       fig_no  : PDF連番の開始値 (原典の fig_no 引数)
+      plate/plate_stress/load_case_index_plate :
+                mgtopen_plate の板要素表・板応力 (Nx4: [要素,ケース,節点,Fxy])
+                とケース先頭行index。原典に無い追加入力で、板要素で
+                モデル化した壁 (板壁) のせん断力を「壁」区分へ集計し
+                図へ注記する (_plate_shear_collect 参照)。省略時は従来動作。
 
     戻り値: (pdf_paths, QR_TeX_txt, Q_c, Q_w, fig_no)
       pdf_paths : 保存したPDFパスの list[str]
@@ -1096,6 +1242,13 @@ def figure_shear(limit_sec_no, stress_fontsize, node,
                                           c_section_no, w_section_no,
                                           v_section_no)
 
+                # %%板要素 (板壁)%% (原典に無い処理: _plate_shear_collect参照)
+                plate_picks = _plate_shear_collect(
+                    plate, plate_stress, load_case_index_plate,
+                    node, z1b, cs, sd_case)
+                for (_pno, _i1, _i2, p_shear_i) in plate_picks:
+                    Q_SUM[0] = Q_SUM[0] + p_shear_i  # 壁として集計
+
                 # ---------- せん断力分担率，層せん断力値の集計 ----------
                 Q_ALL = float(np.sum(Q_SUM))
                 w_ratio = Q_SUM[0] / Q_ALL * 100
@@ -1217,6 +1370,35 @@ def figure_shear(limit_sec_no, stress_fontsize, node,
                             truss_shear_plot(
                                 ax, plot_stress, inode_index, jnode_index,
                                 node, 1 + sd_case, Q_ALL, stress_fontsize)
+
+                # ---------- 板要素(板壁)のせん断力値のplot ----------
+                # (原典に無い処理。分割された板壁は同一直線上の連続要素を
+                #  1本にまとめて注記する: _plate_picks_merge 参照)
+                for (id_lo, id_hi, p1_pl, p2_pl, q_pl) in \
+                        _plate_picks_merge(plate_picks, node):
+                    ax.plot([p1_pl[0], p2_pl[0]], [p1_pl[1], p2_pl[1]],
+                            color='k', linewidth=0.5)
+                    if abs(q_pl) < 0.1:  # 柱の注記と同じ閾値
+                        continue
+                    dx_pl = p2_pl[0] - p1_pl[0]
+                    dy_pl = p2_pl[1] - p1_pl[1]
+                    if dx_pl == 0:
+                        rot = 90.0
+                    else:
+                        rot = math.degrees(math.atan(dy_pl / dx_pl))
+                    if id_lo == id_hi:
+                        label = '板：' + _n(id_lo, '%15.0f')
+                    else:
+                        label = ('板：' + _n(id_lo, '%15.0f') + '-'
+                                 + _n(id_hi, '%15.0f'))
+                    pct = 100 * q_pl / Q_ALL if Q_ALL else 0.0
+                    _ax_text(ax,
+                             (p1_pl[0] + p2_pl[0]) * 0.5,
+                             (p1_pl[1] + p2_pl[1]) * 0.5,
+                             label + '[' + _n(q_pl, '%15.2f') + 'kN(PQ)：'
+                             + _n(pct, '%15.1f') + '%]',
+                             ha='center', va='top', fs=stress_fontsize,
+                             rot=rot)
 
             # ------------------ 応力図の枠の大きさを設定 ------------------
             axis_xtick = np.asarray(axis_xtick)
