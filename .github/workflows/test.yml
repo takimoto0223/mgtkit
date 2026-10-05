@@ -43,6 +43,18 @@ jobs:
         working-directory: mgtkit
         run: python -m pytest -v
 
+      # 画面の JS (static/*.js) の構文チェック。タブの JS は app.js を編集せず
+      # 別ファイルで足すため、1 ファイルの構文エラーで画面全体が動かなくなるのを
+      # ここで止める。node は ubuntu-latest に入っているものを使う
+      - name: JS の構文チェック
+        working-directory: mgtkit
+        run: |
+          rc=0
+          for f in static/*.js; do
+            node --check "$f" || { echo "::error file=$f::構文エラー"; rc=1; }
+          done
+          exit $rc
+
   # 安全チェック。PR のみ実行。
   safety:
     if: github.event_name == 'pull_request'
