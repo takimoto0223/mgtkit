@@ -344,6 +344,83 @@ def find_index_rough(base_data, search):
     return index
 
 
+def load_beam_stress_table(path):
+    """beam_stress の寛容読込。3列目の「位置」列があれば読み飛ばす.
+
+    MIDASの梁要素応力の書き出しには、3列目に位置 (i端/j端。I[1]・J[2]・
+    1/4 などの表記) の列が入る形式がある。この関数は
+      - 従来の8列数値: そのまま
+      - 9列数値: 3列目を位置番号とみなして削除
+      - 3列目が数値でない (I[1] 等の文字): その列を除いて数値として読む
+    のいずれにも対応する。見出し行・空行のスキップ、文字コードの自動判定、
+    列数不揃いのエラーは loadtxt_tolerant と同じ。位置列を読み飛ばした
+    場合は注記を表示する。
+
+    戻り値: ndarray (N x M, float, 2次元)。列数(=8)の検証は呼び出し側で行う。
+    """
+    import os as _os
+    with open(path, 'rb') as f:
+        raw = f.read()
+    text = None
+    for enc in ('utf-8-sig', 'cp932', 'utf-8'):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        text = raw.decode('utf-8', errors='replace')
+    rows = []
+    skipped = 0
+    dropped_txt = 0
+    ncol = None
+    ncol_line = 0
+    for lineno, ln in enumerate(text.splitlines(), 1):
+        t = ln.strip()
+        if not t:
+            continue
+        toks = t.replace(',', ' ').split()
+        vals = None
+        try:
+            vals = [float(v) for v in toks]
+        except ValueError:
+            # 3列目だけが数値でない (位置の文字列) なら、その列を除いて読む
+            if len(toks) >= 3:
+                try:
+                    vals = [float(v) for v in toks[:2] + toks[3:]]
+                    dropped_txt += 1
+                except ValueError:
+                    vals = None
+        if vals is None:
+            skipped += 1
+            continue
+        if ncol is None:
+            ncol = len(vals)
+            ncol_line = lineno
+        elif len(vals) != ncol:
+            raise ValueError(
+                '%s の %d 行目の列数(%d)が %d 行目(%d列)と一致しません'
+                % (_os.path.basename(str(path)), lineno, len(vals),
+                   ncol_line, ncol))
+        rows.append(vals)
+    if skipped:
+        print('注記: %s の見出しなど数値でない %d 行を読み飛ばしました'
+              % (_os.path.basename(str(path)), skipped))
+    if not rows:
+        raise ValueError('%s に数値データがありません'
+                         % _os.path.basename(str(path)))
+    a = np.asarray(rows, dtype=float)
+    if dropped_txt:
+        print('注記: %s の3列目 (位置) を読み飛ばしました (%d行)'
+              % (_os.path.basename(str(path)), dropped_txt))
+    elif a.shape[1] == 9:
+        # 9列数値は「要素, ケース, 位置番号, Fx..Mz」とみなして位置列を削除
+        a = np.delete(a, 2, axis=1)
+        print('注記: %s は9列のため3列目 (位置) を読み飛ばしました'
+              % _os.path.basename(str(path)))
+    return a
+
+
 def loadtxt_tolerant(path):
     """数値テキストの寛容読込 (応力txt等のユーザー入力ファイル用).
 
