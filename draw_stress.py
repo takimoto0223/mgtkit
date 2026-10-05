@@ -63,7 +63,8 @@ try:
         mgtopen_wall, node_index_get,
     )
     from .util import (find_index, find_zero_index, doublecheck,
-                       space_erace, _colon, loadtxt_tolerant)
+                       space_erace, _colon, loadtxt_tolerant,
+                       load_beam_stress_table)
     from .draw_model import (
         _setup_japanese_font, _finish_figure, _text, _kline, _plate_plot,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
@@ -76,7 +77,8 @@ except ImportError:  # スクリプト実行時
         mgtopen_wall, node_index_get,
     )
     from util import (find_index, find_zero_index, doublecheck,
-                      space_erace, _colon, loadtxt_tolerant)
+                      space_erace, _colon, loadtxt_tolerant,
+                      load_beam_stress_table)
     from draw_model import (
         _setup_japanese_font, _finish_figure, _text, _kline, _plate_plot,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
@@ -95,8 +97,10 @@ def read_beam_stress(path):
     列: 1:要素番号 2:荷重ケース 3:Fx 4:Fy 5:Fz 6:Mx 7:My 8:Mz
     1要素あたり3行 (i端/中央/j端)。2行 (i端/j端: 終局形式) の場合は
     MATLAB版同様、中央=両端平均の3行形式へ展開する。
+    3列目に位置の列 (i端/j端。I[1] 等の文字や位置番号) が入った書き出しは
+    その列を読み飛ばす (load_beam_stress_table)。
     """
-    beam_stress = loadtxt_tolerant(path)
+    beam_stress = load_beam_stress_table(path)
     if beam_stress.size == 0:
         return np.array([])
     if beam_stress.shape[1] != 8:

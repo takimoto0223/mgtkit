@@ -42,7 +42,7 @@ from mgtkit.mgt import (mgtopen_node, mgtopen_element, mgtopen_plate,
                         mgtopen_RCcolumn)
 from mgtkit.section import mgtopen_section
 from mgtkit.util import (space_erace, find_index, pick_text,
-                         loadtxt_tolerant)
+                         loadtxt_tolerant, load_beam_stress_table)
 from mgtkit.draw_model import plot_model
 from mgtkit.draw_stress import plot_stress, _default_case_names
 from mgtkit.draw_ratio import plot_ratio
