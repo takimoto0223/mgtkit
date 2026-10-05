@@ -3378,7 +3378,7 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
                       wall_r, node, element, load_direction, load_no,
                       ij_select, ij_reverse, LOAD_CASE_NAME, w_l, L_43, RCQ,
                       buck_length, pick_section_name, walldesign_index,
-                      method_rcw):
+                      method_rcw, wall_r_elem=None):
     """RC_ratio_analysis.m の逐語移植 (NKD物件で通る経路のみ).
 
     移植済み経路:
@@ -4165,14 +4165,21 @@ def RC_ratio_analysis(sectionsize, ele_length, stress, timecase, Fc, ele_no,
     elif column_judge == 0 and wall_judge != 0 and beam_judge == 0:
         RCWcolumns = np.atleast_2d(np.asarray(RCWcolumns, dtype=float))
         QL = QL[:, 1:3]
-        if wall_r is None or np.asarray(wall_r).size == 0:
-            reduction = 1.0
-        else:
-            wall_r = np.atleast_2d(np.asarray(wall_r, dtype=float))
-            if find_index(wall_r[:, 0], section_no) + 1 > 0:
-                reduction = wall_r[find_index(wall_r[:, 0], section_no), 1]
-            else:
-                reduction = 1.0
+        # せん断耐力低減率 r (せん断耐力×r で低減。r<1で検定比が増える)。
+        # 優先順: (1)要素番号ベース wall_r_elem (w_r.txt: 要素番号→低減率)
+        #         (2)断面番号ベース wall_r (従来 [断面番号, 低減率])
+        reduction = 1.0
+        _red_applied = False
+        if wall_r_elem:
+            _r = wall_r_elem.get(int(round(float(ele_no))))
+            if _r is not None:
+                reduction = float(_r)
+                _red_applied = True
+        if (not _red_applied and wall_r is not None
+                and np.asarray(wall_r).size != 0):
+            wall_r2 = np.atleast_2d(np.asarray(wall_r, dtype=float))
+            if find_index(wall_r2[:, 0], section_no) + 1 > 0:
+                reduction = wall_r2[find_index(wall_r2[:, 0], section_no), 1]
 
         WL_ef = np.zeros(6)
         if w_l is None or np.asarray(w_l).size == 0:

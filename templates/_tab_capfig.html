@@ -1,0 +1,124 @@
+<!-- ============ タブ: 断面符号図 (MIDAS風) ============ -->
+<!-- index.html から include される。既存タブの markup に合わせてある。 -->
+<section class="tab" id="tab-capfig">
+  <fieldset>
+    <legend>断面符号図 (MIDAS風) PDF生成</legend>
+    <div class="row hint">
+      MIDAS で断面名を表示してキャプチャした伏図・軸組図の代わりに使う図です。
+      部材は MIDAS の断面色 (mgt の *SECT-COLOR) で描き、断面名を部材の横に
+      書きます。グループ一覧は共通欄の「読み込み」で表示されます。
+    </div>
+
+    <div class="row"><b>伏図にするグループ</b>
+      <button class="sub" onclick="checkAll('cffloor',true)">全選択</button>
+      <button class="sub" onclick="checkAll('cffloor',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="cf_floors_box"><span class="hint">
+      共通欄の「読み込み」でmgtのグループ一覧を表示します</span></div>
+
+    <div class="row"><b>軸組図にするグループ</b>
+      <button class="sub" onclick="checkAll('cfaxis',true)">全選択</button>
+      <button class="sub" onclick="checkAll('cfaxis',false)">全解除</button>
+    </div>
+    <div class="groupbox" id="cf_axes_box"><span class="hint">-</span></div>
+
+    <div class="row"><b>軸組図に階レベルとして書く水平グループ</b>
+      <button class="sub" onclick="checkAll('cflevel',true);cfLevelsSave()">全選択</button>
+      <button class="sub" onclick="checkAll('cflevel',false);cfLevelsSave()">全解除</button>
+      <span class="hint">チェックしたグループだけ、軸組図に破線のレベル線と名前を
+        描きます (選択は mgt ごとに記憶)</span>
+    </div>
+    <div class="groupbox" id="cf_levels_box"><span class="hint">-</span></div>
+
+    <div class="row"><b>通り芯として描くグループ</b>
+      <button class="sub" onclick="checkAll('cfgrid',true)">全選択</button>
+      <button class="sub" onclick="checkAll('cfgrid',false)">全解除</button>
+      <span class="hint">伏図では一点鎖線+符号、軸組図では交差する通りを
+        縦の一点鎖線で描きます</span>
+    </div>
+    <div class="groupbox" id="cf_grids_box"><span class="hint">-</span></div>
+
+    <div class="row"><b>水平な板要素 (床スラブ等)</b>
+      <label class="inline"><input type="checkbox" id="cf_hplates" checked>
+        伏図に描く</label>
+      <label class="inline"><input type="checkbox" id="cf_hplate_nolabel">
+        板厚を書かない (色と断面一覧の凡例だけで示す)</label>
+      <span class="hint">床グループに登録していなくても、その床と同じ高さの
+        水平な板要素を描きます</span>
+    </div>
+
+    <div class="row"><b>断面名の書き方</b>
+      <label class="inline"><input type="checkbox" id="cf_short" checked
+        onchange="capfigSecState()">
+        「_」より前だけ書く (例: WG1_120x150 → WG1)</label>
+      <button class="sub" onclick="capfigFullAll(true)">全部「_」以降も</button>
+      <button class="sub" onclick="capfigFullAll(false)">全部「_」より前だけ</button>
+    </div>
+    <div class="row hint">下の表で「_」以降も書く断面にチェックします。
+      セルをクリックでチェック、縦にドラッグで範囲をまとめてチェック
+      (Excel の範囲選択と同じ要領)、Shift+クリックで直前のセルからの範囲を
+      同じ状態にします。選んだ断面は mgt ごとにこのブラウザに記憶されます。</div>
+    <div id="cf_secs_box"
+         style="max-height:300px; overflow-y:auto; border:1px solid #dde;
+                border-radius:3px; background:#fafbfc; padding:4px">
+      <span class="hint">共通欄の「読み込み」で断面一覧を表示します</span></div>
+
+    <div class="row"><b>表示</b></div>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="cf_solid" checked>
+        断面形状 (せい・幅) を塗りで描く</label>
+      <span class="hint">MIDAS の隠線表示と同じく、部材を断面の大きさで描きます
+        (オフセット CT/CB 等・β角を反映)。外すと線だけの表示</span>
+    </div>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="cf_columns" checked>
+        伏図に柱 (その階の下の柱) を描く</label>
+      <label class="inline"><input type="checkbox" id="cf_levels" checked>
+        軸組図に階レベル線</label>
+      <label class="inline"><input type="checkbox" id="cf_grid" checked>
+        通り芯</label>
+      <label class="inline"><input type="checkbox" id="cf_nodes">
+        節点</label>
+      <label class="inline"><input type="checkbox" id="cf_legend" checked>
+        断面一覧 (右欄)</label>
+      <label class="inline"><input type="checkbox" id="cf_footer">
+        右下の作図情報 (mgt名・作成日)</label>
+    </div>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="cf_merge" checked>
+        分割した要素は1部材として1回だけ書く</label>
+      <label class="inline"><input type="checkbox" id="cf_mono">
+        白黒</label>
+    </div>
+    <div class="row">
+      <label class="inline">用紙
+        <select id="cf_paper">
+          <option value="2">A2</option>
+          <option value="3" selected>A3</option>
+          <option value="4">A4</option>
+        </select></label>
+      <label class="inline">向き
+        <select id="cf_orient">
+          <option value="landscape" selected>横</option>
+          <option value="portrait">縦</option>
+          <option value="auto">図の形に合わせる</option>
+        </select></label>
+      <label class="inline">断面名の文字[pt]
+        <input type="number" id="cf_pt" value="6" step="0.5" min="3"
+               style="width:60px"></label>
+      <label class="inline">ダミー材の断面番号下限
+        <input type="number" id="cf_limit" value="9000"></label>
+      <span class="hint">ダミー材は灰色の破線で描き、断面名は書きません</span>
+    </div>
+
+    <div class="row">
+      <button class="sub emph" onclick="capfigPreview(1)">プレビュー</button>
+      <button class="act" onclick="plotCapfig()">断面符号図PDFを作成</button>
+      <span class="hint">伏図 → 軸組図 の順に1図1ページでまとめた PDF を
+        &lt;出力先&gt;\mgtkit_out\capfig\ に保存します</span>
+    </div>
+    <div id="cf_msg"></div>
+    <div id="cf_preview"></div>
+  </fieldset>
+</section>
+<script src="/static/capfig.js?v={{ app_ver }}"></script>

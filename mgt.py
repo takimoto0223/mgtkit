@@ -96,15 +96,52 @@ def _strcat(a, b):
     return a.rstrip() + b.rstrip()
 
 
+def _split_quoted_head(tline):
+    """行頭の引用符つきフィールドを取り出す.
+
+    MIDASは名前に , や " を含むフィールドを '"名前"' 形式 (名前中の " は
+    \\" にエスケープ) で書き出す。行頭 (空白を除く) が '"' の場合、
+    閉じ引用符までをエスケープ解除した名前として返し、その後の最初の
+    カンマ以降を残り文字列として返す。引用符でなければ (None, None)。
+
+    戻り値: (名前 or None, 残り文字列 or None)
+    """
+    t = tline.lstrip()
+    if not t.startswith('"'):
+        return None, None
+    j = 1
+    while j < len(t):
+        if t[j] == '"' and t[j - 1] != '\\':
+            break
+        j += 1
+    if j >= len(t):  # 閉じ引用符なし → 引用符扱いしない (従来どおり)
+        return None, None
+    name = t[1:j].replace('\\"', '"')
+    rest = t[j + 1:]
+    k = rest.find(',')
+    rest = rest[k + 1:] if k >= 0 else ''
+    return name, rest
+
+
 def _join_continuation(lines, pos, tline):
     """'\\'で折り返された行を結合するMATLAB共通パターンの再現.
 
     posは次に読む行のindex(0-based)。結合後の(tline, pos, 消費行数)を返す。
+
+    MATLAB原典は「行内のどこかに \\ があれば継続」と判定するが、
+    グループ名等に \\ が含まれる場合 (例: MIDASが名前中の '\"' を
+    '\\\"' とエスケープ出力する) に結合が止まらずファイル末尾まで
+    読み進めてしまうため、Python版は「行末 (末尾空白を除く) が \\ の
+    場合のみ継続」と判定する (通常の折り返し行の挙動は同一)。
     """
     consumed = 0
-    while '\\' in tline:
+    while _deblank(tline).endswith('\\'):
         tline = _deblank(tline)          # 末尾空白削除(最後の文字が\となる)
         tline = tline[:len(tline) - 1]   # \削除
+        if pos >= len(lines):
+            raise ValueError(
+                'mgtファイルが途中で終わっています (行末の継続記号 \\ の'
+                '続きの行がありません)')
         tline2 = lines[pos]              # 続く次の行を読み込み
         pos += 1
         tline = _strcat(tline, tline2)   # 合体
@@ -669,22 +706,26 @@ def mgtopen_group(filename):
         # 折り返し行('\')の結合
         tline, pos, consumed = _join_continuation(lines, pos, tline)
         i += consumed
-        tn = _tlinenum(tline)
 
-        axisname_one = _deblank(_field(tline, tn, 1)).replace(' ', '')
+        # 引用符つきグループ名 (名前に , や " を含むとMIDASが
+        # '"名前"' 形式・'\"'エスケープで出力する) は、閉じ引用符までを
+        # 名前として取り出してから残りをカンマ分割する
+        qname, qrest = _split_quoted_head(tline)
+        if qname is not None:
+            axisname_one = qname.replace(' ', '')
+            qparts = qrest.split(',')
+            axisnode_one = _deblank(qparts[0]) if len(qparts) > 0 else ''
+            axisele_one = _deblank(qparts[1]) if len(qparts) > 1 else ''
+        else:
+            tn = _tlinenum(tline)
+            axisname_one = _deblank(_field(tline, tn, 1)).replace(' ', '')
+            axisnode_one = _deblank(_field(tline, tn, 2))
+            axisele_one = _deblank(_field(tline, tn, 3))
+
         axis_name.append(axisname_one)
-        axisnode_one = _deblank(_field(tline, tn, 2))
-        axisele_one = _deblank(_field(tline, tn, 3))
-
         # 要素や節点がないグループがあった場合には0を入力しておく
-        if axisnode_one == '':
-            axis_node.append('0')
-        else:
-            axis_node.append(_deblank(_field(tline, tn, 2)))
-        if axisele_one == '':
-            axis_element.append('0')
-        else:
-            axis_element.append(_deblank(_field(tline, tn, 3)))
+        axis_node.append(axisnode_one if axisnode_one != '' else '0')
+        axis_element.append(axisele_one if axisele_one != '' else '0')
 
     axis_number = len(axis_name)
 

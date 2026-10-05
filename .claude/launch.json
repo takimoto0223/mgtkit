@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mgtkit-dev",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set MGTKIT_PORT=8771&& set MGTKIT_NO_BROWSER=1&& set MGTKIT_UPLOAD_DIR=%TEMP%\\mgtkit_uploads_claude&& python app.py"
+      ],
+      "port": 8771
+    },
+    {
+      "name": "mgtkit-dev2",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set MGTKIT_PORT=8772&& set MGTKIT_NO_BROWSER=1&& set MGTKIT_UPLOAD_DIR=%TEMP%\\mgtkit_uploads_claude2&& python app.py"
+      ],
+      "port": 8772
+    }
+  ]
+}

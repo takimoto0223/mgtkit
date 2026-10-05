@@ -1021,8 +1021,10 @@ def figure_rekr(limit_sec_no, unit_element, node, wall_base, wall_stress_ID,
                             elif plate[prow, 4] == nno:    # j端が算定高さ
                                 other_cols = [3, 5, 6]
                             elif plate[prow, 5] == nno:    # k端が算定高さ
-                                # NOTE: 原典226行は [4 4 7] 列 (重複; 原典どおり)
-                                other_cols = [3, 3, 6]
+                                # NOTE: 原典226行は [4 4 7] 列 (i端重複・
+                                #   j端欠落のバグ)。他端部と同様に残り3節点
+                                #   [i, j, l] を見るよう修正済み。
+                                other_cols = [3, 4, 6]
                             elif plate[prow, 6] == nno:    # l端が算定高さ
                                 other_cols = [3, 4, 5]
                             else:
@@ -1036,10 +1038,24 @@ def figure_rekr(limit_sec_no, unit_element, node, wall_base, wall_stress_ID,
                                     hit = np.where(
                                         node[other_node_id, 3]
                                         == z1_point[base_i])[0]
-                                    pno[jj, 1] = nno
-                                    # 一致が複数ならMATLAB同様エラー (.item())
-                                    pno[jj, 2] = node[
-                                        other_node_id[hit], 0].item()
+                                    if hit.size == 1:
+                                        pno[jj, 1] = nno
+                                        pno[jj, 2] = node[
+                                            other_node_id[hit], 0].item()
+                                    else:
+                                        # 対辺節点が算定高さに無い板
+                                        # (段差壁・Z座標の誤差など) は
+                                        # 注記を出して剛心集計から除外
+                                        print(
+                                            '板要素%d: 節点%dの対辺節点が'
+                                            '算定高さZ=%gに見つからないため'
+                                            '剛心集計から除外しました'
+                                            '(段差壁またはZ座標のズレの'
+                                            '可能性)'
+                                            % (int(plate[prow, 0]),
+                                               int(nno),
+                                               z1_point[base_i]))
+                                        pno[jj, 1:3] = 0
                                 else:
                                     pno[jj, 1:3] = 0
                         else:  # △要素
@@ -1774,7 +1790,8 @@ def figure_w_center(stress_fontsize, element, mergin_LEFT, mergin_RIGHT,
                     title_fontsize, load_case_name, collect_node, node,
                     axis_xtick, axis_ytick, N_case, h_axis_plot, paper_orient,
                     paper_size, plot_no, center, axis_name, axis_element,
-                    axis_node, axis_plot_coefi, limit_sec_no, out_dir='.'):
+                    axis_node, axis_plot_coefi, limit_sec_no, out_dir='.',
+                    out_name=None):
     """figure_w_center.m: 重心算定時軸力一覧の平面図をPDF保存する.
 
     引数:
@@ -1786,7 +1803,7 @@ def figure_w_center(stress_fontsize, element, mergin_LEFT, mergin_RIGHT,
       axis_name/axis_node/axis_plot_coefi : 通り芯符号 (plot_plan_axis2 用)。
         axis_element / axisname_location / dimension_fontsize /
         axis_fontsize は原典どおり未使用。
-    保存名: '<ケース名>-<レベル>wcenter.pdf'
+    保存名: out_name (省略時は '<ケース名>-<レベル>wcenter.pdf')
     # NOTE: 原典の size(center,3)>1 分岐は 3次元配列専用で本移植 (1層分の
     #   1次元 center) では到達しないため、単一分岐のみ移植。
     """
@@ -1841,7 +1858,8 @@ def figure_w_center(stress_fontsize, element, mergin_LEFT, mergin_RIGHT,
                  mergin_LEFT, mergin_RIGHT, mergin_TOP, mergin_BOTTOM)
     _set_paper(fig, paper_orient, paper_size)
     out_path = os.path.join(
-        out_dir, str(load_case_name[N_case - 1]).rstrip() + '-'
+        out_dir, out_name if out_name else
+        str(load_case_name[N_case - 1]).rstrip() + '-'
         + _n2s(h_axis_plot[0], '%15.0f') + 'wcenter.pdf')
     fig.savefig(out_path, format='pdf')
     plt.close(fig)
@@ -1859,7 +1877,7 @@ def figure_g_center(stress_fontsize, element, mergin_LEFT, mergin_RIGHT,
                     axis_xtick, axis_ytick, K_case, h_axis_plot, paper_orient,
                     paper_size, plot_no, center, kr, re, REXY, xy, axis_name,
                     axis_element, axis_node, axis_plot_coefi, limit_sec_no,
-                    out_dir='.'):
+                    out_dir='.', out_name=None):
     """figure_g_center.m: 剛心算定時剛性一覧の平面図をPDF保存する.
 
     引数:
@@ -1872,7 +1890,7 @@ def figure_g_center(stress_fontsize, element, mergin_LEFT, mergin_RIGHT,
       re      : 当該層の弾力半径 [re_x, re_y]
       REXY    : 当該層の偏心率 [Re_x, Re_y]
       xy      : 1=X方向, 2=Y方向 (re/REXY への 1-based 添字)
-    保存名: '<ケース名>-<レベル>gcenter.pdf'
+    保存名: out_name (省略時は '<ケース名>-<レベル>gcenter.pdf')
     # NOTE: figure_w_center 同様、size(center,3)>1 分岐は移植対象外。
     """
     node = np.asarray(node, dtype=float)
@@ -1960,7 +1978,8 @@ def figure_g_center(stress_fontsize, element, mergin_LEFT, mergin_RIGHT,
                  mergin_LEFT, mergin_RIGHT, mergin_TOP, mergin_BOTTOM)
     _set_paper(fig, paper_orient, paper_size)
     out_path = os.path.join(
-        out_dir, str(load_case_name[K_case - 1]).rstrip() + '-'
+        out_dir, out_name if out_name else
+        str(load_case_name[K_case - 1]).rstrip() + '-'
         + _n2s(h_axis_plot[0], '%15.0f') + 'gcenter.pdf')
     fig.savefig(out_path, format='pdf')
     plt.close(fig)

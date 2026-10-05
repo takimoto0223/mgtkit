@@ -1,0 +1,130 @@
+<!-- ============ タブ: RC定着・付着・接合部 ============ -->
+<!-- index.html から include される。既存タブの markup に合わせてある。 -->
+<section class="tab" id="tab-rcdetail">
+  <fieldset>
+    <legend>検討対象の読み込み (RC定着・付着・柱梁接合部)</legend>
+    <div class="row">応力ファイル (beam_stress):
+      <input type="text" id="rd_beam_stress_path" class="path"
+             placeholder="例: C:\work\beam_stress.txt (断面算定タブと同じ8列)">
+      <button class="sub"
+              onclick="pickFile('rd_beam_stress_path')">ファイルの選択</button>
+      <button class="sub emph" onclick="rdRead()">対象読込</button>
+    </div>
+    <div class="row"><span class="hint">
+      mgt の *REBAR-BEAM (梁配筋) がある断面の水平RC梁を対象に、
+      RC規準2010 の 17条 (定着)・16条 (付着)・15条3項 (柱梁接合部) の
+      検定を行います。定着には平23国交告432号の判定も併記します。
+      柱梁接合部の形式 (十字/T/ト/L) は柱・梁の接続から自動判定する
+      ので、結果の伏図照合を必ず行ってください</span>
+    </div>
+    <div id="rd_targets_box"><span class="hint">
+      「対象読込」で一覧を表示します</span></div>
+    <div class="row"><b>検討対象の荷重ケース</b>
+      <span class="hint">種別 (長期/水平/短期) を確認・修正してください。
+        水平(H)は長期と±で組合せます</span>
+    </div>
+    <div id="rd_cases_box"><span class="hint">
+      「対象読込」で一覧を表示します</span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>検定条件</legend>
+    <div class="row">
+      梁主筋かぶり (帯筋外まで)
+      <input type="number" id="rd_beam_cover" value="40" step="5"
+             style="width:70px"> mm
+      　定着の控除長さ (柱せい−投影定着長さ)
+      <input type="number" id="rd_anchor_offset" value="85" step="5"
+             style="width:70px"> mm
+      　2段目筋の投影長さ控除
+      <input type="number" id="rd_anchor_offset2" placeholder="自動"
+             step="5" style="width:70px"> mm
+      <span class="hint">控除長さ = 柱かぶり+帯筋径+柱主筋径+施工余裕
+        の目安。2段目筋の控除は空欄で自動 (主筋径+段あき)、
+        0で1段目と同じ扱い</span>
+    </div>
+    <div class="row">
+      定着の判定方法:
+      <select id="rd_anchor_method">
+        <option value="rc" selected>RC規準17.2式 (必要定着長さの計算)</option>
+        <option value="k432">告示432号 (l≥kσd/(F/4+9))</option>
+        <option value="proj">投影定着長さ0.75D (17条細則)</option>
+      </select>
+      <span class="hint">検討書にはここで選んだ方法の判定だけが載ります</span>
+    </div>
+    <div class="row">
+      17.2式 α:
+      <select id="rd_alpha">
+        <option value="1.0" selected>1.0 (コア内定着)</option>
+        <option value="1.25">1.25 (コア外)</option>
+      </select>
+      　S (表17.1):
+      <select id="rd_S">
+        <option value="0.7" selected>0.7 (耐震部材・標準フック)</option>
+        <option value="1.25">1.25 (耐震部材・直線定着)</option>
+        <option value="0.5">0.5 (その他部材・フック)</option>
+        <option value="1.0">1.0 (その他部材・直線)</option>
+      </select>
+      　付着長さ ld:
+      <select id="rd_ld_mode">
+        <option value="L" selected>内法長さ L (梁降伏なし)</option>
+        <option value="Ld2">(L+d)/2 (両端曲げ降伏)</option>
+      </select>
+    </div>
+    <div class="row">
+      検定項目:
+      <label><input type="checkbox" id="rd_do_anchor" checked>
+        定着 (ト形・L形)</label>
+      <label><input type="checkbox" id="rd_do_through" checked>
+        通し配筋の径 (17.3式)</label>
+      <label><input type="checkbox" id="rd_do_bond" checked>
+        付着 (梁)</label>
+      <label><input type="checkbox" id="rd_bond_safety" checked>
+        うち16.5式 (付着割裂の安全性)</label>
+      <label><input type="checkbox" id="rd_do_joint" checked>
+        柱梁接合部せん断</label>
+      <label><input type="checkbox" id="rd_do_wall" checked>
+        耐震壁周辺柱の断面 (19条)</label>
+      　接合部内帯筋間隔 = 柱帯筋間隔×
+      <input type="number" id="rd_joint_hoop_f" value="1.5" step="0.1"
+             min="0.1" style="width:60px">
+      <span class="hint">既定1.5 (細則の上限)。接合部内も柱と同ピッチ
+        なら1.0</span>
+    </div>
+    <div class="row">
+      耐震壁の断面名接頭辞:
+      <input type="text" id="rd_wall_prefix" value="EW"
+             style="width:64px">
+      　壁筋 ft:
+      <select id="rd_wall_ft">
+        <option value="295" selected>SD295 (295 N/mm²)</option>
+        <option value="345">SD345 (345 N/mm²)</option>
+      </select>
+      　壁板の負担率 Qw/(Qw+ΣQc):
+      <input type="number" id="rd_wall_wr" value="1.0" step="0.05"
+             min="0.1" max="1.0" style="width:64px">
+      <span class="hint">必要壁厚 t' = 負担率×QD/(0.012×壁長×ft)。
+        負担率1.0は壁板が全せん断を負担する扱い (安全側)</span>
+    </div>
+    <div class="row"><span class="hint">
+      16.5式は、耐震壁が地震力の大半を負担する建物の柱・梁部材などでは
+      省略できます (RC規準2010 16条解説 p.212)。チェックを外すと検討書に
+      省略の根拠が注記されます</span>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>検定と検討書</legend>
+    <div class="row">物件名:
+      <input type="text" id="rd_project" style="width:280px">
+      <button class="act" onclick="rdRun()">検定実行 → TeX書き出し</button>
+      <span class="hint">定着・付着・接合部それぞれ別のTeXソース
+        (計算書組込み用、冒頭に検討式つき) を
+        &lt;出力先&gt;\mgtkit_out\rcdetail\ に書き出し、コンパイル結果を
+        ページ上でプレビューします</span>
+    </div>
+    <div id="rd_msg"></div>
+    <div id="rd_result"></div>
+  </fieldset>
+</section>
+<script src="/static/rcdetail.js?v={{ app_ver }}"></script>

@@ -42,18 +42,25 @@ from mgtkit.mgt import (mgtopen_node, mgtopen_element, mgtopen_plate,
                         mgtopen_RCcolumn)
 from mgtkit.section import mgtopen_section
 from mgtkit.util import (space_erace, find_index, pick_text,
-                         loadtxt_tolerant)
+                         loadtxt_tolerant, load_beam_stress_table)
 from mgtkit.draw_model import plot_model
 from mgtkit.draw_stress import plot_stress, _default_case_names
 from mgtkit.draw_ratio import plot_ratio
 from mgtkit.ratio_pipeline import (run_steel_check,
                                    export_maxratio_xlsx,
                                    export_full_ratio_xlsx,
-                                   default_case_types)
+                                   default_case_types,
+                                   read_wall_reduction)
 from mgtkit.w_check import w_al_match, w_al_names
 from mgtkit.export_tex import export_model_tex, export_ratio_detail_tex
 from mgtkit.export_dxf import export_dxf
 from mgtkit.loadmap.routes import make_blueprint as _loadmap_bp
+from mgtkit.jointchk.routes import make_blueprint as _jointchk_bp
+from mgtkit.diaphragm.routes import make_blueprint as _diaphragm_bp
+from mgtkit.rcdetail.routes import make_blueprint as _rcdetail_bp
+from mgtkit.capfig.routes import make_blueprint as _capfig_bp
+from mgtkit.colbase.routes import make_blueprint as _colbase_bp
+from mgtkit.rcslab.routes import make_blueprint as _rcslab_bp
 
 app = Flask(__name__)
 
@@ -238,6 +245,22 @@ def _derived_section_notes():
             for d in getattr(mgtopen_section, 'restored_sections', [])]
 
 
+def _is_sloped_floor(pts):
+    """節点群の最適平面がxy平面から45度以下の傾きなら True (勾配屋根等).
+
+    主成分分析で最小分散方向を平面の法線とし、法線と鉛直軸のなす角で
+    判定する。節点がほぼ一直線 (平面が定まらない) 場合は False。
+    """
+    if pts.shape[0] < 3:
+        return False
+    q = pts - pts.mean(axis=0)
+    w, v = np.linalg.eigh(q.T @ q)
+    if float(np.sqrt(max(float(w[1]), 0.0) / pts.shape[0])) < 0.05:
+        return False  # ほぼ一直線 → 平面の向きが定まらない
+    tilt = np.degrees(np.arccos(min(abs(float(v[2, 0])), 1.0)))
+    return tilt <= 45.0 + 1e-6
+
+
 def _group_info(mgt_path):
     """グループ一覧を鉛直構面/水平構面(伏図)/節点未登録に分類して返す."""
     node = mgtopen_node(mgt_path)
@@ -252,10 +275,15 @@ def _group_info(mgt_path):
             idx = np.asarray(idx)
             idx = idx[idx >= 0] if idx.size else idx
             if np.size(idx) >= 2:
-                z = node[np.asarray(idx, dtype=int), 3]
-                # 10mmまでの座標ずれは同一レベル (水平構面) とみなす
-                kind = ('vertical' if (z.max() - z.min()) > 0.01
-                        else 'floor')
+                pts = node[np.asarray(idx, dtype=int), 1:4]
+                z = pts[:, 2]
+                # 10mmまでの座標ずれは同一レベル (水平構面) とみなす。
+                # レベル差があっても最適平面の傾きが45度以下なら
+                # 勾配屋根等の水平構面とみなす。
+                if (z.max() - z.min()) <= 0.01 or _is_sloped_floor(pts):
+                    kind = 'floor'
+                else:
+                    kind = 'vertical'
         groups.append({'name': space_erace(str(name)),
                        'n_nodes': int(nn.size), 'kind': kind})
     return groups
@@ -398,6 +426,24 @@ def _parse_heights(p):
 
 # 荷重分布図タブ (mgtkit/loadmap/)。共通ヘルパを渡して登録する
 app.register_blueprint(_loadmap_bp(sys.modules[__name__]))
+
+# 梁接合部検定タブ (mgtkit/jointchk/)。同じ作法で登録する
+app.register_blueprint(_jointchk_bp(sys.modules[__name__]))
+
+# 木造水平構面検定タブ (mgtkit/diaphragm/)。同じ作法で登録する
+app.register_blueprint(_diaphragm_bp(sys.modules[__name__]))
+
+# RC定着・付着・柱梁接合部検定タブ (mgtkit/rcdetail/)。同じ作法で登録する
+app.register_blueprint(_rcdetail_bp(sys.modules[__name__]))
+
+# 断面符号図 (MIDAS風) タブ (mgtkit/capfig/)。同じ作法で登録する
+app.register_blueprint(_capfig_bp(sys.modules[__name__]))
+
+# 鉄骨露出柱脚 (colbase/)
+app.register_blueprint(_colbase_bp(sys.modules[__name__]))
+
+# RCスラブの検討書 (rcslab/)。MIDAS API から板要素断面力を取って作図する
+app.register_blueprint(_rcslab_bp(sys.modules[__name__]))
 
 
 @app.route('/')
@@ -710,7 +756,7 @@ def api_load_cases():
     if err:
         return jsonify({'error': err}), 400
     try:
-        bs = np.atleast_2d(loadtxt_tolerant(p['beam_stress_path']))
+        bs = np.atleast_2d(load_beam_stress_table(p['beam_stress_path']))
         if bs.shape[1] < 2:
             return jsonify({'error': 'beam_stressファイルの列数が不足して'
                                      'います (8列必要)。'}), 400
@@ -1044,6 +1090,7 @@ def _plywood_col_map(result):
 
     長期+水平の合成 (analysis_case) の列順
     [長期, +H1, -H1, +H2, -H2, ...] を L/H_Lcase から再構成する。
+    長期列は木合板検定の対象外のため None のまま。
     """
     raw = [float(v) for v in
            np.atleast_1d(getattr(result, 'raw_case_no', np.zeros(0))).ravel()]
@@ -1073,6 +1120,32 @@ def _plywood_col_map(result):
             if (ci + 1) not in L:
                 cols[ci] = raw[ci]
     return cols
+
+
+def _plywood_plate_ratio(result, res):
+    """木合板検定の壁別検定比を検定比図用の plate_ratio 形式へ展開する.
+
+    戻り値: ndarray [板要素番号, 検定ケース番号, 0, 検定比] (検定ケース
+    ブロック順) または None。壁の検定比を構成する全板要素へ同じ値で
+    展開する。検定ケース→生ケースの対応付けは _plywood_col_map と同じ
+    (長期ケースは対象外のため図では外形線のみ)。
+    """
+    cols = _plywood_col_map(result)
+    case_nos = [float(v) for v in
+                np.atleast_1d(np.asarray(result.load_case_no)).ravel()]
+    rows = []
+    for ci, raw_cs in enumerate(cols):
+        if raw_cs is None or ci >= len(case_nos):
+            continue
+        for w in res['walls']:
+            r = next((x for x in w['cases']
+                      if int(x['case']) == int(raw_cs)), None)
+            if r is None:
+                continue
+            for e in w['eles']:
+                rows.append([float(e), case_nos[ci], 0.0,
+                             float(r['ratio'])])
+    return np.asarray(rows, dtype=float) if rows else None
 
 
 def _plywood_check_rows(result, res):
@@ -1106,6 +1179,8 @@ def _plywood_check_rows(result, res):
             details.append({'ele': '%s %s %s z=%s [要素 %s]'
                             % (w['name'], w['loc'], w['range'], w['zrange'],
                                ','.join(str(e) for e in w['eles'])),
+                            # NG要素コピー用の実要素番号 (ele はラベル文字列)
+                            'eles': [int(e) for e in w['eles']],
                             'vals': vals})
         # 検定詳細文: MATLAB (W_plate_analysis_text) と同じ段組で
         # ケースごとに最大の壁1件のみ出力する
@@ -1230,7 +1305,7 @@ def api_check_cases():
         if err:
             return jsonify({'error': err}), 400
     try:
-        bs = np.atleast_2d(loadtxt_tolerant(p['beam_stress_path']))
+        bs = np.atleast_2d(load_beam_stress_table(p['beam_stress_path']))
         if bs.shape[1] < 2:
             return jsonify({'error': 'beam_stressファイルの列数が不足して'
                                      'います (8列必要)。'}), 400
@@ -1309,7 +1384,7 @@ def api_steel_check():
                     str(row.get('type', 'H')), str(row.get('name', '')))
         # ケース表が古い(別の応力ファイルのもの)場合は明示エラー
         if case_types is not None:
-            _bs = np.atleast_2d(loadtxt_tolerant(p['beam_stress_path']))
+            _bs = np.atleast_2d(load_beam_stress_table(p['beam_stress_path']))
             _cases = _bs[:, 1]
             if truss_path:
                 _ts = np.atleast_2d(loadtxt_tolerant(truss_path))
@@ -1423,6 +1498,34 @@ def api_steel_check():
                     'h_di': float(row.get('h_di', 10)),
                     'h_pitch': float(row.get('h_pitch', 200)),
                     'h_num': float(row.get('h_num', 2))}
+            # RC壁せん断耐力低減 (要素番号ベース, w_r.txt由来)。
+            # (1) パス指定 rc.wall_r_path があれば read_wall_reduction で読む。
+            # (2) 直接 {要素番号: 低減率} / [[要素番号,低減率],…] でも受ける。
+            wall_r_elem = None
+            _wr_path = (rc.get('wall_r_path') or '').strip()
+            if _wr_path:
+                if not os.path.isfile(_wr_path):
+                    return jsonify({'error':
+                        'RC壁せん断低減率ファイルが見つかりません: '
+                        + _wr_path}), 400
+                try:
+                    wall_r_elem = read_wall_reduction(_wr_path)
+                except Exception as e:  # noqa: BLE001
+                    return jsonify({'error':
+                        'RC壁せん断低減率ファイルの読み込みに失敗しました '
+                        '(各行「要素番号 低減率」): ' + str(e)}), 400
+                if not wall_r_elem:
+                    return jsonify({'error':
+                        'RC壁せん断低減率ファイルに有効な行がありません '
+                        '(各行「要素番号 低減率」の数値2列が必要): '
+                        + _wr_path}), 400
+            _wre_in = rc.get('wall_r_elem')
+            if not wall_r_elem and _wre_in:
+                wall_r_elem = {}
+                _it = (_wre_in.items() if isinstance(_wre_in, dict)
+                       else ((row[0], row[1]) for row in _wre_in))
+                for ele, r in _it:
+                    wall_r_elem[int(round(float(ele)))] = float(r)
             rc_params = {
                 'rcw': rcw, 'rcg': rcg, 'rcc': rcc,
                 'wall_cover': float(rc.get('wall_cover', 40)),
@@ -1431,7 +1534,8 @@ def api_steel_check():
                 'method_rcw': int(rc.get('method_rcw', 3)),
                 'RCQ': int(rc.get('RCQ', 1)),
                 'L_43': [float(v) for v in (rc.get('L_43') or [])],
-                'walldesign_index': int(rc.get('walldesign_index', 1))}
+                'walldesign_index': int(rc.get('walldesign_index', 1)),
+                'wall_r_elem': wall_r_elem}
         # 部材長の扱い (''/None=要素単位, 0=結合部材単位<MATLAB一括表示相当>)
         su_raw = p.get('select_unit')
         select_unit = (float(su_raw) if su_raw not in (None, '')
@@ -1546,6 +1650,8 @@ def api_steel_check():
                             np.asarray(result.load_case_no).ravel()]
         _CHECK_CACHE['key'] = _check_cache_key(p)
         _CHECK_CACHE['result'] = result
+        # 用途=木合板のときの検定比図用の板要素検定比 (後段で設定)
+        _CHECK_CACHE['plywood_plate_ratio'] = None
 
         with _capture_notes(notes):
             out_dir = _out_dir(p, 'ratio_tex')
@@ -1576,6 +1682,9 @@ def api_steel_check():
                         qa_base=float(p.get('pw_qa', 1.96)))
                     data['sections'].extend(
                         _plywood_check_rows(result, pw_res))
+                    # 検定比図用: 壁別検定比を板要素別へ展開して保持
+                    _CHECK_CACHE['plywood_plate_ratio'] = \
+                        _plywood_plate_ratio(result, pw_res)
                     _pw_csv = plywood_csv(
                         pw_res,
                         os.path.join(_out_dir(p, 'plywood'),
@@ -1789,22 +1898,89 @@ def api_qr_drift():
     """QR: 層間変形角PDF."""
     p = request.get_json(force=True)
     try:
-        from mgtkit.draw_qr import plot_qr_drift, _defo_case_positions
+        from mgtkit.draw_qr import (plot_qr_drift, _defo_case_positions,
+                                    calc_qr_center)
         notes = []
         with _capture_notes(notes):
             D = _qr_load(p)
             C = _qr_common(p, D)
             delta_case = _defo_case_positions(D, p.get('delta_case'))
+
+            # 剛心位置層間変形角の評価用: 偏心率(セクション5)の設定が
+            # あれば剛心を計算する (無ければ表の剛心位置列は '--')
+            centers = None
+            gcenters = None
+            try:
+                if p.get('KX_case') and p.get('KY_case'):
+                    k_mode = str(p.get('k_mode') or 'fem')
+                    brace_baisu = None
+                    if k_mode == 'baisu':
+                        from mgtkit.draw_qr import case_positions
+                        N_case = case_positions(D, [p.get('N_case')],
+                                                C['cases_all'])[0]
+                        KX_case = KY_case = N_case
+                        thickness = mgtopen_thickness(p['mgt_path'])
+                        brace_baisu = {}
+                        for tok in str(p.get('brace_baisu') or '').replace(
+                                '、', ',').split(','):
+                            tok = tok.strip()
+                            if not tok or ':' not in tok:
+                                continue
+                            k0, v0 = tok.split(':', 1)
+                            try:
+                                brace_baisu[int(float(k0))] = float(v0)
+                            except ValueError:
+                                continue
+                    else:
+                        N_case = _defo_case_positions(
+                            D, [p.get('N_case')])[0]
+                        KX_case = _defo_case_positions(
+                            D, [p.get('KX_case')])[0]
+                        KY_case = _defo_case_positions(
+                            D, [p.get('KY_case')])[0]
+                        thickness = None
+                    center = calc_qr_center(
+                        D, C['load_case_name'], N_case, KX_case, KY_case,
+                        C['z_point'], C['case_height'], scope=C['scope'],
+                        calc_groups=C['calc_groups'],
+                        limit_sec_no=C['limit'], k_mode=k_mode,
+                        brace_baisu=brace_baisu, thickness=thickness)[2]
+                    centers = center[:, 2:4]
+                    gcenters = center[:, 0:2]
+            except Exception as ce:  # noqa: BLE001
+                print('剛心が計算できないため剛心位置層間変形角は省略します'
+                      ' (%s)' % ce)
+
+            # 剛性率表用: X/Y方向ケース (deformation内の位置)。剛心の計算
+            # 方式に関わらず deformation にあれば使う
+            rigidity_cases = None
+            try:
+                if gcenters is not None and p.get('KX_case') \
+                        and p.get('KY_case'):
+                    rigidity_cases = (
+                        _defo_case_positions(D, [p.get('KX_case')])[0],
+                        _defo_case_positions(D, [p.get('KY_case')])[0])
+            except Exception as ce:  # noqa: BLE001
+                print('X/Y方向ケースが deformation に無いため'
+                      '剛性率表は省略します (%s)' % ce)
+
             out_dir = _out_dir(p, os.path.join('qr', '層間変形角'))
             with _PLOT_LOCK:
-                made = plot_qr_drift(
+                made, tex_lines, tex_lines_rs = plot_qr_drift(
                     D, out_dir, C['load_case_name'], delta_case,
                     C['axes_idx'], C['z_point'], C['case_height'],
                     scope=C['scope'], calc_groups=C['calc_groups'],
                     mergins=C['mergins'], fontsize=C['fontsize'],
                     paper_orient=C['paper_orient'],
-                    paper_size=C['paper_size'], limit_sec_no=C['limit'])
-        return _qr_pdf_json(made, out_dir, notes)
+                    paper_size=C['paper_size'], limit_sec_no=C['limit'],
+                    centers=centers,
+                    drift_limit=float(p.get('drift_limit', 200)),
+                    gcenters=gcenters, rigidity_cases=rigidity_cases)
+        res = _qr_pdf_json(made, out_dir, notes)
+        j = res.get_json()
+        j['tex_lines'] = tex_lines
+        j['tex_lines_rs'] = tex_lines_rs
+        return jsonify(j)
     except Exception as e:  # noqa: BLE001
         return _error_response(e)
 
@@ -2116,10 +2292,16 @@ def api_plot_ratio():
             # (検定値の算定に使ったselect_unitとは別。既定ON)
             fig_unit = bool(p.get('fig_unit', True))
             select_unit = 0.0 if fig_unit else float('inf')
+            # 板要素の検定比: MATLAB版板検定 (result.plate_ratio) を優先し、
+            # 無ければ木合板検定 (用途=木合板) の壁別検定比を使う
+            _pr = getattr(result, 'plate_ratio', None)
+            if _pr is None or not np.size(_pr):
+                _pr = _CHECK_CACHE.get('plywood_plate_ratio')
             pdfs = plot_ratio(
                 p['mgt_path'], out_dir,
                 result.beam_ratio, result.truss_ratio,
                 [str(n) for n in result.LCNAME],
+                plate_ratio=_pr,
                 cases_select=cases,
                 axes_select=axes,
                 symbols_select=(p.get('symbols') or None),

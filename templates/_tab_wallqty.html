@@ -1,0 +1,188 @@
+<!-- ============ タブ: 木造壁量計算 ============ -->
+<!-- index.html から include される。既存タブの markup に合わせてある。 -->
+<section class="tab" id="tab-wallqty">
+  <fieldset>
+    <legend>存在壁量の読み込み (mgt の板要素から)</legend>
+    <div class="row"><span class="hint">
+      耐力壁は <b>板要素</b> でモデル化し、その板要素の <b>材料名に
+      「壁倍率」を含める</b> 規約です。板要素の厚みがそのまま壁倍率になります
+      (単位 mm のモデルなら 厚み5mm → 壁倍率5.0、単位 m のモデルなら
+      厚み0.005m → 壁倍率5.0)。メッシュ分割された壁は 階・厚み・同一平面
+      ごとにまとめ、壁の通り方向へ投影した区間の和集合を壁長とするので、
+      縦横に分割していても二重に数えません。</span>
+    </div>
+    <div class="row">
+      <label class="inline">材料名のキーワード
+        <input type="text" id="wq_keyword" value="壁倍率"
+               style="width:120px"></label>
+      <label class="inline">壁とみなす勾配の下限[°]
+        <input type="number" id="wq_slope" value="60" step="5" min="0"
+               max="90" style="width:64px"></label>
+      <label class="inline"><input type="checkbox" id="wq_diag" checked>
+        斜め壁を成分分解して算入</label>
+    </div>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="wq_minlen" checked>
+        壁長が短い壁を除外</label>
+      <label class="inline">最小の壁長[mm]
+        <input type="number" id="wq_minlen_v" value="600" step="50" min="0"
+               style="width:74px"></label>
+      <label class="inline"><input type="checkbox" id="wq_aspect" checked>
+        細長い壁を除外</label>
+      <label class="inline">階高/壁長 の上限
+        <input type="number" id="wq_aspect_v" value="5" step="0.5" min="0"
+               style="width:64px"></label>
+      <label class="inline"><input type="checkbox" id="wq_betacap" checked>
+        壁倍率に上限をかける</label>
+      <label class="inline">壁倍率の上限
+        <input type="number" id="wq_betacap_v" value="7" step="0.5" min="0"
+               style="width:64px"></label>
+    </div>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="wq_gap" checked>
+        垂れ壁 (床から浮いている壁) を除外</label>
+      <label class="inline">許容する浮き[mm]
+        <input type="number" id="wq_gap_v" value="300" step="50" min="0"
+               style="width:74px"></label>
+    </div>
+    <div class="row"><span class="hint">
+      木造の壁量計算のルール上、<b>壁長が600mm未満の壁</b>と
+      <b>階高/壁長 が5を超える細長い壁</b>は耐力壁として算入できません。
+      既定でどちらも考慮します (チェックを外すと判定しません)。除外した壁は
+      一覧に理由つきで残り、平面図では灰色の破線になります。<br>
+      ここでの<b>階高は、壁ごとにその壁自身の高さ H</b> を採ります。階の上端を
+      モデルから決めようとすると、屋根なりに伸びた妻壁の頂点が同じ階の他の壁の
+      階高まで引き上げてしまうためです。<br>
+      <b>壁倍率の上限</b>: モデルの厚みから読んだ壁倍率が上限 (既定7) を
+      超えていたら、その値で頭打ちにして集計します。頭打ちにした壁は一覧の
+      β 欄に元の値を併記し、注記にも出します。<br>
+      <b>垂れ壁の除外</b>: 耐力壁は床から立ち上がっている必要があるので、
+      <b>下端がその階の床レベルから浮いている壁は垂れ壁 (雑壁) とみなして
+      自動で除外</b>します。浮き量は一覧の「浮き[m]」欄に出ます。土台などで
+      少し浮かせてモデル化している場合に備えて、許容する浮き (既定300mm) を
+      変えられます。</span>
+    </div>
+    <div class="row"><span class="hint">
+      <b>勾配の下限</b>: 板要素に平面を当て、その面の勾配 (90°=鉛直、
+      0°=水平) が この値以上なら壁として算入します。既定の60°は
+      「60°以上の勾配なら壁とみなす」という扱いです。これ未満の面は
+      床・屋根として対象外にします。<b>勾配壁の壁長は水平投影長さ</b>
+      (平面で見た長さ) で数えます。<br>
+      「斜め壁」は平面的に X/Y 軸と斜めに通る壁のことで、勾配とは別物です。</span>
+    </div>
+    <div class="row">
+      <button class="act" onclick="wqRead()">モデルの壁を読み込み</button>
+      <span class="hint">階の区切りは mgt の *STORY から作ります。下の
+        「階の定義」で好きに直せます</span>
+    </div>
+    <div id="wq_read_msg"></div>
+    <div id="wq_exist"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>階の定義・層重量・見付面積</legend>
+    <div class="row"><span class="hint">
+      <b>床レベル</b> は m で直接入力します。1つの階に複数のレベルを
+      カンマ区切りで書けるので、スキップフロアはまとめて1つの階にできます
+      (例 <code>0, 0.455</code>)。壁は「自分の下端以下で最も高いレベル」の
+      階に属します。レベルを変えたら
+      <b>「この階定義で壁を再集計」</b> を押してください。<br>
+      <b>層重量 Wi</b> は「その階が支える重量」(当該階の床荷重＋上下の壁の
+      重量など) を kN で。<b>見付面積</b> は「その階の床面から 1.35m 上より
+      上」の投影面積で、X方向の欄には <b>X方向に風が吹くとき</b> に受ける面
+      (=YZ面への投影) の面積を入れます。入力はこの mgt ごとにブラウザへ
+      保存され、次回開いたときに復元されます。</span>
+    </div>
+    <div class="row">
+      <button class="sub emph" onclick="wqRecalc()">この階定義で壁を再集計</button>
+      <button class="sub" onclick="wqAddStory()">階を追加</button>
+      <button class="sub" onclick="wqResetStories()">モデルの *STORY から取り直す</button>
+      <button class="sub" onclick="wqFillWindRef()">見付面積をモデルから概算</button>
+    </div>
+    <div id="wq_input"><span class="hint">先に「モデルの壁を読み込み」を
+      実行してください</span></div>
+  </fieldset>
+
+  <!-- min-width:0 は fieldset の既定 (min-content) を解除するため。
+       これが無いと、図が大きいときに枠ごと広がってページが横に溢れる -->
+  <fieldset style="min-width:0">
+    <legend>耐力壁の配置 (平面図)</legend>
+    <div class="row"><span class="hint">
+      通り芯が無いモデルでも位置が分かるように、階ごとに壁を平面へ起こして
+      います。線の太さが壁倍率、色が方向、長い破線は勾配のついた壁です
+      (水平投影で描いています)。オレンジの一点鎖線は 4分割法の側端部分の
+      境界 (1/4・3/4) です。図の壁をクリックすると下の一覧の該当行が
+      光ります。</span>
+    </div>
+    <div class="row">
+      <label class="inline">図の倍率
+        <input type="number" id="wq_zoom" value="1.0" step="0.25" min="0.25"
+               max="4" style="width:64px" onchange="wqZoom()"></label>
+      <span class="hint">図の大きさは建物の大きさに応じて自動で決まります
+        (1m あたりの画素数を確保するので、大きい建物ほど図も大きくなり、
+        画面に収まらないぶんは横スクロールします)。さらに拡大・縮小したい
+        ときはここで倍率を変えてください</span>
+    </div>
+    <div id="wq_plan"><span class="hint">-</span></div>
+    <div id="wq_walls"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>設計条件と検定</legend>
+    <div class="row">
+      <label class="inline">重要度係数 I
+        <input type="number" id="wq_imp" value="1.0" step="0.05"
+               style="width:64px"></label>
+      <label class="inline">地域係数 Z
+        <input type="number" id="wq_z" value="1.0" step="0.05"
+               style="width:64px"></label>
+      <label class="inline">地盤種別 (Tc)
+        <select id="wq_tc">
+          <option value="0.4">第一種 (Tc=0.4)</option>
+          <option value="0.6" selected>第二種 (Tc=0.6)</option>
+          <option value="0.8">第三種 (Tc=0.8)</option>
+        </select></label>
+      <label class="inline">標準せん断力係数 C<sub>0</sub>
+        <input type="number" id="wq_c0" value="0.2" step="0.05"
+               style="width:64px"></label>
+    </div>
+    <div class="row">
+      <label class="inline">建築物の高さ h[m]
+        <input type="number" id="wq_h" step="0.01" placeholder="モデルから"
+               style="width:84px" oninput="wqTinfo()"></label>
+      <label class="inline">架構係数 α
+        <input type="number" id="wq_alpha" value="1.0" step="0.05" min="0"
+               max="1" style="width:64px" oninput="wqTinfo()"></label>
+      <span class="hint" id="wq_tinfo">一次固有周期 T = h × (0.02 + 0.01α)</span>
+    </div>
+    <div class="row"><span class="hint">
+      Ci = I・Z・Rt・Ai・C<sub>0</sub>。<b>重要度係数 I は地震力にのみ
+      掛けます</b> (風圧力には掛けません)。<br>
+      <b>架構係数 α</b> は「木造・鉄骨造の階の高さの合計 ÷ h」です
+      (木造だけなら α=1 で T=0.03h)。<b>h</b> は空欄ならモデルの建物高さを
+      使います。</span>
+    </div>
+    <div class="row">
+      <label class="inline">壁倍率1・長さ1mの許容耐力[kN/m]
+        <input type="number" id="wq_qa" value="1.96" step="0.01"
+               style="width:74px"></label>
+      <label class="inline">風圧力の係数[cm/m<sup>2</sup>]
+        <input type="number" id="wq_windk" value="50" step="5"
+               style="width:64px"></label>
+      <span class="hint">風圧力の係数は原則 50。特定行政庁が指定する強風
+        区域は 50〜75</span>
+    </div>
+    <div class="row">
+      <button class="act" onclick="wqCheck()">壁量検定を実行</button>
+      <label class="inline">物件名
+        <input type="text" id="wq_project" placeholder="(空欄ならmgt名)"
+               style="width:180px"></label>
+      <span class="hint">検定比 = 必要壁量 / 存在壁量 (地震力・風圧力の
+        大きい方)。結果は &lt;出力先&gt;\mgtkit_out\wallqty\ に
+        <b>検討書PDF</b> と CSV で保存されます</span>
+    </div>
+    <div id="wq_msg"></div>
+    <div id="wq_out"></div>
+  </fieldset>
+</section>
+<script src="/static/wallqty.js"></script>

@@ -1,0 +1,82 @@
+<!-- ============ タブ: 鉄骨露出柱脚 ============ -->
+<!-- index.html から include される。既存タブ (rcdetail) の markup に合わせてある。 -->
+<section class="tab" id="tab-colbase">
+  <fieldset style="min-width:0">
+    <legend>検討対象の読み込み (鉄骨露出柱脚)</legend>
+    <div class="row">応力ファイル (beam_stress):
+      <input type="text" id="cb_beam_stress_path" class="path"
+             placeholder="空欄なら応力図タブの beam_stress を使用 (8列、kN・m)">
+      <button class="sub"
+              onclick="pickFile('cb_beam_stress_path')">ファイルの選択</button>
+      <button class="sub emph" onclick="cbRead()">対象読込</button>
+    </div>
+    <div class="row"><span class="hint">
+      鉄骨の鉛直材のうち、下に鉄骨の鉛直材が続かない要素 (柱脚。RC 柱の上に
+      載る鉄骨柱の下端を含む) を含むグループを
+      一覧にします。柱脚側 (下端) の応力で、柱のせい方向 (H: 強軸 My・Fz) と
+      幅方向 (B: 弱軸 Mz・Fy) をそれぞれ検定します。
+      出典: 技術基準解説書2025 付録1-2.6 (2) 露出型柱脚 / SS7解説書 計算編
+      6.8.1</span>
+    </div>
+    {% include '_colbase_figure.html' %}
+    <div id="cb_targets_box"><span class="hint">
+      「対象読込」で一覧を表示します</span></div>
+    <div class="row"><b>検討対象の荷重ケース</b>
+      <span class="hint">種別 (長期/水平/短期) を確認・修正してください。
+        水平(H)は長期と±で組合せ、γ倍の地震時応力は H そのもの、
+        短期(S)は「S − 先頭の長期」を地震時応力とみなします</span>
+    </div>
+    <div id="cb_cases_box"><span class="hint">
+      「対象読込」で一覧を表示します</span></div>
+  </fieldset>
+
+  <fieldset style="min-width:0">
+    <legend>検定条件</legend>
+    <div class="row">
+      計算ルート:
+      <select id="cb_route" onchange="cbRouteChanged()">
+        <option value="1-1">ルート1-1 (許容応力度のみ)</option>
+        <option value="1-2">ルート1-2 (γ=1.67)</option>
+        <option value="2" selected>ルート2 (γ=2.0)</option>
+        <option value="3">ルート3 (保有耐力接合の判定→Ds)</option>
+      </select>
+      　地震時応力の割増し γ:
+      <input type="number" id="cb_gamma" value="2.0" step="0.01"
+             min="1" style="width:64px">
+      <span class="hint">ブレース架構は 1+(1+0.7β、最大1.5) (技術基準
+        付録1-2.6 フロー④)</span>
+    </div>
+    <div class="row">
+      ABの許容応力度 (せん断との組合せ):
+      <select id="cb_bolt_method">
+        <option value="2005" selected>鋼構造設計規準2005
+          (fts=min(ft, 1.4ft−1.6τ))</option>
+        <option value="2019">鋼構造許容応力度設計規準2019
+          (fts=√(ft²−3τ²))</option>
+      </select>
+      　<label><input type="checkbox" id="cb_do_bp" checked>
+        ベースプレートの曲げ (リブなし片持ち)</label>
+      　縁端の種類:
+      <select id="cb_edge">
+        <option value="0" selected>圧延縁・自動ガス切断縁等</option>
+        <option value="1">せん断縁・手動ガス切断縁</option>
+      </select>
+    </div>
+  </fieldset>
+
+  <fieldset style="min-width:0">
+    <legend>検定と検討書</legend>
+    <div class="row">物件名:
+      <input type="text" id="cb_project" style="width:280px">
+      <button class="act" onclick="cbRun()">検定実行 → TeX書き出し</button>
+      <span class="hint">TeXソース colbase.tex (計算書組込み用、冒頭に検討式
+        つき) を &lt;出力先&gt;\mgtkit_out\colbase\ に書き出し、コンパイル
+        結果をページ上でプレビューします。仕様図は TikZ で直接描くので、
+        計算書のプリアンブルに \usepackage{tikz} が必要です。実行時の
+        柱脚仕様も colbase_spec.csv に保存されます</span>
+    </div>
+    <div id="cb_msg"></div>
+    <div id="cb_result"></div>
+  </fieldset>
+</section>
+<script src="/static/colbase.js?v={{ app_ver }}"></script>

@@ -22,6 +22,7 @@ MATLAB版との相違点 (出力書式は同一):
 
 import math
 import os
+import re
 
 import numpy as np
 
@@ -690,6 +691,19 @@ def _hd_escape(s):
     return out
 
 
+_RAW_PCT = re.compile(r'(?<!\\)%')
+
+
+def _body_escape(s):
+    r"""本文行の未エスケープ % を \% にする.
+
+    詳細文は数式 ($…$, _ 等) を含むため他の特殊文字には触れない。
+    生の % は TeX でコメントとなり \mbox の閉じ括弧ごと行末が消えるため、
+    ここで必ず変換する (\% 済みの箇所はそのまま)。
+    """
+    return _RAW_PCT.sub(r'\\%', str(s))
+
+
 def export_ratio_detail_tex(result, out_dir, mode='all', extra_rows=None):
     r"""ratio_detail_tex.m の移植 (検定詳細文のTeXソース出力).
 
@@ -744,7 +758,8 @@ def export_ratio_detail_tex(result, out_dir, mode='all', extra_rows=None):
     L.append('% mgtkit 検定詳細 (ratio_detail_tex.m 相当)')
     L.append('% 本文へ \\input{10detail.tex} で組込む自己完結ファイル')
     L.append('% (ファイル内で二段組+縮小文字に切替え、全ページ右上に')
-    L.append('%  検定ケース名を表示。終端でヘッダ/フッタとも元に戻します。')
+    L.append('%  検定ケース名を表示。ページ番号(フッタ)は文書の設定のまま、')
+    L.append('%  本文ページと同じ位置に出します。終端でヘッダ/フッタとも元に戻します。')
     L.append('%  数式に \\usepackage{amsmath,amssymb} が必要)')
     L.append(r'\clearpage')
     L.append(r'% 現在のヘッダ/フッタを退避し、右上にケース名 (\rightmark)')
@@ -753,7 +768,13 @@ def export_ratio_detail_tex(result, out_dir, mode='all', extra_rows=None):
     L.append(r'\let\mgtkitDTLof\@oddfoot \let\mgtkitDTLef\@evenfoot')
     L.append(r'\def\@oddhead{\hfil{\small\rightmark}}')
     L.append(r'\def\@evenhead{\hfil{\small\rightmark}}')
-    L.append(r'\def\@oddfoot{}\def\@evenfoot{}')
+    # フッタ(ページ番号)は文書のものを使う。詳細区間は本文幅を広げて
+    # 紙面中央に置き直すため、そのままだと番号が横にずれる。フッタだけ
+    # 元の本文枠 (退避した余白・幅) の位置で組んで本文ページと揃える。
+    L.append(r'\def\@oddfoot{\hskip\dimexpr\mgtkitDTLom-\oddsidemargin\relax'
+             r'\hbox to\mgtkitDTLtw{\mgtkitDTLof}\hss}')
+    L.append(r'\def\@evenfoot{\hskip\dimexpr\mgtkitDTLem-\evensidemargin\relax'
+             r'\hbox to\mgtkitDTLtw{\mgtkitDTLef}\hss}')
     L.append(r'\makeatother')
     L.append(r'% 検定詳細の間だけ本文幅を50pt広げて項目の折返しを減らし、')
     L.append(r'% 広げたブロックを紙面の左右中央に置く (文書の余白設定に')
@@ -783,7 +804,7 @@ def export_ratio_detail_tex(result, out_dir, mode='all', extra_rows=None):
             if txt is None or len(txt) == 0:
                 continue
             for line in txt:
-                L.append(_jbox_line(line))
+                L.append(_jbox_line(_body_escape(line)))
                 L.append(r'\par')
             L.append(r'\newpage')
         L.append(r'\clearpage')
