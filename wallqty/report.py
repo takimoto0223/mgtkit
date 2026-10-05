@@ -549,7 +549,7 @@ def export_report(res, chk, out_path, mgt_path='', project=''):
                   head_lines=2, size=FS_SMALL)
             if i + per >= len(rows):
                 pg.note('Lx / Ly は各方向へ算入した壁長、Lβx / Lβy はそれに'
-                        '壁倍率を乗じた値 (斜め壁は方向余弦で分解)。'
+                        '壁倍率を乗じた値 (斜め壁は Lx = L·cos²θ、Ly = L·sin²θ で振り分け)。'
                         'β の * は壁倍率の上限で頭打ちにしたもの。'
                         '「4分割法」の ①② は側端部分へ算入した長さ [m]。'
                         '算入しない壁の理由は 2. の条件に対応する。')
