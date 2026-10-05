@@ -18,28 +18,17 @@ MIDAS Gen NX の**荷重入力画面をキャプチャする代わりに**、mgt
 | `mgt_loads.py` | 荷重ブロックのパーサ (`mgt.py` に無いため新規) |
 | `draw.py` | matplotlib での作図。`plot_loadmap()` / `plot_view_sheet()` |
 | `routes.py` | Flask Blueprint (`/api/loadmap_cases` / `/api/loadmap_preview` / `/api/plot_loadmap` / `/api/loadmap_view_sheet`) |
-| `../templates/_tab_loadmap.html` | タブの markup (index.html から include) |
+| `../templates/_tab_loadmap.html` | タブの markup (先頭行の見出しで index.html から include) |
 | `../static/loadmap.js` | タブの JS (app.js は無変更) |
 | `../tests/test_loadmap.py` | 回帰テスト 15 件 |
 
-## 既存ファイルへの追加は4行だけ
+## 既存ファイルへの追加は無し
 
-**`app.py`** — import 1行と、登録1行 (コメント含めて3行):
-
-```python
-from mgtkit.loadmap.routes import make_blueprint as _loadmap_bp   # import 群の末尾へ
-
-# 荷重分布図タブ (mgtkit/loadmap/)。共通ヘルパを渡して登録する
-app.register_blueprint(_loadmap_bp(sys.modules[__name__]))        # 最初の @app.route の直前へ
-```
-
-**`templates/index.html`** — nav に1行と、最後の `</section>` の後ろに1行:
-
-```html
-  <button data-tab="loadmap">荷重分布図</button>
-
-{% include '_tab_loadmap.html' %}
-```
+`routes.py` の `make_blueprint` は起動時に自動で登録され (`tabreg.py`)、
+nav のボタンと本体の include は `_tab_loadmap.html` 先頭行の見出し
+`{# tab: id="loadmap" label="荷重分布図" order="100" #}` から作られる
+(当初は app.py に import・登録の行、index.html に nav と include の行を
+足していたが、タブの自動登録で不要になった。本体の CLAUDE.md「タブの足し方」)。
 
 `mgt.py` / `util.py` / `draw_model.py` / `app.js` などは**変更していない**
 (番号リストの展開は `util.get_byto`、日本語フォント設定は

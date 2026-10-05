@@ -20,3 +20,20 @@
   (`from mgtkit.x import y` の import 構造とテストのパッケージ解決の要件)
 - CI の required check は `test` と `safety` (job 名を変えるときは
   ブランチ保護側も更新)
+
+## タブの足し方 (app.py / index.html / app.js は編集しない)
+
+タブを足す PR どうしが同じ行を編集して衝突しないよう、つなぎ方を決めてある
+(詳細は `tabreg.py` と `static/app.js` 冒頭の説明):
+
+- API: 本体直下に `<x>/__init__.py` と `<x>/routes.py` を置き、routes.py に
+  `make_blueprint(host)` を書く → 起動時に自動登録 (app.py に import・登録行を足さない)
+- 画面: `templates/_tab_<x>.html` の**先頭行**に見出し
+  `{# tab: id="x" label="表示名" order="150" out="x" #}` を書く → nav のボタン・
+  本体の include・出力フォルダ案内文に載る。order は組み込みタブ
+  (app.py の `BUILTIN_TABS`) と既存の見出しを見て、入れたい位置の間の値にする。
+  JS は `<script src="/static/<x>.js">` をそのテンプレートの末尾に書く
+- 入力欄: 既存の応力ファイル欄と同期するなら `data-sync="beam"` など
+  (beam / truss / plate / wall)、記憶と出力先推定の対象にするなら `data-persist`
+- 共通欄の出来事は `document.addEventListener('mgtkit:mgt-loaded', e => ...)`
+  (`e.detail` が /api/mgt_info の結果) / `'mgtkit:stress-changed'` で受け取る
