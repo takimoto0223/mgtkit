@@ -762,7 +762,7 @@ def api_load_cases():
     if err:
         return jsonify({'error': err}), 400
     try:
-        bs = np.atleast_2d(loadtxt_tolerant(p['beam_stress_path']))
+        bs = np.atleast_2d(load_beam_stress_table(p['beam_stress_path']))
         if bs.shape[1] < 2:
             return jsonify({'error': 'beam_stressファイルの列数が不足して'
                                      'います (8列必要)。'}), 400

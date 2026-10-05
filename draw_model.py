@@ -777,11 +777,9 @@ def _figure_vertical(kind, C, i_axis, out_path):
             if np.prod(node4_no) == 0:
                 node4_no = node4_no[:3]
             if kind == 'node':
-                _plate_plot(ax, plate_no, plate, nodeM,
-                            int(3 - judge_axis), 3)
+                _plate_plot(ax, plate_no, plate, nodeM, 1, 3)
             elif kind in ('element', 'material'):
-                _plate_plot(ax, plate_no, plate, nodeM,
-                            int(3 - judge_axis), 3)
+                _plate_plot(ax, plate_no, plate, nodeM, 1, 3)
             elif kind == 'section':
                 _plate_plot(ax, plate_no, plate, nodeM, 1, 3)
             if kind in ('element', 'material', 'section'):
