@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<!-- 引きボルト式モーメント抵抗接合（十字形・通しボルト）の回転剛性・許容モーメント計算
+     モデル：三角形めり込み（弾性床）＋引きボルト系直列ばね。
+     参考：CLTロッキング架構における引きボルト式柱梁接合部の構造性能評価（日本地震工学会論文集）、
+           中層大規模木造研究会データシート J-48（ト形）、中大規模木造建築物の構造設計の手引き 2.7.3 -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>引きボルト十字形接合部計算</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Shippori+Mincho:wght@600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --paper:#f7f5ef; --panel:#fffdf8; --ink:#29241c; --ink2:#6b6355;
+  --line:#ddd6c8; --line2:#a89a80;
+  --wood:#8b5e2f; --wood-soft:#f0e6d7; --steel:#4a6076; --steel-soft:#e3e9ee;
+  --ok:#3a7d44; --warn:#b3542e; --warn-soft:#f7e8df;
+  --hilite:#faf3e3; --big:#5c3d17;
+  --mono:"IBM Plex Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#201c16; --panel:#2a251d; --ink:#e9e2d3; --ink2:#a89d89;
+    --line:#453d30; --line2:#5a5040;
+    --wood:#c99a5e; --wood-soft:#3a3022; --steel:#8fa7bc; --steel-soft:#2c3640;
+    --ok:#7dbb86; --warn:#e08a63; --warn-soft:#42301f;
+    --hilite:#38301f; --big:#e3b378;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#201c16; --panel:#2a251d; --ink:#e9e2d3; --ink2:#a89d89;
+  --line:#453d30; --line2:#5a5040;
+  --wood:#c99a5e; --wood-soft:#3a3022; --steel:#8fa7bc; --steel-soft:#2c3640;
+  --ok:#7dbb86; --warn:#e08a63; --warn-soft:#42301f;
+  --hilite:#38301f; --big:#e3b378;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Noto Sans JP","Yu Gothic UI",sans-serif; font-size:13.5px; line-height:1.65;
+  padding-block:0 48px; padding-inline:20px;
+}
+header.app{
+  max-width:1240px; margin:0 auto; padding-block:26px 14px;
+  border-bottom:2px solid var(--wood); display:flex; flex-wrap:wrap; gap:8px 24px; align-items:baseline;
+}
+header.app h1{font-family:"Shippori Mincho",serif; font-weight:700; font-size:24px; margin:0; letter-spacing:.06em;}
+header.app .src{color:var(--ink2); font-size:12px;}
+.wrap{max-width:1240px; margin:18px auto 0; display:grid; grid-template-columns:440px 1fr; gap:22px; align-items:start;}
+@media (max-width:980px){ .wrap{grid-template-columns:1fr} }
+
+.panel{background:var(--panel); border:1px solid var(--line); border-radius:6px;}
+.panel h2{font-size:13px; letter-spacing:.14em; margin:0; padding:10px 14px; border-bottom:1px solid var(--line); color:var(--wood); font-weight:700;}
+fieldset{border:none; margin:0; padding:12px 14px 14px; border-bottom:1px dashed var(--line);}
+fieldset:last-child{border-bottom:none}
+legend{font-weight:700; font-size:12.5px; padding:0; letter-spacing:.08em; color:var(--ink);}
+legend .no{color:var(--wood); font-family:var(--mono); margin-right:6px;}
+.row{display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:8px; align-items:flex-end;}
+label.f{display:flex; flex-direction:column; gap:3px; font-size:11.5px; color:var(--ink2);}
+label.f b{font-weight:500}
+input[type=number],select{font:inherit; color:var(--ink); background:var(--paper); border:1px solid var(--line2); border-radius:4px; padding:5px 7px; width:110px;}
+input[type=number]{font-family:var(--mono); text-align:right}
+select{width:auto; max-width:100%}
+input:focus,select:focus,button:focus{outline:2px solid var(--wood); outline-offset:1px}
+.hint{font-size:11px; color:var(--ink2); margin-top:6px;}
+
+.res{display:flex; flex-direction:column; gap:16px;}
+.bigcard{background:var(--panel); border:1px solid var(--wood); border-radius:6px; padding:16px 20px; display:flex; flex-wrap:wrap; gap:10px 36px; align-items:baseline;}
+.bigcard .lbl{font-size:12px; letter-spacing:.1em; color:var(--ink2); display:block}
+.bigcard .val{font-family:var(--mono); font-weight:600; font-size:30px; color:var(--big); line-height:1.1}
+.bigcard .unitv{font-family:var(--mono); font-weight:600; font-size:16px; color:var(--ink)}
+.bigcard small{font-size:11.5px; color:var(--ink2); display:block}
+section.step{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px 16px 14px;}
+section.step h3{margin:0 0 8px; font-size:13px; font-weight:700; letter-spacing:.06em; display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;}
+section.step h3 .eq{font-family:var(--mono); font-weight:400; font-size:11px; color:var(--wood);}
+table.t{border-collapse:collapse; width:100%; font-size:12.5px;}
+table.t th,table.t td{border:1px solid var(--line); padding:4px 9px; text-align:left; vertical-align:top;}
+table.t th{background:var(--wood-soft); font-weight:500; white-space:nowrap;}
+table.t td.n{font-family:var(--mono); text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;}
+tr.gov td{background:var(--hilite); font-weight:700;}
+tr.gov td:first-child::after{content:" ◀ 支配"; color:var(--wood); font-size:11px; font-weight:700;}
+.kv{display:flex; flex-wrap:wrap; gap:4px 26px; font-size:12.5px; margin:4px 0;}
+.kv span{white-space:nowrap}
+.kv .sym{font-family:var(--mono);}
+.kv .v{font-family:var(--mono); font-weight:600;}
+.formula{font-family:var(--mono); font-size:12px; background:var(--paper); border:1px dashed var(--line2); border-radius:4px; padding:6px 10px; margin:6px 0; overflow-x:auto; white-space:nowrap;}
+.warnbox{background:var(--warn-soft); border:1px solid var(--warn); border-radius:5px; padding:8px 12px; color:var(--ink); font-size:12.5px;}
+.okmark{color:var(--ok); font-weight:700}
+.ngmark{color:var(--warn); font-weight:700}
+.note{color:var(--ink2); font-size:11.5px; margin-top:6px;}
+ul.notes{margin:6px 0 0; padding-left:1.4em; font-size:12px; color:var(--ink2);}
+ul.notes li{margin:3px 0}
+button.print{font:inherit; font-weight:700; letter-spacing:.1em; cursor:pointer; background:var(--wood); color:var(--panel); border:none; border-radius:5px; padding:8px 18px;}
+.toolbar{display:flex; gap:10px; justify-content:flex-end;}
+footer.app{max-width:1240px; margin:26px auto 0; color:var(--ink2); font-size:11px; border-top:1px solid var(--line); padding-top:10px;}
+.arrfig{width:100%; overflow-x:auto}
+.arrfig svg{display:block; margin:0 auto; max-width:720px; width:100%}
+svg .dim{stroke:var(--ink2); stroke-width:1}
+svg .dimt{fill:var(--ink2); font-size:11px; font-family:var(--mono)}
+svg .memb{fill:var(--wood-soft); stroke:var(--wood); stroke-width:1.5}
+svg .bolt{stroke:var(--steel); stroke-width:3}
+svg .pkt{fill:var(--steel-soft); stroke:var(--steel); stroke-width:1.2}
+svg .lab{fill:var(--ink); font-size:11.5px}
+svg .lab2{fill:var(--ink2); font-size:10.5px}
+@media print{
+  :root, :root[data-theme="dark"]{
+    --paper:#fff; --panel:#fff; --ink:#1a1a1a; --ink2:#555;
+    --line:#bbb; --line2:#999;
+    --wood:#7a4f22; --wood-soft:#f0e6d7; --steel:#4a6076; --steel-soft:#e3e9ee;
+    --ok:#2f6b38; --warn:#a04a26; --warn-soft:#f7e8df;
+    --hilite:#f4ecd8; --big:#4a3010;
+  }
+  body{background:#fff; color:#1a1a1a; padding-inline:0; font-size:11px;}
+  .wrap{grid-template-columns:1fr; gap:10px; max-width:100%;}
+  .toolbar,footer.app{display:none}
+  .panel,section.step,.bigcard{break-inside:avoid; border-color:#999}
+  header.app{border-color:#333}
+}
+</style>
+
+<header class="app">
+  <h1>引きボルト式モーメント抵抗接合（十字形・通しボルト）</h1>
+  <span class="src">三角形めり込み＋直列ばねモデル／柱を挟んで両側の梁を通しボルトで相互緊結する形式</span>
+</header>
+
+<div class="wrap">
+<!-- =============== 入力 =============== -->
+<div class="panel">
+  <h2>入力条件</h2>
+
+  <fieldset>
+    <legend><span class="no">1</span>梁（左右共通）</legend>
+    <div class="row">
+      <label class="f"><b>樹種・等級</b>
+        <select id="spB">
+          <option value="6500,16.7,22.5,2.7" selected>すぎ集成材 E65-F225（対称異等級）</option>
+          <option value="8500,19.5,25.5,2.7">すぎ集成材 E85-F255</option>
+          <option value="9500,21.7,27.0,2.7">ひのき集成材 E95-F270</option>
+          <option value="10500,23.2,30.0,2.7">からまつ等集成材 E105-F300</option>
+          <option value="12000,25.9,33.0,2.7">からまつ等集成材 E120-F330</option>
+          <option value="7000,17.7,22.2,1.8">すぎ製材 無等級（E70相当）</option>
+          <option value="custom">直接入力</option>
+        </select>
+      </label>
+      <label class="f"><b>幅 b (mm)</b><input type="number" id="bB" value="120" step="5" min="60"></label>
+      <label class="f"><b>せい D (mm)</b><input type="number" id="DB" value="450" step="5" min="150"></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>E₀ (N/mm²)</b><input type="number" id="E0B" value="6500" step="100" min="1000"></label>
+      <label class="f"><b>Fc (N/mm²)</b><input type="number" id="FcB" value="16.7" step="0.1" min="1"></label>
+    </div>
+    <div class="hint">E₀・Fc は座金定着部（繊維方向の支圧）の剛性・検定に使用。</div>
+  </fieldset>
+
+  <fieldset>
+    <legend><span class="no">2</span>柱</legend>
+    <div class="row">
+      <label class="f"><b>樹種・等級</b>
+        <select id="spC">
+          <option value="6500,6.0,3.6" selected>すぎ集成材 E65（Fcv=6.0）</option>
+          <option value="9500,7.8,3.6">ひのき集成材 E95（Fcv=7.8）</option>
+          <option value="10500,7.8,3.6">からまつ集成材 E105（Fcv=7.8）</option>
+          <option value="10500,9.0,3.6">べいまつ集成材 E105（Fcv=9.0）</option>
+          <option value="7000,6.0,1.8">すぎ製材 無等級（Fcv=6.0）</option>
+          <option value="custom">直接入力</option>
+        </select>
+      </label>
+      <label class="f"><b>幅 b_c (mm)</b><input type="number" id="bC" value="240" step="5" min="90"></label>
+      <label class="f"><b>せい D_c (mm)</b><input type="number" id="DC" value="240" step="5" min="90"></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>E₉₀ (N/mm²)</b><input type="number" id="E90C" value="260" step="10" min="50"></label>
+      <label class="f"><b>Fcv (N/mm²)</b><input type="number" id="FcvC" value="6.0" step="0.1" min="1"></label>
+      <label class="f"><b>Fs (N/mm²)</b><input type="number" id="FsC" value="3.6" step="0.1" min="0.5"></label>
+    </div>
+    <div class="hint">E₉₀ は樹種選択時 E₀/25 を自動セット（編集可）。せい D_c は梁軸方向＝ボルト貫通長さ。Fcv はめり込み基準強度（告示値を確認のこと）。</div>
+  </fieldset>
+
+  <fieldset>
+    <legend><span class="no">3</span>引きボルト・座金</legend>
+    <div class="row">
+      <label class="f"><b>呼び径</b>
+        <select id="boltD">
+          <option value="12,113.1,84.3">M12</option>
+          <option value="16,201.1,157">M16</option>
+          <option value="20,314.2,245" selected>M20</option>
+          <option value="22,380.1,303">M22</option>
+          <option value="24,452.4,353">M24</option>
+          <option value="27,572.6,459">M27</option>
+          <option value="30,706.9,561">M30</option>
+        </select>
+      </label>
+      <label class="f"><b>材質 F (N/mm²)</b>
+        <select id="boltF">
+          <option value="235" selected>ABR400・SNR400・SS400 (235)</option>
+          <option value="240">中ボルト 強度区分4.6 (240)</option>
+          <option value="325">ABR490・SNR490B (325)</option>
+          <option value="custom">直接入力</option>
+        </select>
+      </label>
+      <label class="f"><b>F (N/mm²)</b><input type="number" id="Fb" value="235" step="5" min="100"></label>
+      <label class="f"><b>本数/段 n</b><input type="number" id="nB" value="1" step="1" min="1" max="4"></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>端縁〜ボルト心 d_t (mm)</b><input type="number" id="dt" value="75" step="5" min="30"></label>
+      <label class="f"><b>柱面〜座金 e (mm)</b><input type="number" id="ew" value="250" step="10" min="50"></label>
+      <label class="f"><b>座金 幅 (mm)</b><input type="number" id="wa" value="90" step="5" min="30"></label>
+      <label class="f"><b>座金 高さ (mm)</b><input type="number" id="wb" value="90" step="5" min="30"></label>
+      <label class="f"><b>孔径 (mm)</b><input type="number" id="dh" value="22" step="1" min="6"></label>
+    </div>
+    <div class="hint">上下2段、各段 n 本。d_t は梁上下端からボルト心まで。e は座彫り（定着座金）位置＝ボルト伸び長さ l_b = D_c + 2e に効く。</div>
+  </fieldset>
+
+  <fieldset>
+    <legend><span class="no">4</span>検定条件</legend>
+    <div class="row">
+      <label class="f"><b>めり込み割増 C_m</b><input type="number" id="Cm" value="1.0" step="0.1" min="1" max="2"></label>
+      <label class="f"><b>設計M 長期 (kN·m)</b><input type="number" id="MdL" value="0" step="0.5" min="0"></label>
+      <label class="f"><b>設計M 短期 (kN·m)</b><input type="number" id="MdS" value="0" step="0.5" min="0"></label>
+      <label class="f"><b>柱せん断控除 V_c (kN)</b><input type="number" id="Vc" value="0" step="1" min="0"></label>
+    </div>
+    <div class="hint">設計Mは梁端1箇所あたり。長期＝両側同符号（上端引張）、短期＝逆対称（地震時）を想定。C_m は部分めり込みの割増（根拠を確認のうえ使用、既定1.0）。</div>
+  </fieldset>
+
+  <fieldset>
+    <div class="toolbar"><button class="print" onclick="window.print()">印刷 / PDF</button></div>
+  </fieldset>
+</div>
+
+<!-- =============== 結果 =============== -->
+<div class="res">
+  <div class="bigcard" id="bigcard"></div>
+
+  <section class="step">
+    <h3>接合部の構成</h3>
+    <div class="arrfig" id="fig"></div>
+    <div class="note">左右の梁の座彫り（定着座金）間を通しボルトで緊結。柱にはボルト貫通孔のみで、柱面での定着はしない。梁せん断力は別途梁受け金物で伝達する。</div>
+  </section>
+
+  <section class="step" id="stepK"></section>
+  <section class="step" id="stepS"></section>
+  <section class="step" id="stepL"></section>
+  <section class="step" id="stepP"></section>
+  <section class="step" id="stepCmp"></section>
+
+  <section class="step">
+    <h3>適用上の注意</h3>
+    <ul class="notes">
+      <li>三角形めり込み（弾性床 k_c=E₉₀/D_c）＋剛体回転の近似モデル。CLTロッキング架構の引きボルト式接合部評価法（日本地震工学会論文集）と同系の定式化を、通しボルト十字形の適合条件（相手梁定着部の引き込み）に拡張したもの。<b>実験による検証はされていない</b>ため、適判物件では実験または既往文献との対応確認を推奨。</li>
+      <li>逆対称時は相手梁の定着部が柱側へ移動するためボルト有効レバーが (D−2x_n) に縮小し、ト形より剛性・耐力が大幅に低下する。地震時モーメントが支配する場合は柱面定着形式（前掲5.の比較表参照。ただし相手梁との干渉に注意）やダブルナットによる柱面定着併用を検討。</li>
+      <li>ボルト孔クリアランスと木材の乾燥収縮により初期すべり・張力抜けが生じる。施工時の増し締め計画（竣工後の再締め）を仕様書に明記のこと。</li>
+      <li>柱のボルト貫通孔・梁の座彫りによる断面欠損は、柱・梁の部材検定側で別途考慮。</li>
+      <li>長期めり込みにはクリープ（変形増大係数2程度）の影響を別途考慮すること。</li>
+      <li>座金の板厚は支圧応力に対する曲げで別途決定（本シートでは支圧面積のみ検定）。</li>
+    </ul>
+  </section>
+</div>
+</div>
+
+<footer class="app">
+  参考：日本地震工学会論文集「CLTロッキング架構における引きボルト式柱梁接合部の構造性能評価」／中層大規模木造研究会 データシートJ-48（引きボルト・ト形）／稲山正弘編著「中大規模木造建築物の構造設計の手引き 改訂第2版」2.7.3（彰国社）
+</footer>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const Es = 205000; // N/mm2
+
+function fmt(v, d=2){
+  if(!isFinite(v)) return '—';
+  return v.toLocaleString('ja-JP',{minimumFractionDigits:d, maximumFractionDigits:d});
+}
+function fr(th){
+  if(!isFinite(th)||th<=0) return '—';
+  return th>1/15 ? th.toFixed(2) : '1/'+Math.round(1/th);
+}
+
+// 樹種プリセット → 入力欄へ反映
+$('spB').addEventListener('change', ()=>{
+  const v = $('spB').value; if(v==='custom') return;
+  const [E0,Fc] = v.split(',').map(Number);
+  $('E0B').value = E0; $('FcB').value = Fc; calc();
+});
+$('spC').addEventListener('change', ()=>{
+  const v = $('spC').value; if(v==='custom') return;
+  const [E0,Fcv,Fs] = v.split(',').map(Number);
+  $('E90C').value = Math.round(E0/25); $('FcvC').value = Fcv; $('FsC').value = Fs; calc();
+});
+$('boltF').addEventListener('change', ()=>{
+  const v = $('boltF').value; if(v==='custom') return;
+  $('Fb').value = v; calc();
+});
+// プリセット連動欄を手修正したら選択を「直接入力」へ
+[['E0B','spB'],['FcB','spB'],['E90C','spC'],['FcvC','spC'],['FsC','spC'],['Fb','boltF']]
+  .forEach(([inp,sel])=>$(inp).addEventListener('input',()=>{$(sel).value='custom';}));
+document.querySelectorAll('input,#boltD').forEach(el=>el.addEventListener('input', calc));
+
+function calc(){
+  // ---- 入力 ----
+  const b   = +$('bB').value,  D   = +$('DB').value;
+  const E0b = +$('E0B').value, Fcb = +$('FcB').value;
+  const bc  = +$('bC').value,  Dc  = +$('DC').value;
+  const E90 = +$('E90C').value, Fcv = +$('FcvC').value, Fsc = +$('FsC').value;
+  const [dn, Ab, Ae] = $('boltD').value.split(',').map(Number);
+  const F   = +$('Fb').value, n = Math.max(1, Math.round(+$('nB').value));
+  const dt  = +$('dt').value, e = +$('ew').value;
+  const wa  = +$('wa').value, wb = +$('wb').value, dh = +$('dh').value;
+  const Cm  = +$('Cm').value;
+  const MdL = +$('MdL').value*1e6, MdS = +$('MdS').value*1e6; // N·mm
+  const Vc  = +$('Vc').value*1e3;
+
+  const ht = D - dt;              // 圧縮縁からボルト心まで
+  const be = Math.min(b, bc);     // めり込み有効幅
+  // 座金有効支圧面積（梁幅・端縁からのはみ出しをクリップ）
+  const waE = Math.min(wa, b);
+  const wbE = Math.min(wb/2, dt) + wb/2;
+  const Aw = Math.max(0, waE*wbE - Math.PI*dh*dh/4);
+  // 幾何整合の警告
+  const geoWarn = [];
+  if(dh < dn) geoWarn.push(`孔径 ${dh}mm がボルト呼び径 M${dn} より小さく貫通できない`);
+  if(wa > b)  geoWarn.push(`座金幅 ${wa}mm が梁幅 ${b}mm を超過（有効幅 ${waE}mm にクリップして計算）`);
+  if(wb/2 > dt) geoWarn.push(`座金が梁端縁から ${fmt(wb/2-dt,0)}mm はみ出す配置（有効高さ ${fmt(wbE,0)}mm にクリップして計算）`);
+
+  // ---- ばね定数 ----
+  const kc  = E90 / Dc;                 // めり込み単位剛性 N/mm3
+  const lb  = Dc + 2*e;                 // 通しボルト伸び長さ
+  const Kb1 = Es*Ab/lb;                 // ボルト軸剛性（軸部断面）
+  const Kw1 = E0b*Aw/e;                 // 座金定着部剛性（梁繊維方向、片側）
+  const Ks  = n / (1/Kb1 + 2/Kw1);      // 通し形式の直列ばね（段あたり、座金両端）
+
+  // 許容値
+  const TaL = n*(F/1.5)*Ae, TaS = n*F*Ae;              // ボルト許容引張
+  const fmL = Cm*1.1*Fcv/3, fmS = Cm*2*Fcv/3;          // 柱めり込み
+  const feL = 1.1*Fcb/3,    feS = 2*Fcb/3;             // 座金支圧（梁木口方向）
+
+  // ---- 短期・逆対称（連成解） ----
+  // 釣合 (kc·be/2)x² = 2Ks(D−2x) → 中立軸x、Δbolt=θ(D−2x)
+  const aS = kc*be/2, bS = 4*Ks, cS = -2*Ks*D;
+  const xS = (-bS + Math.sqrt(bS*bS - 4*aS*cS)) / (2*aS);
+  const levS = D - 2*xS;
+  const kthS = Ks*levS*levS + kc*be*Math.pow(xS,3)/3;  // N·mm/rad（梁端1箇所あたり）
+  const thS = [
+    {name:'ボルト引張', th: TaS/(Ks*levS), lim:`T ≤ ${fmt(TaS/1e3,1)} kN`},
+    {name:'柱めり込み', th: fmS/(kc*xS),  lim:`σ ≤ ${fmt(fmS)} N/mm²`},
+    {name:'座金支圧',   th: feS*n*Aw/(Ks*levS), lim:`T/nA_w ≤ ${fmt(feS)} N/mm²`},
+  ];
+  const gS = thS.reduce((m,c)=>c.th<m.th?c:m);
+  const MaS = kthS*gS.th;
+
+  // ---- 長期・同符号（上段ボルトのみ有効）----
+  // 釣合 (kc·be/2)x² = 2Ks(ht−x)、Δbolt=2θ(ht−x)
+  const aL = kc*be/2, bL2 = 2*Ks, cL = -2*Ks*ht;
+  const xL = (-bL2 + Math.sqrt(bL2*bL2 - 4*aL*cL)) / (2*aL);
+  const levL = ht - xL;
+  const kthL = 2*Ks*levL*levL + kc*be*Math.pow(xL,3)/3;
+  const thL = [
+    {name:'ボルト引張', th: TaL/(2*Ks*levL), lim:`T ≤ ${fmt(TaL/1e3,1)} kN`},
+    {name:'柱めり込み', th: fmL/(kc*xL),  lim:`σ ≤ ${fmt(fmL)} N/mm²`},
+    {name:'座金支圧',   th: feL*n*Aw/(2*Ks*levL), lim:`T/nA_w ≤ ${fmt(feL)} N/mm²`},
+  ];
+  const gL = thL.reduce((m,c)=>c.th<m.th?c:m);
+  const MaL = kthL*gL.th;
+
+  // 同符号のまま短期となる場合（積雪・風・片側載荷）の許容値
+  const thLS = Math.min(TaS/(2*Ks*levL), fmS/(kc*xL), feS*n*Aw/(2*Ks*levL));
+  const MaLS = kthL*thLS;
+
+  // ---- パネルゾーン（短期・逆対称）----
+  const thd = MdS>0 ? MdS/kthS : gS.th;         // 検定回転角
+  const Td  = Ks*thd*levS;                       // ボルト張力（段あたり）
+  const Qp  = Math.max(0, 2*Td - Vc);            // パネルせん断（C=2T、柱せん断控除）
+  const bcn = Math.max(1, bc - n*dh);            // ボルト孔控除後の正味幅
+  const tau = 1.5*Qp/(bcn*Dc);
+  const fsS = 2*Fsc/3;
+  const pOK = isFinite(tau) && tau <= fsS;
+
+  // ---- 参考：柱面定着形式（各梁独立・ト形扱い）----
+  const KbB = Es*Ab/(Dc+e);
+  const KwC = E90*Aw/Dc;                         // 柱面座金（繊維直交）
+  const KsB = n/(1/KbB + 1/Kw1 + 1/KwC);
+  const aB = kc*be/2, bB2 = KsB, cB = -KsB*ht;
+  const xB = (-bB2 + Math.sqrt(bB2*bB2 - 4*aB*cB)) / (2*aB);
+  const levB = ht - xB;
+  const kthB = KsB*levB*levB + kc*be*Math.pow(xB,3)/3;
+  const thB = [
+    {name:'ボルト引張', s: TaS/(KsB*levB), l: TaL/(KsB*levB)},
+    {name:'柱めり込み', s: fmS/(kc*xB), l: fmL/(kc*xB)},
+    {name:'座金支圧(梁)', s: feS*n*Aw/(KsB*levB), l: feL*n*Aw/(KsB*levB)},
+    {name:'座金支圧(柱面)', s: fmS*n*Aw/(KsB*levB), l: fmL*n*Aw/(KsB*levB)},
+  ];
+  const MaBS = kthB*Math.min(...thB.map(c=>c.s));
+  const MaBL = kthB*Math.min(...thB.map(c=>c.l));
+
+  // ================= 表示 =================
+  $('bigcard').innerHTML = `
+    <div><span class="lbl">短期許容モーメント（逆対称・梁端あたり）</span>
+      <span class="val">${fmt(MaS/1e6)}</span> <span class="unitv">kN·m</span>
+      <small>支配：${gS.name}　θa=${fr(gS.th)} rad</small></div>
+    <div><span class="lbl">長期許容モーメント（同符号・梁端あたり）</span>
+      <span class="val">${fmt(MaL/1e6)}</span> <span class="unitv">kN·m</span>
+      <small>支配：${gL.name}　θa=${fr(gL.th)} rad</small></div>
+    <div><span class="lbl">回転剛性 k_θ</span>
+      <span class="val" style="font-size:22px">${fmt(kthS/1e6,0)} / ${fmt(kthL/1e6,0)}</span> <span class="unitv">kN·m/rad</span>
+      <small>逆対称 / 同符号（半剛節バネ入力用）</small></div>`;
+
+  // --- 図 ---
+  drawFig(b, D, bc, Dc, dt, e, xS);
+
+  // --- ばね定数 ---
+  $('stepK').innerHTML = `
+    <h3>1. ばね定数 <span class="eq">k_c=E₉₀/D_c,  K_s=n/(1/K_b+2/K_w),  K_b=E_s·A_b/l_b,  K_w=E₀·A_w/e</span></h3>
+    <div class="kv">
+      <span>めり込み単位剛性 <span class="sym">k_c</span>=<span class="v">${fmt(kc,3)}</span> N/mm³</span>
+      <span>有効幅 <span class="sym">b_e</span>=<span class="v">${fmt(be,0)}</span> mm</span>
+      <span>ボルト長 <span class="sym">l_b</span>=<span class="v">${fmt(lb,0)}</span> mm</span>
+    </div>
+    <div class="kv">
+      <span>ボルト <span class="sym">K_b</span>=<span class="v">${fmt(Kb1/1e3,1)}</span> kN/mm</span>
+      <span>座金定着 <span class="sym">K_w</span>=<span class="v">${fmt(Kw1/1e3,1)}</span> kN/mm（A_w=${fmt(Aw,0)} mm²）</span>
+      <span>直列合成 <span class="sym">K_s</span>=<span class="v">${fmt(Ks/1e3,1)}</span> kN/mm（n=${n}本/段）</span>
+    </div>
+    <div class="note">通し形式は1本のボルトに両端の座金定着が直列（1/K_b + 2/K_w）。剛性はボルト軸部断面 A_b=${fmt(Ab,1)} mm²、耐力は有効断面 A_e=${fmt(Ae,0)} mm² で評価。</div>`;
+
+  // --- 短期 ---
+  $('stepS').innerHTML = stepHTML(
+    '2. 短期・逆対称（地震時）',
+    '(k_c·b_e/2)x_n² = 2K_s(D−2x_n),  Δ_bolt=θ(D−2x_n),  k_θ=K_s(D−2x_n)²+k_c·b_e·x_n³/3',
+    xS, levS, kthS, thS, gS, MaS, MdS) + (
+    (levS < 0.05*D || gS.th > 1/15) ?
+    `<div class="warnbox" style="margin-top:8px">逆対称時のボルト有効レバーが ${fmt(levS,1)}mm（D の ${fmt(100*levS/D,1)}%）しかなく、<b>実質ピン接合に近い挙動</b>です。地震時モーメントを負担させる場合は柱面（柱内）定着形式の併用や鋼板挿入式等の他形式を検討してください。</div>` : '');
+
+  // --- 長期 ---
+  $('stepL').innerHTML = stepHTML(
+    '3. 長期・同符号（鉛直時：両側上端引張）',
+    '(k_c·b_e/2)x_n² = 2K_s(h_t−x_n),  Δ_bolt=2θ(h_t−x_n),  k_θ=2K_s(h_t−x_n)²+k_c·b_e·x_n³/3',
+    xL, levL, kthL, thL, gL, MaL, MdL) +
+    `<div class="kv" style="margin-top:8px"><span>参考：同符号のまま短期となる場合（積雪・風・片側載荷）の短期許容
+      <span class="v">M_a=${fmt(MaLS/1e6)}</span> kN·m（θa=${fr(thLS)} rad）</span></div>`;
+
+  // --- 幾何警告 ---
+  if(geoWarn.length){
+    $('stepK').insertAdjacentHTML('beforeend',
+      `<div class="warnbox" style="margin-top:8px">寸法の整合を確認してください：<br>・${geoWarn.join('<br>・')}</div>`);
+  }
+
+  // --- パネルゾーン ---
+  $('stepP').innerHTML = `
+    <h3>4. 柱パネルゾーンのせん断（短期・逆対称） <span class="eq">Q_p=2T−V_c,  τ=1.5Q_p/((b_c−n·d_h)·D_c) ≤ 2F_s/3</span></h3>
+    <div class="kv">
+      <span>検定状態 <span class="sym">θ</span>=<span class="v">${fr(thd)}</span> rad ${MdS>0?'（設計M時）':'（許容M時）'}</span>
+      <span>ボルト張力 <span class="sym">T</span>=<span class="v">${fmt(Td/1e3,1)}</span> kN/段</span>
+      <span><span class="sym">Q_p</span>=<span class="v">${fmt(Qp/1e3,1)}</span> kN</span>
+      <span>正味幅 <span class="sym">b_c−n·d_h</span>=<span class="v">${fmt(bcn,0)}</span> mm</span>
+      <span><span class="sym">τ</span>=<span class="v">${fmt(tau)}</span> ≤ ${fmt(fsS)} N/mm²
+        ${isFinite(tau)?`<span class="${pOK?'okmark':'ngmark'}">${pOK?'OK':'NG'}</span>（検定比 ${fmt(tau/fsS)}）`:'—'}</span>
+    </div>
+    <div class="note">逆対称時は左右の梁からの支圧合力 C=2T が柱パネルに逆向きで入る。長期・同符号時は左右で自己釣合となりパネルせん断はほぼ生じない。上下柱のせん断 V_c を控除できる（既定0＝安全側）。</div>`;
+
+  // --- 比較 ---
+  $('stepCmp').innerHTML = `
+    <h3>5. 参考比較：柱面定着形式（各梁独立で柱反対面に座金定着）</h3>
+    <table class="t">
+      <tr><th>形式</th><th>k_θ (kN·m/rad)</th><th>短期 M_a (kN·m)</th><th>長期 M_a (kN·m)</th></tr>
+      <tr><td>通しボルト（本計算・逆対称/同符号）</td>
+        <td class="n">${fmt(kthS/1e6,0)} / ${fmt(kthL/1e6,0)}</td>
+        <td class="n">${fmt(MaS/1e6)}</td><td class="n">${fmt(MaL/1e6)}</td></tr>
+      <tr><td>柱面定着（ト形×2・参考値）</td>
+        <td class="n">${fmt(kthB/1e6,0)}</td>
+        <td class="n">${fmt(MaBS/1e6)}</td><td class="n">${fmt(MaBL/1e6)}</td></tr>
+    </table>
+    <div class="note">柱面定着は各梁が独立に働くため逆対称時のレバー低下がない一方、柱面座金のめり込み（繊維直交）が直列に入る。<b>十字形では柱面の座金が相手梁の支圧面と干渉する</b>ため、偏心配置や相手梁木口の座彫りなど納まりの成立性を要確認（本参考値は同心配置が可能な場合に限る）。両形式の併用（通し＋柱面ダブルナット）は剛性加算で有利だが、施工管理・張力分配の検討が必要。</div>`;
+}
+
+function stepHTML(title, eq, x, lev, kth, ths, gov, Ma, Md){
+  const rows = ths.map(c=>`
+    <tr class="${c===gov?'gov':''}">
+      <td>${c.name}</td><td>${c.lim}</td>
+      <td class="n">${fr(c.th)}</td>
+      <td class="n">${fmt(kth*c.th/1e6)}</td>
+    </tr>`).join('');
+  const kentei = Md>0 ? (()=>{
+      const r = Md/Ma;
+      return `<div class="kv"><span>設計M=<span class="v">${fmt(Md/1e6)}</span> kN·m → 検定比
+        <span class="v">${fmt(r)}</span> <span class="${r<=1?'okmark':'ngmark'}">${r<=1?'OK':'NG'}</span>
+        （回転角 θ=${fr(Md/kth)} rad）</span></div>`;
+    })() : '';
+  return `
+    <h3>${title} <span class="eq">${eq}</span></h3>
+    <div class="kv">
+      <span>中立軸 <span class="sym">x_n</span>=<span class="v">${fmt(x,1)}</span> mm</span>
+      <span>ボルト有効レバー=<span class="v">${fmt(lev,1)}</span> mm</span>
+      <span>回転剛性 <span class="sym">k_θ</span>=<span class="v">${fmt(kth/1e6,0)}</span> kN·m/rad</span>
+    </div>
+    <table class="t">
+      <tr><th>決定要因</th><th>許容条件</th><th>許容回転角 θa (rad)</th><th>M_a (kN·m)</th></tr>
+      ${rows}
+    </table>
+    ${kentei}`;
+}
+
+// ============ 接合部立面図 ============
+function drawFig(b, D, bc, Dc, dt, e, xn){
+  const W=720, H=300, cx=W/2, cy=H/2;
+  const sc = Math.min(140/D, 200/(Dc/2+e+80)); // 適当なスケール
+  const hD = D*sc, hDc = Dc*sc, hdt = dt*sc, he = e*sc;
+  const bx0 = cx-hDc/2, bx1 = cx+hDc/2;      // 柱側面
+  const bLen = he+70;                          // 描画上の梁長さ
+  const yT = cy-hD/2, yB = cy+hD/2;
+  const yb1 = yT+hdt, yb2 = yB-hdt;            // ボルト位置
+  const pk = 16;                               // 座彫りサイズ(px)
+  const svg = `
+  <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="接合部立面図">
+    <rect class="memb" x="${bx0}" y="14" width="${hDc}" height="${H-28}"/>
+    <rect class="memb" x="${bx0-bLen}" y="${yT}" width="${bLen}" height="${hD}"/>
+    <rect class="memb" x="${bx1}" y="${yT}" width="${bLen}" height="${hD}"/>
+    <rect class="pkt" x="${bx0-he-pk}" y="${yb1-pk/2}" width="${pk}" height="${pk}"/>
+    <rect class="pkt" x="${bx1+he}" y="${yb1-pk/2}" width="${pk}" height="${pk}"/>
+    <rect class="pkt" x="${bx0-he-pk}" y="${yb2-pk/2}" width="${pk}" height="${pk}"/>
+    <rect class="pkt" x="${bx1+he}" y="${yb2-pk/2}" width="${pk}" height="${pk}"/>
+    <line class="bolt" x1="${bx0-he-pk}" y1="${yb1}" x2="${bx1+he+pk}" y2="${yb1}"/>
+    <line class="bolt" x1="${bx0-he-pk}" y1="${yb2}" x2="${bx1+he+pk}" y2="${yb2}"/>
+    <text class="lab" x="${cx}" y="${28}" text-anchor="middle">柱</text>
+    <text class="lab" x="${bx0-bLen+6}" y="${yT-6}">梁</text>
+    <text class="lab" x="${bx1+bLen-24}" y="${yT-6}">梁</text>
+    <text class="lab2" x="${bx1+he+pk/2}" y="${yb1+pk/2+14}" text-anchor="middle">座金・ナット</text>
+    <line class="dim" x1="${bx1+bLen+10}" y1="${yT}" x2="${bx1+bLen+10}" y2="${yB}"/>
+    <text class="dimt" x="${bx1+bLen+14}" y="${cy+4}">D=${D}</text>
+    <line class="dim" x1="${bx0-bLen-10}" y1="${yT}" x2="${bx0-bLen-10}" y2="${yb1}"/>
+    <text class="dimt" x="${bx0-bLen-4}" y="${yb1-6}" text-anchor="start">d_t=${dt}</text>
+    <line class="dim" x1="${bx0}" y1="${H-16}" x2="${bx1}" y2="${H-16}"/>
+    <text class="dimt" x="${cx}" y="${H-4}" text-anchor="middle">D_c=${Dc}</text>
+    <line class="dim" x1="${bx1}" y1="${yb2+22}" x2="${bx1+he}" y2="${yb2+22}"/>
+    <text class="dimt" x="${bx1+he/2}" y="${yb2+36}" text-anchor="middle">e=${e}</text>
+    ${isFinite(xn)?`<line class="dim" x1="${bx0-4}" y1="${yB-xn*sc}" x2="${bx0+4}" y2="${yB-xn*sc}" stroke-width="2"/>
+    <text class="dimt" x="${bx0-8}" y="${yB-xn*sc+4}" text-anchor="end">x_n</text>`:''}
+  </svg>`;
+  document.getElementById('fig').innerHTML = svg;
+}
+
+calc();
+</script>

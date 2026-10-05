@@ -1,0 +1,432 @@
+<!-- 木質構造設計規準・同解説（日本建築学会）第6章 — 接合具1本あたりの許容せん断耐力クイック計算 -->
+<title>接合具単体耐力計算</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Shippori+Mincho:wght@600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --paper:#f7f5ef; --panel:#fffdf8; --ink:#29241c; --ink2:#6b6355;
+  --line:#ddd6c8; --line2:#c9c0ae;
+  --wood:#8b5e2f; --wood-soft:#f0e6d7; --warn:#b3542e; --warn-soft:#f7e8df;
+  --hilite:#faf3e3; --big:#5c3d17;
+  --mono:"IBM Plex Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#201c16; --panel:#2a251d; --ink:#e9e2d3; --ink2:#a89d89;
+    --line:#453d30; --line2:#5a5040;
+    --wood:#c99a5e; --wood-soft:#3a3022; --warn:#e08a63; --warn-soft:#42301f;
+    --hilite:#38301f; --big:#e3b378;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#201c16; --panel:#2a251d; --ink:#e9e2d3; --ink2:#a89d89;
+  --line:#453d30; --line2:#5a5040;
+  --wood:#c99a5e; --wood-soft:#3a3022; --warn:#e08a63; --warn-soft:#42301f;
+  --hilite:#38301f; --big:#e3b378;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Noto Sans JP","Yu Gothic UI",sans-serif; font-size:13.5px; line-height:1.65;
+  padding-block:0 48px; padding-inline:20px;
+}
+.page{max-width:860px; margin:0 auto}
+header.app{padding-block:24px 12px; border-bottom:2px solid var(--wood); display:flex; flex-wrap:wrap; gap:6px 20px; align-items:baseline;}
+header.app h1{font-family:"Shippori Mincho",serif; font-weight:700; font-size:22px; margin:0; letter-spacing:.06em;}
+header.app .src{color:var(--ink2); font-size:11.5px;}
+.card{background:var(--panel); border:1px solid var(--line); border-radius:6px; margin-top:16px; padding:14px 18px 16px;}
+.card h2{font-size:12.5px; letter-spacing:.12em; margin:0 0 8px; color:var(--wood); font-weight:700;}
+.grid{display:flex; flex-wrap:wrap; gap:10px 18px; align-items:flex-end;}
+label.f{display:flex; flex-direction:column; gap:3px; font-size:11.5px; color:var(--ink2);}
+input[type=number],select{font:inherit; color:var(--ink); background:var(--paper); border:1px solid var(--line2); border-radius:4px; padding:5px 7px; width:104px;}
+input[type=number]{font-family:var(--mono); text-align:right}
+select{width:auto; max-width:100%}
+input:focus,select:focus,button:focus{outline:2px solid var(--wood); outline-offset:1px}
+.hint{font-size:11px; color:var(--ink2); margin-top:8px;}
+.results{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:4px;}
+.qa{border:1px solid var(--line); border-radius:6px; padding:10px 14px; background:var(--paper);}
+.qa.tanki{border-color:var(--wood); background:var(--hilite);}
+.qa .lbl{font-size:11px; letter-spacing:.1em; color:var(--ink2)}
+.qa .v{font-family:var(--mono); font-weight:600; font-size:24px; color:var(--big); line-height:1.2}
+.qa .v small{font-size:12px; color:var(--ink2); font-weight:400}
+.kv{display:flex; flex-wrap:wrap; gap:2px 24px; font-size:12.5px; margin:6px 0 0;}
+.kv span{white-space:nowrap}
+.kv .v{font-family:var(--mono); font-weight:600;}
+table.t{border-collapse:collapse; font-size:12px; margin-top:6px;}
+table.t th,table.t td{border:1px solid var(--line); padding:3px 10px; text-align:left;}
+table.t th{background:var(--wood-soft); font-weight:500;}
+table.t td.n{font-family:var(--mono); text-align:right; white-space:nowrap;}
+tr.gov td{background:var(--hilite); font-weight:700;}
+tr.gov td:first-child::after{content:" ◀"; color:var(--wood);}
+pre.copy{
+  font-family:var(--mono); font-size:12px; line-height:1.55; background:var(--paper);
+  border:1px dashed var(--line2); border-radius:4px; padding:10px 12px; margin:8px 0 0;
+  white-space:pre-wrap; overflow-x:auto;
+}
+.btnrow{display:flex; gap:10px; margin-top:8px; align-items:center;}
+button{font:inherit; font-weight:700; cursor:pointer; background:var(--wood); color:var(--panel); border:none; border-radius:5px; padding:7px 16px; letter-spacing:.08em;}
+button.ghost{background:transparent; color:var(--wood); border:1px solid var(--wood);}
+.copied{color:var(--wood); font-size:12px}
+ul.warn{margin:8px 0 0; padding-left:1.4em; color:var(--warn); font-size:12px;}
+footer.app{margin-top:24px; color:var(--ink2); font-size:11px; border-top:1px solid var(--line); padding-top:10px;}
+footer.app a{color:var(--wood)}
+@media print{
+  body{background:#fff; color:#1a1a1a; padding-inline:0;}
+  .btnrow{display:none}
+  .card{break-inside:avoid; border-color:#999}
+}
+</style>
+
+<div class="page">
+<header class="app">
+  <h1>接合具単体耐力計算</h1>
+  <span class="src">木質構造設計規準・同解説（日本建築学会）602 — 接合具1本あたりの許容せん断耐力</span>
+</header>
+
+<div class="card">
+  <h2>条件</h2>
+  <div class="grid">
+    <label class="f"><b>接合具</b>
+      <select id="fastener">
+        <option value="bolt">ボルト</option>
+        <option value="driftpin">ドリフトピン</option>
+        <option value="lag">ラグスクリュー</option>
+        <option value="nail">釘</option>
+        <option value="screw" selected>ビス（木ねじ）</option>
+      </select>
+    </label>
+    <label class="f"><b id="dLabel">呼び径 d (mm)</b><input type="number" id="d" value="5.5" step="0.1" min="1"></label>
+    <label class="f" id="deffWrap"><b>有効径 d<sub>ef</sub> (mm)<span id="deffAuto">（自動 0.75d）</span></b><input type="number" id="deff" value="4.13" step="0.1" min="1"></label>
+    <label class="f" id="lenWrap"><b>釘・ビス長さ (mm)</b><input type="number" id="nailLen" value="45" step="1" min="10"></label>
+    <label class="f"><b>接合形式</b>
+      <select id="form"></select>
+    </label>
+  </div>
+  <div class="grid" style="margin-top:10px">
+    <label class="f"><b>主材 樹種グループ</b>
+      <select id="grpMain">
+        <option value="J1" selected>J1（べいまつ・からまつ・つが等）</option>
+        <option value="J2">J2（ひのき・べいつが・ひば等）</option>
+        <option value="J3">J3（すぎ・えぞまつ・スプルース等）</option>
+        <option value="rho">密度 ρk 指定</option>
+      </select>
+    </label>
+    <label class="f" id="rhoWrap" hidden><b>ρ<sub>k</sub> (kg/m³)</b><input type="number" id="rhoMain" value="370" step="10" min="200"></label>
+    <label class="f"><b>作用力方向 θ (°)</b><input type="number" id="thMain" value="0" step="15" min="0" max="90"></label>
+    <label class="f" id="grpSideWrap" hidden><b>側材</b>
+      <select id="grpSide">
+        <option value="same" selected>主材と同じ</option>
+        <option value="J1">J1</option><option value="J2">J2</option><option value="J3">J3</option>
+      </select>
+    </label>
+    <label class="f" id="thSideWrap" hidden><b>側材 θ′ (°)</b><input type="number" id="thSide" value="0" step="15" min="0" max="90"></label>
+  </div>
+  <div class="grid" style="margin-top:10px">
+    <label class="f"><b id="lmLabel">主材厚 l (mm)</b><input type="number" id="lm" value="105" step="1" min="5"></label>
+    <label class="f" id="lsWrap" hidden><b>側材厚 l′ (mm)</b><input type="number" id="ls" value="45" step="1" min="3"></label>
+    <label class="f" id="tplWrap"><b>鋼板厚 t (mm)</b><input type="number" id="tpl" value="6" step="0.5" min="1"></label>
+    <label class="f" id="FselWrap"><b>接合具の基準強度 F</b>
+      <select id="Fsel">
+        <option value="235">SS400・SNR400・丸鋼 (235)</option>
+        <option value="240">中ボルト 強度区分4.6 (240)</option>
+        <option value="275">SS490 (275)</option>
+        <option value="325">SNR490B (325)</option>
+        <option value="custom">直接入力</option>
+      </select>
+    </label>
+    <label class="f"><b>F (N/mm²)</b><input type="number" id="F" value="540" step="5" min="100"></label>
+    <label class="f"><b>含水率 jK<sub>m</sub></b>
+      <select id="jKm">
+        <option value="1.0" selected>気乾 (1.0)</option>
+        <option value="0.8">断続湿潤 (0.8)</option>
+        <option value="0.7">常時湿潤 (0.7)</option>
+      </select>
+    </label>
+    <label class="f" id="lrWrap" hidden><b id="lrLabel">ねじ部有効長 l<sub>r</sub> (mm)</b><input type="number" id="lr" value="" step="1" min="0" placeholder="未入力=省略"></label>
+  </div>
+  <div class="hint" id="fastHint"></div>
+</div>
+
+<div class="card">
+  <h2>接合具1本あたりの許容せん断耐力 q<sub>A</sub>〔(6.2)式〕</h2>
+  <div class="results" id="results"></div>
+  <div class="kv" id="mid"></div>
+  <table class="t" id="ctable"></table>
+  <div id="pullres"></div>
+  <ul class="warn" id="warns"></ul>
+</div>
+
+<div class="card">
+  <h2>計算根拠（計算書転記用）</h2>
+  <pre class="copy" id="copyText"></pre>
+  <div class="btnrow">
+    <button id="copyBtn">コピー</button>
+    <span class="copied" id="copiedMsg" hidden>コピーしました</span>
+    <span class="hint" style="margin-top:0">書式なしのテキストのみコピーします（太字表示は画面上の強調です。転記先で必要に応じて設定してください）。</span>
+  </div>
+</div>
+
+<footer class="app">
+  1本あたりの降伏理論値（(6.5)式）に基づく参考計算。多数本使用時の低減 jK<sub>n</sub>、木材の割裂・集合型せん断等の脆性破壊〔602.1(4)〕、
+  縁距離・端距離・間隔〔表6.10・6.13〕、最小板厚は接合部全体として別途検討のこと（詳細版：木質接合部耐力計算 を参照）。
+</footer>
+</div>
+
+<script>
+"use strict";
+const GRP={J1:{a:34,rho:420,ex:"べいまつ・からまつ・つが等"},J2:{a:30,rho:370,ex:"ひのき・べいつが・ひば等"},J3:{a:26,rho:320,ex:"すぎ・えぞまつ・スプルース等"}};
+const FORMS={
+  w2:{name:"2面せん断（木材側材）",key:"(i)",eq:"(6.7)"},
+  s2s:{name:"2面せん断（鋼板側材）",key:"(ii)",eq:"(6.8)"},
+  s2i:{name:"2面せん断（鋼板挿入）",key:"(iii)",eq:"(6.9)"},
+  w1:{name:"1面せん断（木材どうし）",key:"(iv)",eq:"(6.10)"},
+  s1:{name:"1面せん断（鋼板添え板）",key:"(v)",eq:"(6.11)"},
+};
+const ALLOWED={bolt:["w2","s2s","s2i","w1","s1"],driftpin:["w2","s2i","w1"],lag:["w1","s1"],
+               nail:["w1","w2","s1"],screw:["w1","w2","s1"]};
+const SEC={bolt:"602.2",driftpin:"602.3",lag:"602.4",nail:"602.5",screw:"602.6"};
+const JKD=[["長期","1.1",1.1],["中長期・積雪","1.43",1.43],["中短期","1.6",1.6],["短期","2.0",2.0]];
+function nailF(d){return d<=3.2?690:d<=4.0?590:d<=5.5?540:490;}
+const $=id=>document.getElementById(id);
+const fmt=(x,dig=3)=>{if(!isFinite(x))return "—"; if(x===0)return "0";
+  if(Math.abs(x)>=1000)return x.toLocaleString("en-US",{maximumFractionDigits:0});
+  return Number(x.toPrecision(dig)).toString();};
+const kN=x=>(x/1000).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+function hank(p0,p90,deg){const t=deg*Math.PI/180;return p0*p90/(p0*Math.sin(t)**2+p90*Math.cos(t)**2);}
+function Fe(g,rho,d,th,forcePar){
+  const a=g==="rho"?82*rho/1000:GRP[g].a;
+  const f0=a*(1-0.01*d), f90=f0/(1.35+0.015*d), t=forcePar?0:th;
+  return {f0,f90,t,val:hank(f0,f90,t)};
+}
+function modesC(form,al,be,R){const r=Math.sqrt;
+  switch(form){
+    case "w2":return [["Ia",2*al*be],["Ib",1],
+      ["III",2/(2*be+1)*(r(2*al*al*be*be*(1+be)+be*(2*be+1)*R)-al*be)],
+      ["IV",r(4*be*R/(1+be))]];
+    case "s2s":return [["I",1],["IV",2*r(R)]];
+    case "s2i":return [["I",1],["III",r(2+4*R)-1],["IV",2*r(R)]];
+    case "w1":return [["Ia",al*be],["Ib",1],
+      ["II",1/(1+be)*(r(be+2*be*be*(1+al+al*al)+al*al*be*be*be)-be*(1+al))],
+      ["IIIa",1/(2+be)*(r(2*be*(1+be)+be*(2+be)*R)-be)],
+      ["IIIb",1/(2*be+1)*(r(2*al*al*be*be*(1+be)+be*(2*be+1)*R)-al*be)],
+      ["IV",r(be*R/(1+be))]];
+    case "s1":return [["I",1],["III",r(2+R)-1],["IV",r(R)]];
+  }
+}
+const mClass=m=>(m==="Ia"||m==="Ib"||m==="I")?"I":(m==="IV"?"IV":"III");
+
+const els=["fastener","d","deff","nailLen","form","grpMain","rhoMain","thMain","grpSide","thSide",
+           "lm","ls","tpl","Fsel","F","jKm","lr"];
+
+function fillForms(){
+  const sel=$("form"), fast=$("fastener").value, cur=sel.value;
+  sel.innerHTML="";
+  for(const f of ALLOWED[fast]){
+    const o=document.createElement("option"); o.value=f; o.textContent=`${FORMS[f].key} ${FORMS[f].name}`;
+    sel.appendChild(o);
+  }
+  sel.value=ALLOWED[fast].includes(cur)?cur:ALLOWED[fast][ALLOWED[fast].length-1];
+}
+function vis(){
+  const fast=$("fastener").value, form=$("form").value;
+  const isNS=fast==="nail"||fast==="screw", isScrew=fast==="screw", isLag=fast==="lag";
+  const woodSide=form==="w2"||form==="w1";
+  $("deffWrap").hidden=!isScrew;
+  if(isScrew&&!$("deff").dataset.user){
+    $("deff").value=Math.round((+$("d").value||0)*0.75*100)/100;
+  }
+  $("deffAuto").textContent=$("deff").dataset.user?"（手入力）":"（自動 0.75d）";
+  $("lenWrap").hidden=!isNS;
+  $("dLabel").textContent=isScrew?"呼び径 d (mm)":"径 d (mm)";
+  $("lsWrap").hidden=!woodSide;
+  $("grpSideWrap").hidden=!woodSide;
+  $("thSideWrap").hidden=!woodSide;
+  $("tplWrap").hidden=woodSide;
+  $("rhoWrap").hidden=$("grpMain").value!=="rho";
+  $("FselWrap").hidden=isNS;
+  $("lmLabel").textContent=form==="s2i"?"主材厚 l＝l₁+l₂ (mm)":(isLag?"埋込み有効長 l (mm)":"主材厚 l (mm)");
+  $("lrWrap").hidden=!(isLag||isScrew);
+  $("lrLabel").innerHTML=isLag?"引抜: ねじ部埋込み長 (mm)":"引抜: 有効ねじ込み長 l<sub>r</sub> (mm)";
+  if(isNS&&!$("F").dataset.user){$("F").value=nailF(+$("d").value||1);}
+  $("fastHint").innerHTML=
+    fast==="bolt"?"JIS B 1180。径26mm以下。孔はボルト径に近い先孔（クリアランス極小）。r<sub>u</sub>：モードI 1.0／II・III 1.1／IV 1.2〔表6.8〕。"
+    :fast==="driftpin"?"JIS G 3191 丸鋼等。孔径はピン径と一致。r<sub>u</sub>＝1.0〔602.3(4)〕。"
+    :fast==="lag"?"埋込み有効長 l≧8d。胴部が接合面を貫通しない場合は d をねじ部谷径で入力。r<sub>u</sub>＝鋼板側1.1／木材側1.0。"
+    :fast==="nail"?"JIS A 5508 鉄丸くぎ（d≧2.5mm）。F は表6.11より自動（変更可）。r<sub>u</sub>＝1.2。"
+    :"呼び径3〜12mm。有効径 d<sub>ef</sub>＝min(1.1×谷径, 円筒部径)。既定では0.75dを自動入力（目安）— 実製品の谷径が分かる場合は手入力で上書き（空欄に戻すと自動に復帰）。式中の d は d<sub>ef</sub>。F はJIS木ねじにつき表6.11より自動（区分は呼び径で判定・安全側、変更可）。r<sub>u</sub>＝1.5。";
+}
+
+function compute(){
+  const fast=$("fastener").value, form=$("form").value;
+  const isNail=fast==="nail", isScrew=fast==="screw", isLag=fast==="lag", isNS=isNail||isScrew;
+  const dNom=+$("d").value||1;
+  const d=isScrew?(+$("deff").value||dNom):dNom;
+  const F=+$("F").value||235;
+  const jKm=+$("jKm").value;
+  const woodSide=form==="w2"||form==="w1";
+  const lmIn=+$("lm").value||1, lsIn=woodSide?(+$("ls").value||0):0, tpl=woodSide?0:(+$("tpl").value||0);
+  const nailLen=+$("nailLen").value||0;
+  const warns=[], notes=[];
+
+  let l=lmIn, ls=lsIn;
+  if(isNS&&(form==="w1"||form==="s1")&&nailLen>0){
+    const pen=nailLen-(form==="w1"?lsIn:tpl);
+    if(pen<l){l=pen; notes.push(`有効主材厚 l＝打込み長 ${fmt(pen)}mm（釘長−${form==="w1"?"側材厚":"鋼板厚"}）を採用〔図6.15〕`);}
+  }
+  if(isNS&&form==="w2"&&nailLen>0){
+    const pen=nailLen-lsIn-lmIn;
+    if(pen<lsIn){ls=Math.max(pen,1); notes.push(`先側側材厚＝打込み長 ${fmt(pen)}mm を採用〔図6.16〕`);}
+  }
+
+  const thM=+$("thMain").value||0, thS=+$("thSide").value||0;
+  const forcePar=isNail||(isScrew&&d<6);
+  const gm=$("grpMain").value, gsRaw=$("grpSide").value, gs=gsRaw==="same"?gm:gsRaw;
+  const rho=+$("rhoMain").value||370;
+  const feM=Fe(gm,rho,d,thM,forcePar);
+  const feS=woodSide?Fe(gs,rho,d,thS,forcePar):null;
+  const al=woodSide?ls/l:0, be=feS?feS.val/feM.val:1;
+  const R=(2/3)*(F/feM.val)*Math.pow(d/l,2);
+  const ms=modesC(form,al,be,R).map(([mo,v])=>({mo,v}));
+  let gov=ms[0]; for(const x of ms) if(x.v<gov.v-1e-12) gov=x;
+  const C=gov.v, cls=mClass(gov.mo);
+  const py=C*feM.val*d*l;
+  let ru;
+  if(fast==="bolt") ru={I:1.0,III:1.1,IV:1.2}[cls];
+  else if(fast==="driftpin") ru=1.0;
+  else if(isLag) ru=form==="s1"?1.1:1.0;
+  else if(isNail) ru=1.2;
+  else ru=1.5;
+  const qa=JKD.map(([nm,ks,k])=>[nm,ks,(1/3)*k*jKm*ru*py]);
+
+  // 適用チェック
+  if(fast==="bolt"&&dNom>26) warns.push("径26mm超は表6.2の適用外");
+  if(isLag&&l<8*dNom) warns.push(`埋込み有効長 l≧8d（=${fmt(8*dNom)}mm）を満たさない`);
+  if(isLag&&form==="w1"&&ls<3*dNom) warns.push("側材厚 l′/d≧3 を満たさない");
+  if(isNail){
+    if((form==="w1"||form==="s1")&&l<9*d) warns.push(`有効主材厚 l≧9d（=${fmt(9*d)}mm）を満たさない`);
+    if(form==="w1"&&ls<6*d) warns.push(`側材厚 l′≧6d（=${fmt(6*d)}mm）を満たさない`);
+    if(form==="w2"&&Math.min(lmIn,lsIn)<6*d) warns.push("主材厚・側材厚≧6d を満たさない");
+  }
+  if(isScrew){
+    if(form!=="s1"&&l<4*dNom) warns.push(`有効主材厚 l≧4d（=${fmt(4*dNom)}mm）を満たさない`);
+    if(woodSide&&ls<2.5*dNom) warns.push(`側材厚 l′≧2.5d（=${fmt(2.5*dNom)}mm）を満たさない`);
+    if(form==="s1"&&l<6*dNom) warns.push(`有効主材厚 l≧6d（=${fmt(6*dNom)}mm）を満たさない`);
+  }
+
+  // 引抜耐力（ラグスクリュー・ビス）
+  let pull=null;
+  const lr=+$("lr").value||0;
+  if(lr>0&&(isLag||isScrew)){
+    const rho0=gm==="rho"?rho:GRP[gm].rho;
+    let pw,eq,expr;
+    if(isLag){
+      const put=23.5*Math.pow(rho0/1000,0.8)*dNom;   // N/mm
+      pw=put*lr; eq="(6.33)(6.34)";
+      expr=`pUT=23.5(ρ₀/1000)^0.8・d=${fmt(put,4)}N/mm → PUT=pUT・${fmt(lr)}=${fmt(pw,4)}N`;
+      warns.push("木材を側材とするラグスクリューの引抜きは、座金支圧による耐力〔(6.32)式〕との小さい方をとる");
+    }else{
+      pw=93.7*Math.pow(rho0/1000,1.35)*Math.pow(dNom,0.66)*lr; eq="(6.43)(6.44)";
+      expr=`pw=93.7(ρ₀/1000)^1.35・d^0.66・lr=${fmt(pw,4)}N（d=呼び径）`;
+      notes.push("引抜の有効ねじ込み長は先端の傾斜部を除いた主材定着部のねじ部長さ");
+    }
+    pull={lr,rho0,pw,eq,expr,qat:JKD.map(([nm,ks,k])=>[nm,ks,(1/3)*k*jKm*pw])};
+  }
+
+  return {fast,form,dNom,d,F,l,ls,al,be,R,ms,gov,C,cls,py,ru,qa,jKm,feM,feS,gm,gs,rho,thM,thS,
+          forcePar,warns,notes,woodSide,isScrew,isNS,pull};
+}
+
+function buildCopy(r){
+  const g=k=>k==="rho"?`ρk=${r.rho}kg/m³`:`${k}（${GRP[k].ex}）`;
+  const lLabel=r.isNS?"打込み長さ":(r.fast==="lag"?"埋込み長":"主材厚");
+  const L=[];
+  L.push(`[条件]`);
+  L.push(` ・接合具　 : ${{bolt:"ボルト",driftpin:"ドリフトピン",lag:"ラグスクリュー",nail:"釘",screw:"ビス"}[r.fast]} d=${fmt(r.dNom)}mm`+
+    (r.isScrew?`（有効径 def=${fmt(r.d)}mm）`:""));
+  L.push(` ・接合形式 : ${FORMS[r.form].name}`);
+  L.push(` ・主材樹種 : ${g(r.gm)}`);
+  L.push(` ・載荷角度 : θ=${r.thM}°（繊維方向からの傾き）`);
+  L.push(` ・${lLabel==="主材厚"?"主材厚　 ":lLabel} : l=${fmt(r.l)}mm${r.isNS?"（有効主材厚）":""}`);
+  if(r.woodSide) L.push(` ・側材　　 : ${g(r.gs)}　θ′=${r.thS}°　l′=${fmt(r.ls)}mm`);
+  L.push(`※出典：木質構造設計規準・同解説（日本建築学会） ${SEC[r.fast]}・602.1`);
+  L.push(` Fe=${fmt(r.feM.val)}N/mm²〔表6.2${r.forcePar?"・繊維方向値":`（θ=${r.feM.t}°、(6.1)式）`}〕`+
+    (r.feS?`, Fe'=${fmt(r.feS.val)}N/mm², β=Fe'/Fe=${fmt(r.be)}, α=l'/l=${fmt(r.al)}`:"")+
+    `, F=${fmt(r.F)}N/mm²${r.isNS?"〔表6.11〕":""}`);
+  L.push(` R=(2/3)(F/Fe)(d/l)²=${fmt(r.R,4)}〔(6.6)式〕`);
+  L.push(` C=${fmt(r.C,4)}（モード${r.gov.mo}、${FORMS[r.form].eq}式の最小値）`);
+  L.push(` py=C・Fe・d・l=${fmt(r.py,4)}N〔(6.5)式〕, ru=${r.ru}`);
+  L.push(` qA=(1/3)・jKd・jKm・ru・py〔(6.2)式、jKm=${r.jKm}〕`);
+  for(const [nm,k,v] of r.qa)
+    L.push(`   qA(${nm}, jKd=${k}) = ${kN(v)} kN/本`);
+  if(r.pull){
+    L.push(`[引抜耐力] ρ₀=${r.pull.rho0}kg/m³〔表6.1〕, ${r.fast==="lag"?"ねじ部埋込み長":"有効ねじ込み長 lr"}=${fmt(r.pull.lr)}mm`);
+    L.push(` ${r.pull.expr}〔${r.pull.eq}式〕`);
+    L.push(` qAT=(1/3)・jKd・jKm・${r.fast==="lag"?"PUT":"pw"}〔${r.fast==="lag"?"(6.33)":"(6.43)"}式、jKm=${r.jKm}〕`);
+    for(const [nm,k,v] of r.pull.qat)
+      L.push(`   qAT(${nm}, jKd=${k}) = ${kN(v)} kN/本`);
+  }
+  return L.join("\n");
+}
+
+function render(r){
+  $("results").innerHTML=r.qa.map(([nm,k,v])=>
+    `<div class="qa${nm==="短期"?" tanki":""}"><div class="lbl">${nm} jK<sub>d</sub>=${k}</div>
+     <div class="v">${kN(v)} <small>kN/本</small></div></div>`).join("");
+  $("mid").innerHTML=
+    `<span>F<sub>e</sub>＝<span class="v">${fmt(r.feM.val)}</span> N/mm²</span>`+
+    (r.feS?`<span>β＝<span class="v">${fmt(r.be)}</span>　α＝<span class="v">${fmt(r.al)}</span></span>`:"")+
+    `<span>R＝<span class="v">${fmt(r.R,4)}</span></span>`+
+    `<span>p<sub>y</sub>＝<span class="v">${fmt(r.py,4)}</span> N</span>`+
+    `<span>r<sub>u</sub>＝<span class="v">${r.ru}</span></span>`+
+    `<span>有効主材厚 l＝<span class="v">${fmt(r.l)}</span> mm</span>`;
+  $("ctable").innerHTML=`<tr><th>接合形式係数 C ${FORMS[r.form].eq}式</th>${r.ms.map(x=>`<th>モード${x.mo}</th>`).join("")}</tr>`+
+    `<tr><td>値（最小を採用）</td>${r.ms.map(x=>`<td class="n${x.mo===r.gov.mo?" gov":""}"${x.mo===r.gov.mo?' style="background:var(--hilite);font-weight:700"':""}>${fmt(x.v,4)}</td>`).join("")}</tr>`;
+  $("pullres").innerHTML=r.pull?`
+    <h2 style="margin-top:14px">引抜耐力 q<sub>AT</sub>（1本あたり） <span style="font-family:var(--mono);font-weight:400;font-size:11px;color:var(--wood)">${r.pull.eq}式</span></h2>
+    <div class="results">${r.pull.qat.map(([nm,k,v])=>
+      `<div class="qa${nm==="短期"?" tanki":""}"><div class="lbl">${nm} jK<sub>d</sub>=${k}</div>
+       <div class="v">${kN(v)} <small>kN/本</small></div></div>`).join("")}</div>
+    <div class="kv"><span>ρ₀＝<span class="v">${r.pull.rho0}</span> kg/m³〔表6.1〕</span>
+      <span>${r.fast==="lag"?"P<sub>UT</sub>":"p<sub>w</sub>"}＝<span class="v">${fmt(r.pull.pw,4)}</span> N</span>
+      <span>l<sub>r</sub>＝<span class="v">${fmt(r.pull.lr)}</span> mm</span></div>`:"";
+  $("warns").innerHTML=[...r.notes.map(n=>`<li style="color:var(--ink2)">${n}</li>`),...r.warns.map(w=>`<li>⚠ ${w}</li>`)].join("");
+  const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  $("copyText").innerHTML=buildCopy(r).split("\n").map(ln=>{
+    const e=esc(ln);
+    return (/^\s*qAT?\(/.test(ln)||ln.startsWith(" qA=")||ln.startsWith(" qAT=")||ln.startsWith("["))?`<b>${e}</b>`:e;
+  }).join("\n");
+}
+
+function refresh(){
+  vis();
+  try{ render(compute()); }catch(e){ $("copyText").textContent="計算エラー: "+e.message; }
+  try{ const s={}; els.forEach(id=>s[id]=$(id).value); s._deffUser=$("deff").dataset.user||"";
+    localStorage.setItem("unitFastCalc1",JSON.stringify(s)); }catch(_){}
+}
+function boot(){
+  fillForms();
+  try{ const s=JSON.parse(localStorage.getItem("unitFastCalc1")||"null");
+    if(s){ els.forEach(id=>{ if(s[id]!==undefined) $(id).value=s[id]; });
+      if(s._deffUser) $("deff").dataset.user="1";
+      fillForms(); if(s.form) $("form").value=s.form; }
+  }catch(_){}
+  $("fastener").addEventListener("change",()=>{ delete $("F").dataset.user; fillForms(); refresh(); });
+  $("deff").addEventListener("input",()=>{
+    if($("deff").value==="") delete $("deff").dataset.user;
+    else $("deff").dataset.user="1";
+  });
+  $("Fsel").addEventListener("change",()=>{ if($("Fsel").value!=="custom"){ $("F").value=$("Fsel").value; delete $("F").dataset.user; } refresh(); });
+  $("F").addEventListener("input",()=>{ $("F").dataset.user="1"; $("Fsel").value="custom"; });
+  els.forEach(id=>{ $(id).addEventListener("input",refresh); $(id).addEventListener("change",refresh); });
+  $("copyBtn").addEventListener("click",async()=>{
+    const t=$("copyText").textContent;   // プレーンテキストのみ（書式なし）
+    try{ await navigator.clipboard.writeText(t); }
+    catch(_){ const ta=document.createElement("textarea"); ta.value=t;
+      ta.style.cssText="position:fixed;left:-9999px;top:0"; document.body.appendChild(ta);
+      ta.select(); try{document.execCommand("copy");}catch(__){} ta.remove(); }
+    $("copiedMsg").hidden=false; setTimeout(()=>$("copiedMsg").hidden=true,1600);
+  });
+  refresh();
+}
+boot();
+</script>
