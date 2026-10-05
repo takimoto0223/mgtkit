@@ -239,6 +239,22 @@ def _derived_section_notes():
             for d in getattr(mgtopen_section, 'restored_sections', [])]
 
 
+def _is_sloped_floor(pts):
+    """節点群の最適平面がxy平面から45度以下の傾きなら True (勾配屋根等).
+
+    主成分分析で最小分散方向を平面の法線とし、法線と鉛直軸のなす角で
+    判定する。節点がほぼ一直線 (平面が定まらない) 場合は False。
+    """
+    if pts.shape[0] < 3:
+        return False
+    q = pts - pts.mean(axis=0)
+    w, v = np.linalg.eigh(q.T @ q)
+    if float(np.sqrt(max(float(w[1]), 0.0) / pts.shape[0])) < 0.05:
+        return False  # ほぼ一直線 → 平面の向きが定まらない
+    tilt = np.degrees(np.arccos(min(abs(float(v[2, 0])), 1.0)))
+    return tilt <= 45.0 + 1e-6
+
+
 def _group_info(mgt_path):
     """グループ一覧を鉛直構面/水平構面(伏図)/節点未登録に分類して返す."""
     node = mgtopen_node(mgt_path)
@@ -253,10 +269,15 @@ def _group_info(mgt_path):
             idx = np.asarray(idx)
             idx = idx[idx >= 0] if idx.size else idx
             if np.size(idx) >= 2:
-                z = node[np.asarray(idx, dtype=int), 3]
-                # 10mmまでの座標ずれは同一レベル (水平構面) とみなす
-                kind = ('vertical' if (z.max() - z.min()) > 0.01
-                        else 'floor')
+                pts = node[np.asarray(idx, dtype=int), 1:4]
+                z = pts[:, 2]
+                # 10mmまでの座標ずれは同一レベル (水平構面) とみなす。
+                # レベル差があっても最適平面の傾きが45度以下なら
+                # 勾配屋根等の水平構面とみなす。
+                if (z.max() - z.min()) <= 0.01 or _is_sloped_floor(pts):
+                    kind = 'floor'
+                else:
+                    kind = 'vertical'
         groups.append({'name': space_erace(str(name)),
                        'n_nodes': int(nn.size), 'kind': kind})
     return groups
