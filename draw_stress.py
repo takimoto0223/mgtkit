@@ -63,7 +63,8 @@ try:
         mgtopen_wall, node_index_get,
     )
     from .util import (find_index, find_zero_index, doublecheck,
-                       space_erace, _colon, loadtxt_tolerant)
+                       space_erace, _colon, loadtxt_tolerant,
+                       load_beam_stress_table)
     from .draw_model import (
         _setup_japanese_font, _finish_figure, _text, _kline, _plate_plot,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
@@ -76,7 +77,8 @@ except ImportError:  # スクリプト実行時
         mgtopen_wall, node_index_get,
     )
     from util import (find_index, find_zero_index, doublecheck,
-                      space_erace, _colon, loadtxt_tolerant)
+                      space_erace, _colon, loadtxt_tolerant,
+                      load_beam_stress_table)
     from draw_model import (
         _setup_japanese_font, _finish_figure, _text, _kline, _plate_plot,
         _project_nodes, _tick, _axis_coefficients, _unit_elements,
@@ -95,8 +97,10 @@ def read_beam_stress(path):
     列: 1:要素番号 2:荷重ケース 3:Fx 4:Fy 5:Fz 6:Mx 7:My 8:Mz
     1要素あたり3行 (i端/中央/j端)。2行 (i端/j端: 終局形式) の場合は
     MATLAB版同様、中央=両端平均の3行形式へ展開する。
+    3列目に位置の列 (i端/j端。I[1] 等の文字や位置番号) が入った書き出しは
+    その列を読み飛ばす (load_beam_stress_table)。
     """
-    beam_stress = loadtxt_tolerant(path)
+    beam_stress = load_beam_stress_table(path)
     if beam_stress.size == 0:
         return np.array([])
     if beam_stress.shape[1] != 8:
@@ -1428,6 +1432,17 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
     on_axis_beam_index = _mark(beam_stress, 1)
     on_axis_wall_index = _mark(wall_base, 2)
     _mark(plate_stress, 4)
+
+    # 応力ファイル側にあってもmgtの線要素(*ELEMENT)に無い要素は線材として
+    # 描画できない (板応力ファイルをbeam/truss欄に指定した場合等)。
+    # etype=0 (図形ラインのみ・警告スキップ) へ降格して続行する。
+    if n_el and np.size(element) > 0:
+        in_elem = np.atleast_1d(find_index(element[:, 0], axis_elems)) >= 0
+        bad = ((etype == 1) | (etype == 3)) & ~in_elem
+        if np.any(bad):
+            etype[bad] = 0
+            on_axis_truss_index = np.where(etype == 3)[0]
+            on_axis_beam_index = np.where(etype == 1)[0]
     on_axis_wall_ID = axis_elems[on_axis_wall_index] \
         if on_axis_wall_index.size else np.array([])
 
@@ -1524,7 +1539,7 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
                 node4_no = node4_no[:3]
             else:
                 node34 = 4
-            _plate_plot(ax, plate_no, plate, nodeM, int(3 - judge_axis), 3)
+            _plate_plot(ax, plate_no, plate, nodeM, 1, 3)
             if il_plate >= 0:  # このケースがplate_stressに無ければ注記なし
                 p0 = find_index(plate_stress[:, 0], plate_no)
                 plot_s = plate_stress[p0 + lci_plate[il_plate]:
@@ -1675,25 +1690,32 @@ def _figure_stress_axis(C, i_axis, i_load, case_no, case_name, truss_Lplot,
 # mgt・応力txtの要素番号整合チェック (要件: プログラムで吸収せず報告)
 # ---------------------------------------------------------------------------
 
-def _check_id_consistency(element, beam_stress, truss_stress):
+def _check_id_consistency(element, beam_stress, truss_stress, plate=None):
     notes = []
     if np.size(element) == 0:
         return notes
     ele_ids = set(element[:, 0].tolist())
-    if np.size(beam_stress) > 0:
-        bs_ids = set(beam_stress[:, 0].tolist())
-        missing = sorted(bs_ids - ele_ids)
-        if missing:
-            notes.append('beam_stressに存在しmgtに無い要素番号: %d個 (例: %s)'
-                         % (len(missing),
-                            ', '.join(str(int(v)) for v in missing[:10])))
-    if np.size(truss_stress) > 0:
-        ts_ids = set(truss_stress[:, 0].tolist())
-        missing = sorted(ts_ids - ele_ids)
-        if missing:
-            notes.append('truss_stressに存在しmgtに無い要素番号: %d個 (例: %s)'
-                         % (len(missing),
-                            ', '.join(str(int(v)) for v in missing[:10])))
+    plate_ids = (set(np.atleast_2d(plate)[:, 0].tolist())
+                 if plate is not None and np.size(plate) > 0 else set())
+
+    def _missing_note(table, label):
+        if np.size(table) == 0:
+            return
+        missing = sorted(set(table[:, 0].tolist()) - ele_ids)
+        if not missing:
+            return
+        note = ('%sに存在しmgtに無い要素番号: %d個 (例: %s)'
+                % (label, len(missing),
+                   ', '.join(str(int(v)) for v in missing[:10])))
+        n_plate = sum(1 for v in missing if v in plate_ids)
+        if n_plate:
+            note += ('。うち%d個はmgtの板要素番号です。板応力ファイルを'
+                     '%s欄に指定していないか確認してください'
+                     % (n_plate, label))
+        notes.append(note)
+
+    _missing_note(beam_stress, 'beam_stress')
+    _missing_note(truss_stress, 'truss_stress')
     for n in notes:
         print('NOTE(データ不整合): ' + n)
     return notes
@@ -1863,7 +1885,7 @@ def plot_stress(mgt_path, beam_stress_path, out_dir,
                                           load_case_no.size))
 
     # データ不整合チェック (要件: 吸収せず報告)
-    _check_id_consistency(element, beam_stress, truss_stress)
+    _check_id_consistency(element, beam_stress, truss_stress, plate)
 
     # %%%%%% 通り芯情報 %%%%%%
     v_idx = _resolve_select(axis_name, axes_select)

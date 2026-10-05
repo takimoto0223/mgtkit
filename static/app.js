@@ -14,9 +14,11 @@ document.querySelectorAll('nav button').forEach(b => {
 
 // 同種の応力ファイル欄はタブ間で同期する (どこで読み込んでも全タブに反映)
 const SYNC_GROUPS = [
-  ['beam_stress_path', 'c_beam_stress_path', 'q_beam_stress_path'],
+  ['beam_stress_path', 'c_beam_stress_path', 'q_beam_stress_path',
+   'j_beam_stress_path'],
   ['truss_stress_path', 'c_truss_stress_path', 'q_truss_stress_path'],
-  ['plate_stress_path', 'c_plate_stress_path', 'q_plate_stress_path'],
+  ['plate_stress_path', 'c_plate_stress_path', 'q_plate_stress_path',
+   'd_plate_stress_path'],
   ['c_wall_stress_path', 'q_wall_stress_path'],
 ];
 function syncPathGroup(srcId, val) {
@@ -39,7 +41,8 @@ function syncPathGroup(srcId, val) {
  'c_wall_stress_path', 'c_pc_stress_path', 'c_pc_cable_path',
  'c_pc_slab_path', 'q_beam_stress_path', 'q_truss_stress_path',
  'q_wall_stress_path', 'q_plate_stress_path', 'q_reaction_path',
- 'q_deformation_path'].forEach(id => {
+ 'q_deformation_path', 'j_beam_stress_path',
+ 'd_plate_stress_path'].forEach(id => {
   const el = $(id);
   el.value = localStorage.getItem('mgtkit_' + id) || '';
   el.addEventListener('change', () => {
@@ -56,6 +59,12 @@ function clearCaseTable() {
     box.innerHTML = '<span class="hint">応力ファイルが変わりました。' +
       '「ケース読込 (種別指定)」を押し直してください。' +
       '(未読込のまま検定するとケース数からの自動判定になります)</span>';
+  }
+  // 梁接合部タブのケース表も同様に読み直しを促す
+  const jbox = $('j_cases_box');
+  if (jbox && jbox.querySelector('select.jctype')) {
+    jbox.innerHTML = '<span class="hint">応力ファイルが変わりました。' +
+      '「対象読込」を押し直してください。</span>';
   }
 }
 
@@ -77,7 +86,7 @@ async function api(url, body) {
         'c_wall_stress_path', 'c_pc_stress_path', 'c_pc_cable_path',
         'c_pc_slab_path', 'q_beam_stress_path', 'q_truss_stress_path',
         'q_wall_stress_path', 'q_plate_stress_path', 'q_reaction_path',
-        'q_deformation_path']
+        'q_deformation_path', 'j_beam_stress_path', 'd_plate_stress_path']
         .map(id => $(id) ? $(id).value.trim() : '').filter(v => v);
     }
     const r = await fetch(url, {method: 'POST',
@@ -412,6 +421,7 @@ async function loadMgt() {
     groupChecks(j.groups, 'vertical', 'qgroup', 'qaxes_box', true);
     groupChecks(j.groups, 'vertical', 'qcalcgroup', 'qcalc_box', false);
     refreshStructPrevSel();
+    if (typeof capfigGroups === 'function') capfigGroups(j.groups);
     let hmsg = '';
     if (j.heights && j.heights.length) {
       hmsg = ' 高さ候補: 全節点 ' + j.n_z_all + ' レベル / 柱端点 ' +
@@ -1132,12 +1142,40 @@ function fmtRatio(v) {
 }
 
 let CHECK = null;
+let CHECK_NG = [];  // 直近の断面検定で NG になった要素番号 (コピー用)
+
+// 要素番号リストのタブ区切りテキストをクリップボードへコピー
+// (断面検定と梁接合部検定 (jointchk.js) で共用)
+async function copyEleList(btn, eles) {
+  const text = eles.join('\t');
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch (e) {
+    // クリップボードAPIが使えない環境向けのフォールバック
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+    ta.remove();
+  }
+  if (btn) {
+    btn.textContent = ok ? 'コピーしました' : 'コピーできませんでした';
+    setTimeout(() => { btn.textContent = 'タブ区切りでコピー'; }, 1800);
+  }
+}
+
+function checkCopyNG(btn) { copyEleList(btn, CHECK_NG); }
 
 // ケース読込: 応力ファイルの荷重ケース一覧と種別既定値(自動判定)を表示
 const CTYPE_LABEL = {
   L: '長期',
   H: '水平のみ (長期と組合せて TL±H を生成)',
-  S: '短期 (長期と組合せ済み・そのまま検定)'
+  S: '短期 (長期と組合せ済み・そのまま検定)',
+  M: '中短期 (組合せ済み・木部材は耐力を短期の1.6/2倍で検定)'
 };
 
 async function loadCheckCases() {
@@ -1155,7 +1193,7 @@ async function loadCheckCases() {
     j.cases.forEach((c, i) => {
       h += '<tr><td>ケース ' + c.no + '</td><td>' +
         '<select class="ctype" data-no="' + c.no + '" id="ctype' + i + '">' +
-        ['L', 'H', 'S'].map(t =>
+        ['L', 'H', 'S', 'M'].map(t =>
           '<option value="' + t + '"' + (c.type === t ? ' selected' : '') +
           '>' + CTYPE_LABEL[t] + '</option>').join('') +
         '</select></td>' +
@@ -1167,6 +1205,11 @@ async function loadCheckCases() {
       '（ケースに長期＋水平荷重が合算済み）は「短期 (組合せ済み)」を' +
       '選んでください。長期を二重加算せず、そのケースの応力をそのまま' +
       '短期許容応力度 (長期の1.5倍) で検定します。' +
+      '積雪時短期など、木部材の許容応力度を短期の1.6/2倍とする' +
+      '組合せ済みケースは「中短期」を選んでください（ケース番号は' +
+      '10〜99）。低減の対象は木部材（梁・柱）のみで、鋼材・RC等は' +
+      '短期のまま、壁倍率検定（木造筋かい・面材壁）も長短期同値の' +
+      'まま検定します。ケース数の上限はありません。' +
       '応力ファイルを変更した場合は再度「ケース読込」してください。</div>';
     $('check_cases_box').innerHTML = h;
     renderWoodMaterials(j);
@@ -2027,14 +2070,32 @@ async function runQrShear() {
 
 async function runQrDrift() {
   setMsg('qr_dr_msg', '', ''); $('qr_dr_pdfs').innerHTML = '';
+  $('qr_dr_tex').innerHTML = '';
   try {
     const req = qrCommonReq();
     req.delta_case = checkedVals('qdr').map(Number);
+    // 剛心位置層間変形角の評価用: 5.偏心率セクションの剛心設定を流用
+    req.N_case = +$('q_ce_n').value;
+    req.KX_case = +$('q_ce_kx').value;
+    req.KY_case = +$('q_ce_ky').value;
+    req.k_mode = $('q_ce_mode').value;
+    req.brace_baisu = $('q_ce_brace').value;
     const j = await api('/api/qr_drift', req);
     setMsg('qr_dr_msg', 'PDF ' + j.pdfs.length + ' 件を生成しました → ' +
            esc(j.out_dir) + openFolderBtn(j.out_dir), 'msg-ok');
     $('qr_dr_msg').innerHTML += notesHtml(j.notes);
     $('qr_dr_pdfs').innerHTML = pdfListHtml(j.pdfs, 'qdr');
+    let texHtml = '';
+    if (j.tex_lines && j.tex_lines.length) {
+      texHtml += '<h3>層間変形角一覧表 TeX表ソース</h3>' +
+        '<pre class="detailtext">' + esc(j.tex_lines.join('\n')) + '</pre>';
+    }
+    if (j.tex_lines_rs && j.tex_lines_rs.length) {
+      texHtml += '<h3>剛性率結果一覧表 TeX表ソース</h3>' +
+        '<pre class="detailtext">' + esc(j.tex_lines_rs.join('\n')) +
+        '</pre>';
+    }
+    $('qr_dr_tex').innerHTML = texHtml;
   } catch (e) { setMsg('qr_dr_msg', esc(e.message), 'msg-err'); }
 }
 
@@ -2271,6 +2332,32 @@ function renderCheck(j) {
     ' \\input{10detail.tex} で組込み (要 longtable,multirow,booktabs,' +
     'array / amsmath,amssymb)</span></div>';
   h += notesHtml(j.notes);
+
+  // NG要素の一覧 (画面のみ。jointchk と同じ流儀)
+  const ngSet = new Set();
+  j.sections.forEach(s => s.details.forEach(d => {
+    if (d.vals.some(v => v !== null && v !== undefined && v > 1.0)) {
+      // 木合板壁の行は ele がラベル文字列で、実要素番号は eles に入る
+      if (Array.isArray(d.eles)) d.eles.forEach(e => ngSet.add(e));
+      else if (Number.isFinite(d.ele)) ngSet.add(d.ele);
+    }
+  }));
+  // 板・壁は要素別データが無いため、各ケース最大の要素のみ拾える
+  let ngThick = false;
+  (j.thick_table || []).forEach(s => s.cells.forEach(c => {
+    if (c && c.ratio > 1.0) { ngSet.add(c.ele); ngThick = true; }
+  }));
+  CHECK_NG = [...ngSet].sort((a, b) => a - b);
+  if (CHECK_NG.length) {
+    h += '<div class="msg-err"><b>NG要素 (' + CHECK_NG.length + '件): </b>' +
+      esc(CHECK_NG.join(', ')) +
+      ' <button class="sub" onclick="checkCopyNG(this)">タブ区切りで' +
+      'コピー</button>' +
+      '<span class="hint" style="margin-left:8px">MIDASの要素選択などに' +
+      '貼り付けられます' +
+      (ngThick ? '。板・壁のNGは各ケース最大の要素のみです' : '') +
+      '</span></div>';
+  }
 
   h += '<table class="res"><thead><tr><th></th><th>断面番号</th>' +
        '<th>断面名</th>';

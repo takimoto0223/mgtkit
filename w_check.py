@@ -18,7 +18,13 @@
     行 = 要素あたり3行 (i端/中央/j端)。
   - 内部で N/mm2 系へ変換。断面性能は cm 系 (B*関数出力)。
   - length = [座屈長さ(強)m, 座屈長さ(弱)m, 圧縮フランジ間距離m]。
-  - timecase: >10=短期, 1=長期(wal_up==1.3なら中長期), 9=中長期, 10=中短期。
+  - timecase: >10=短期, 1=長期(wal_up==1.3なら中長期), 9=中長期,
+    10または900番台(900<=timecase<1000)=中短期(短期×1.6/2)。
+    900番台は ratio_pipeline の種別'M'指定ケースの写像
+    (元ケース番号+900。他材料モジュールは>=10の規約どおり短期と解釈)。
+    中短期の耐力低減は木部材 (W_SB/W_SR 系) のみで、壁倍率検定
+    (W_truss_ratio_analysis の木造筋かい・面材壁) は長短期同値の
+    原典仕様のまま対象外 (詳細文の期別表記のみ「中短期」とする)。
   - wal_up: MIDASratioplot_fig.m 冒頭の questdlg「長期荷重の木部材の
     許容応力度は？」の引数化。長期=1.0 / 中長期(積雪)=1.3 (既定は長期)。
   - w_al = W_AL表の1行 [Fc Ft Fby Fs Fbz ...] (基準強度 N/mm2)。
@@ -458,7 +464,7 @@ def W_SB_analysis(sectionsize, length, stress, timecase, w_al, section_no,
     Zx = BSB([D, B], 6)
 
     # 長短期設定
-    if timecase > 10:  # 短期
+    if timecase > 10 and not 900 <= timecase < 1000:  # 短期
         timecase = 2
         timecase2 = 1.0
     elif timecase == 1:
@@ -471,7 +477,7 @@ def W_SB_analysis(sectionsize, length, stress, timecase, w_al, section_no,
     elif timecase == 9:  # 中長期
         timecase = 1
         timecase2 = 1.3
-    elif timecase == 10:  # 中短期
+    elif timecase == 10 or 900 <= timecase < 1000:  # 中短期
         timecase = 2
         timecase2 = 0.8
     else:
@@ -580,7 +586,7 @@ def W_SR_analysis(sectionsize, length, stress, timecase, w_al, section_no,
     Zx = BSR(sectionsize, 6)
 
     # 長短期設定
-    if timecase > 10:  # 短期
+    if timecase > 10 and not 900 <= timecase < 1000:  # 短期
         timecase = 2
         timecase2 = 1.0
     elif timecase == 1:
@@ -593,7 +599,7 @@ def W_SR_analysis(sectionsize, length, stress, timecase, w_al, section_no,
     elif timecase == 9:  # 中長期
         timecase = 1
         timecase2 = 1.3
-    elif timecase == 10:  # 中短期
+    elif timecase == 10 or 900 <= timecase < 1000:  # 中短期
         timecase = 2
         timecase2 = 0.8
     else:
@@ -721,7 +727,7 @@ def W_SB_analysis_text(sectionsize, length, stress, timecase, w_al, ele_no,
     text.append('角材サイズ：■-' + n2s(sectionsize[0]) + 'x' + n2s(sectionsize[1]))
 
     # 長短期設定
-    if timecase > 10:
+    if timecase > 10 and not 900 <= timecase < 1000:  # 短期
         timecase = 2
         timecase2 = 1.0
         t_case = '短期'
@@ -738,7 +744,7 @@ def W_SB_analysis_text(sectionsize, length, stress, timecase, w_al, ele_no,
         timecase = 1
         timecase2 = 1.3
         t_case = '中長期'
-    elif timecase == 10:  # 中短期
+    elif timecase == 10 or 900 <= timecase < 1000:  # 中短期
         timecase = 2
         timecase2 = 0.8
         t_case = '中短期'
@@ -981,7 +987,7 @@ def W_SR_analysis_text(sectionsize, length, stress, timecase, w_al, ele_no,
     text.append('丸材サイズ：●-φ' + n2s(sectionsize[0]))
 
     # 長短期設定
-    if timecase > 10:
+    if timecase > 10 and not 900 <= timecase < 1000:  # 短期
         timecase = 2
         timecase2 = 1.0
         t_case = '短期'
@@ -998,7 +1004,7 @@ def W_SR_analysis_text(sectionsize, length, stress, timecase, w_al, ele_no,
         timecase = 1
         timecase2 = 1.3
         t_case = '中長期'
-    elif timecase == 10:  # 中短期
+    elif timecase == 10 or 900 <= timecase < 1000:  # 中短期
         timecase = 2
         timecase2 = 0.8
         t_case = '中短期'
@@ -1234,7 +1240,7 @@ def W_TSR_analysis(sectionsize, stress, timecase, SN):
     Fx2 = stress[:, 1] * 10 ** 3  # 軸力[N]
 
     # 長短期設定
-    if timecase > 10:  # 短期
+    if timecase > 10 and not 900 <= timecase < 1000:  # 短期
         timecase = 2
         timecase2 = 1.0
     elif timecase == 1:  # 長期
@@ -1243,7 +1249,7 @@ def W_TSR_analysis(sectionsize, stress, timecase, SN):
     elif timecase == 9:  # 中長期
         timecase = 1
         timecase2 = 1.3
-    elif timecase == 10:  # 中短期
+    elif timecase == 10 or 900 <= timecase < 1000:  # 中短期
         timecase = 2
         timecase2 = 0.8
     else:
@@ -1398,8 +1404,11 @@ def W_truss_ratio_analysis(stress, timecase, ele_no, maxratios,
         maxratios_text.append('壁倍率：' + n2s(w_panel_co[AL_index, 1], '%15.1f')
                               + '倍')
 
-        # 長短期設定
-        if timecase >= 10:
+        # 長短期設定 (壁倍率検定の許容せん断力は長短期同値の原典仕様。
+        # 中短期(timecase 10/900番台)も耐力は短期のままだが表記のみ区別)
+        if timecase == 10 or 900 <= timecase < 1000:
+            t_case = '中短期'
+        elif timecase >= 10:
             t_case = '短期'
         elif timecase == 1:
             t_case = '長期'

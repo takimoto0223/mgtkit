@@ -1,0 +1,301 @@
+<!-- S露出柱脚タブ: 入力欄の説明図 (_tab_colbase.html から include)。
+     図中の名称は仕様表の見出し (static/colbase.js の CB_COLS) と同じ語に
+     そろえてある。補助線は実線、ボルト芯は一点鎖線、破線はコーン破壊面と
+     孔のみ。引張側の列は実線の角丸枠。 -->
+<details class="adv cbfig" id="cb_fig" open>
+  <summary>入力欄の説明図 (仕様表の各列が指す寸法)</summary>
+  <style>
+    .cbfig .figs { display: flex; flex-wrap: wrap; gap: 12px 18px;
+      margin: 8px 0 4px; }
+    .cbfig figure { margin: 0; }
+    .cbfig figcaption { font-size: 12px; color: #555; margin-top: 2px;
+      line-height: 1.5; }
+    .cbfig svg { display: block; background: #fff; border: 1px solid #dde;
+      border-radius: 4px; }
+    .cbfig svg text { font-family: "Yu Gothic UI", "Meiryo", sans-serif;
+      font-size: 12px; fill: #234; }
+    .cbfig svg .dim { stroke: #2b4a6f; stroke-width: 1; fill: none; }
+    .cbfig svg .ext { stroke: #2b4a6f; stroke-width: 0.8; fill: none; }
+    .cbfig svg .ctr { stroke: #707d90; stroke-width: 0.8; fill: none;
+      stroke-dasharray: 8 2 2 2; }
+    .cbfig svg .dimt { fill: #2b4a6f; }
+    .cbfig svg .acc { fill: #b95d18; }
+    .cbfig svg .sub { fill: #667; }
+    .cbfig svg .ttl { font-weight: bold; font-size: 13px; }
+  </style>
+  <div class="figs">
+
+  <!-- ===== 平面図 ===== -->
+  <figure style="max-width:470px">
+  <svg width="470" height="420" viewBox="0 0 470 420"
+       role="img" aria-label="柱脚の平面図">
+    <defs>
+      <marker id="cbArr" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#2b4a6f"/>
+      </marker>
+    </defs>
+    <text class="ttl" x="10" y="20">平面図</text>
+    <!-- 基礎柱形 -->
+    <rect x="70" y="40" width="270" height="270" fill="#eef1f5"
+          stroke="#8a97a8" stroke-width="1.2"/>
+    <!-- ベースプレート -->
+    <rect x="107.5" y="77.5" width="195" height="195" fill="#d7e0ea"
+          stroke="#2b4a6f" stroke-width="1.4"/>
+    <!-- 柱 (H形、せいがH方向) -->
+    <g fill="#8fa3ba" stroke="#2b4a6f" stroke-width="1">
+      <rect x="145" y="145" width="7" height="60"/>
+      <rect x="258" y="145" width="7" height="60"/>
+      <rect x="152" y="172" width="106" height="6"/>
+    </g>
+    <!-- 引張側の列 (H方向: 右の縦列 / B方向: 上の横列) -->
+    <g fill="none" stroke="#b95d18" stroke-width="1.4">
+      <rect x="268" y="88" width="24" height="174" rx="6"/>
+      <rect x="118" y="88" width="174" height="24" rx="6"/>
+    </g>
+    <!-- アンカーボルト (全8本) -->
+    <g stroke="#234" stroke-width="1" fill="#fff">
+      <circle cx="130" cy="175" r="6"/>
+      <circle cx="130" cy="250" r="6"/>
+      <circle cx="205" cy="250" r="6"/>
+    </g>
+    <g stroke="#b95d18" stroke-width="1.2" fill="#f6dcc6">
+      <circle cx="130" cy="100" r="6"/>
+      <circle cx="205" cy="100" r="6"/>
+      <circle cx="280" cy="100" r="6"/>
+      <circle cx="280" cy="175" r="6"/>
+      <circle cx="280" cy="250" r="6"/>
+    </g>
+    <!-- 孔径 (1本を代表に) -->
+    <circle cx="205" cy="250" r="9" fill="none" stroke="#2b4a6f"
+            stroke-dasharray="2 2"/>
+    <line x1="211" y1="257" x2="236" y2="290" stroke="#2b4a6f"
+          stroke-width="0.8"/>
+    <circle cx="211" cy="257" r="1.5" fill="#2b4a6f"/>
+    <text class="dimt" x="238" y="294">孔径</text>
+    <!-- 全本数 -->
+    <text x="352" y="36">全本数 = 全ボルト</text>
+    <text class="sub" x="352" y="52">(例: 8本)</text>
+    <!-- 引張側本数 H -->
+    <line x1="292" y1="210" x2="350" y2="217" stroke="#b95d18"
+          stroke-width="0.8"/>
+    <text class="acc" x="352" y="222">引張側本数H</text>
+    <text class="sub" x="352" y="238">(例: 右の列 3本)</text>
+    <!-- 引張側本数 B -->
+    <line x1="150" y1="88" x2="150" y2="37" stroke="#b95d18"
+          stroke-width="0.8"/>
+    <text class="acc" x="112" y="33">引張側本数B</text>
+    <text class="sub" x="186" y="33">(例: 上の列 3本)</text>
+
+    <!-- 縁〜芯 H (上、短い寸法は文字を外へ) -->
+    <line class="dim" x1="280" y1="66" x2="302.5" y2="66"/>
+    <line class="ctr" x1="280" y1="94" x2="280" y2="60"/>
+    <line class="ext" x1="302.5" y1="75" x2="302.5" y2="60"/>
+    <path class="dim" d="M277,69 L283,63 M299.5,69 L305.5,63"/>
+    <text class="dimt" x="274" y="70" text-anchor="end">縁〜芯 H</text>
+
+    <!-- 縁〜芯 B (右上) -->
+    <line class="dim" x1="318" y1="77.5" x2="318" y2="100"/>
+    <line class="ctr" x1="286" y1="100" x2="324" y2="100"/>
+    <line class="ext" x1="305" y1="77.5" x2="324" y2="77.5"/>
+    <path class="dim" d="M315,80.5 L321,74.5 M315,103 L321,97"/>
+    <line x1="318" y1="89" x2="350" y2="89" stroke="#2b4a6f"
+          stroke-width="0.8"/>
+    <text class="dimt" x="352" y="93">縁〜芯 B</text>
+
+    <!-- BP せい / 柱形せい (下) -->
+    <line class="dim" x1="107.5" y1="325" x2="302.5" y2="325"/>
+    <line class="ext" x1="107.5" y1="275" x2="107.5" y2="331"/>
+    <line class="ext" x1="302.5" y1="275" x2="302.5" y2="331"/>
+    <path class="dim" d="M104.5,328 L110.5,322 M299.5,328 L305.5,322"/>
+    <text class="dimt" x="205" y="341" text-anchor="middle">BP せい (H方向)</text>
+    <line class="dim" x1="70" y1="360" x2="340" y2="360"/>
+    <line class="ext" x1="70" y1="312" x2="70" y2="366"/>
+    <line class="ext" x1="340" y1="312" x2="340" y2="366"/>
+    <path class="dim" d="M67,363 L73,357 M337,363 L343,357"/>
+    <text class="dimt" x="205" y="376" text-anchor="middle">柱形せい (H方向)</text>
+
+    <!-- BP 幅 / 柱形幅 (左) -->
+    <line class="dim" x1="52" y1="77.5" x2="52" y2="272.5"/>
+    <line class="ext" x1="46" y1="77.5" x2="105" y2="77.5"/>
+    <line class="ext" x1="46" y1="272.5" x2="105" y2="272.5"/>
+    <path class="dim" d="M49,80.5 L55,74.5 M49,275.5 L55,269.5"/>
+    <text class="dimt" transform="translate(46,175) rotate(-90)"
+          text-anchor="middle">BP 幅 (B方向)</text>
+    <line class="dim" x1="24" y1="40" x2="24" y2="310"/>
+    <line class="ext" x1="18" y1="40" x2="68" y2="40"/>
+    <line class="ext" x1="18" y1="310" x2="68" y2="310"/>
+    <path class="dim" d="M21,43 L27,37 M21,313 L27,307"/>
+    <text class="dimt" transform="translate(18,175) rotate(-90)"
+          text-anchor="middle">柱形幅 (B方向)</text>
+
+    <!-- 方向の凡例 (右下) -->
+    <line x1="300" y1="408" x2="340" y2="408" stroke="#2b4a6f"
+          stroke-width="1.4" marker-end="url(#cbArr)"/>
+    <text x="346" y="412">H方向 (柱せい)</text>
+    <line x1="300" y1="408" x2="300" y2="384" stroke="#2b4a6f"
+          stroke-width="1.4" marker-end="url(#cbArr)"/>
+    <text x="306" y="392">B方向</text>
+  </svg>
+  <figcaption>ボルトは BP の外周に等間隔で並ぶものとして扱います。
+    隅のボルトは H・B 両方の引張側の列に数えます。</figcaption>
+  </figure>
+
+  <!-- ===== 断面図 ===== -->
+  <figure style="max-width:470px">
+  <svg width="470" height="420" viewBox="0 0 470 420"
+       role="img" aria-label="柱脚の断面図 (H方向)">
+    <text class="ttl" x="10" y="20">断面図 (H方向)</text>
+    <!-- 基礎梁・基礎柱形 -->
+    <rect x="30" y="240" width="350" height="165" fill="#e8edf4"/>
+    <line x1="30" y1="240" x2="70" y2="240" stroke="#8a97a8"
+          stroke-width="1.2"/>
+    <line x1="340" y1="240" x2="380" y2="240" stroke="#8a97a8"
+          stroke-width="1.2"/>
+    <rect x="70" y="150" width="270" height="90" fill="#eef1f5"/>
+    <path d="M70,240 L70,150 L340,150 L340,240" fill="none"
+          stroke="#8a97a8" stroke-width="1.2"/>
+    <text class="sub" x="336" y="232" text-anchor="end">基礎柱形</text>
+    <text class="sub" x="374" y="396" text-anchor="end">基礎梁</text>
+    <!-- コーン破壊面 (45°) -->
+    <g stroke="#707d90" stroke-width="1" stroke-dasharray="4 3">
+      <line x1="265" y1="346" x2="70" y2="151"/>
+      <line x1="295" y1="346" x2="380" y2="261"/>
+      <line x1="236" y1="346" x2="265" y2="346"/>
+    </g>
+    <path d="M253,346 A12,12 0 0,1 256.5,337.5" fill="none"
+          stroke="#707d90"/>
+    <text class="sub" x="222" y="340">45°</text>
+    <!-- モルタル・BP・柱 -->
+    <rect x="112" y="138" width="186" height="12" fill="#f4f5f7"
+          stroke="#707d90" stroke-width="0.8"/>
+    <text class="sub" x="160" y="147.5" style="font-size:10px">モルタル</text>
+    <rect x="107.5" y="126" width="195" height="12" fill="#d7e0ea"
+          stroke="#2b4a6f" stroke-width="1.4"/>
+    <rect x="145" y="30" width="120" height="96" fill="#dbe3ec"
+          stroke="#2b4a6f" stroke-width="1.2"/>
+    <line x1="152" y1="30" x2="152" y2="126" stroke="#2b4a6f"
+          stroke-width="0.8"/>
+    <line x1="258" y1="30" x2="258" y2="126" stroke="#2b4a6f"
+          stroke-width="0.8"/>
+    <text x="205" y="80" text-anchor="middle">柱</text>
+    <!-- アンカーボルト (左: 圧縮側、右: 引張側) -->
+    <line x1="130" y1="110" x2="130" y2="356" stroke="#234"
+          stroke-width="3"/>
+    <line x1="280" y1="110" x2="280" y2="356" stroke="#b95d18"
+          stroke-width="3"/>
+    <g fill="#234">
+      <rect x="123" y="114" width="14" height="6"/>
+      <rect x="123" y="120" width="14" height="6"/>
+      <rect x="115" y="346" width="30" height="5"/>
+      <rect x="124" y="351" width="12" height="6"/>
+    </g>
+    <g fill="#b95d18">
+      <rect x="273" y="114" width="14" height="6"/>
+      <rect x="273" y="120" width="14" height="6"/>
+      <rect x="265" y="346" width="30" height="5"/>
+      <rect x="274" y="351" width="12" height="6"/>
+    </g>
+
+    <!-- BP厚 (引出し) -->
+    <line x1="72" y1="118" x2="108" y2="131" stroke="#2b4a6f"
+          stroke-width="0.8"/>
+    <circle cx="108" cy="131" r="1.5" fill="#2b4a6f"/>
+    <text class="dimt" x="68" y="122" text-anchor="end">BP厚</text>
+    <!-- 柱形立上り高さ (左) -->
+    <line class="dim" x1="50" y1="150" x2="50" y2="240"/>
+    <line class="ext" x1="44" y1="150" x2="68" y2="150"/>
+    <path class="dim" d="M47,153 L53,147 M47,243 L53,237"/>
+    <text class="dimt" transform="translate(44,195) rotate(-90)"
+          text-anchor="middle">柱形立上り高さ</text>
+    <!-- 定着長 la・有効長 lb (右、文字は線の左) -->
+    <line class="dim" x1="402" y1="150" x2="402" y2="346"/>
+    <line class="ext" x1="342" y1="150" x2="408" y2="150"/>
+    <line class="ext" x1="297" y1="346" x2="446" y2="346"/>
+    <path class="dim" d="M399,153 L405,147 M399,349 L405,343"/>
+    <text class="dimt" transform="translate(396,248) rotate(-90)"
+          text-anchor="middle">定着長 la</text>
+    <line class="dim" x1="440" y1="126" x2="440" y2="346"/>
+    <line class="ext" x1="305" y1="126" x2="446" y2="126"/>
+    <path class="dim" d="M437,129 L443,123 M437,349 L443,343"/>
+    <text class="dimt" transform="translate(434,236) rotate(-90)"
+          text-anchor="middle">有効長 lb</text>
+    <!-- 定着金物 Dp (下) -->
+    <line class="dim" x1="265" y1="372" x2="295" y2="372"/>
+    <line class="ext" x1="265" y1="353" x2="265" y2="378"/>
+    <line class="ext" x1="295" y1="353" x2="295" y2="378"/>
+    <path class="dim" d="M262,375 L268,369 M292,375 L298,369"/>
+    <text class="dimt" x="280" y="392" text-anchor="middle">定着金物 Dp</text>
+  </svg>
+  <figcaption>定着長 la は告示1456号の 20d とコーン状破壊の深さに、
+    有効長 lb は回転剛性 KBS (ボルトの伸び) に使います。
+    破線は 45° に広がるコーン状破壊面です。</figcaption>
+  </figure>
+
+  <!-- ===== 定着の形式 ===== -->
+  <figure style="max-width:420px">
+  <svg width="420" height="200" viewBox="0 0 420 200"
+       role="img" aria-label="定着の形式">
+    <text class="ttl" x="10" y="20">定着の形式</text>
+    <text class="sub" x="55" y="36" style="font-size:11px">定着金物 (引張側の列を上から見る)</text>
+    <text class="sub" x="284" y="36" style="font-size:11px">フック (断面)</text>
+    <!-- 個別 -->
+    <g fill="#f6dcc6" stroke="#b95d18" stroke-width="1.2">
+      <rect x="55" y="40" width="30" height="30"/>
+      <rect x="55" y="85" width="30" height="30"/>
+      <rect x="55" y="130" width="30" height="30"/>
+    </g>
+    <g fill="#fff" stroke="#b95d18" stroke-width="1.2">
+      <circle cx="70" cy="55" r="5"/><circle cx="70" cy="100" r="5"/>
+      <circle cx="70" cy="145" r="5"/>
+    </g>
+    <line class="ext" x1="55" y1="162" x2="55" y2="178"/>
+    <line class="ext" x1="85" y1="162" x2="85" y2="178"/>
+    <line class="dim" x1="55" y1="172" x2="85" y2="172"/>
+    <path class="dim" d="M52,175 L58,169 M82,175 L88,169"/>
+    <text class="dimt" x="70" y="192" text-anchor="middle">Dp</text>
+    <text x="100" y="95">個別</text>
+    <text class="sub" x="100" y="111">(Dp角)</text>
+    <!-- 連結 -->
+    <rect x="215" y="40" width="30" height="120" fill="#f6dcc6"
+          stroke="#b95d18" stroke-width="1.2"/>
+    <g fill="#fff" stroke="#b95d18" stroke-width="1.2">
+      <circle cx="230" cy="55" r="5"/><circle cx="230" cy="100" r="5"/>
+      <circle cx="230" cy="145" r="5"/>
+    </g>
+    <line class="ext" x1="215" y1="162" x2="215" y2="178"/>
+    <line class="ext" x1="245" y1="162" x2="245" y2="178"/>
+    <line class="dim" x1="215" y1="172" x2="245" y2="172"/>
+    <path class="dim" d="M212,175 L218,169 M242,175 L248,169"/>
+    <text class="dimt" x="230" y="192" text-anchor="middle">Dp</text>
+    <text x="150" y="95">列を連結</text>
+    <text class="sub" x="150" y="111">(幅 Dp)</text>
+    <!-- フック (断面): ボルト下端を柱形の内側へ 180° に折返し -->
+    <line x1="272" y1="44" x2="272" y2="118" stroke="#8a97a8"
+          stroke-width="0.8"/>
+    <path d="M320,48 L320,140 A16,16 0 0,1 288,140 L288,106" fill="none"
+          stroke="#b95d18" stroke-width="3"/>
+    <text x="334" y="95">フック</text>
+    <text class="sub" x="334" y="111">(180°)</text>
+    <text class="sub" x="334" y="127">(Dp なし)</text>
+  </svg>
+  <figcaption>連結は引張側の列を1枚のアンカープレートでつないだもの
+    (列の両端から Dp/2 延長)。フックはボルト下端を柱形の内側へ
+    180°に折り返したもの (余長 4d 程度)。</figcaption>
+  </figure>
+
+  </div>
+</details>
+<script>
+  // 説明図の開閉状態を覚えておく (閉じた人には次回も閉じて表示)
+  (function () {
+    const d = document.getElementById('cb_fig');
+    try {
+      if (localStorage.getItem('cb_fig_open') === '0') d.open = false;
+    } catch (_e) { /* 保存できない環境では常に開く */ }
+    d.addEventListener('toggle', () => {
+      try { localStorage.setItem('cb_fig_open', d.open ? '1' : '0'); }
+      catch (_e) { /* noop */ }
+    });
+  })();
+</script>

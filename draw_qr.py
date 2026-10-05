@@ -16,6 +16,7 @@
   - 柱脚レベル z_point の列挙 (柱要素の下端Z + 壁要素ベースレベル)
   - pick_coefi (構面の一次式係数)
 """
+import math
 import os
 
 import numpy as np
@@ -461,14 +462,182 @@ def _new_pdfs(out_dir, t0):
 # 層間変形角 (MIDAS_QRplot_fig.m 720-885行の非対話版)
 # ---------------------------------------------------------------------------
 
+def _tex_escape(s):
+    return str(s).rstrip().replace('\\', '').replace('_', '\\_') \
+        .replace('&', '\\&').replace('%', '\\%').replace('#', '\\#')
+
+
+def _story_drift_at(D, rows, dc, x0, y0):
+    """当該層の部材行 rows から剛体床フィットで点 (x0, y0) の層間変形角を返す.
+
+    各部材の層間変形角ベクトル ((上端変位-下端変位)/鉛直長) を剛体床
+    (並進+回転: θx=a-c·y, θy=b+c·x) で最小二乗フィットし、点 (x0,y0) で
+    評価したノルムを返す。評価不能 (有効部材<2など) なら 0.0。
+    dc: load_case_no_defo への1-based位置。
+    """
+    node = np.asarray(D.node, dtype=float)
+    deformation = np.asarray(D.deformation, dtype=float)
+    lci_defo = np.asarray(D.load_case_index_defo, dtype=int).ravel()
+    A = []
+    b = []
+    for r in rows:
+        bi = int(np.atleast_1d(find_index(node[:, 0], r[2]))[0])
+        ti = int(np.atleast_1d(find_index(node[:, 0], r[3]))[0])
+        if bi < 0 or ti < 0:
+            continue
+        L_V = abs(float(node[ti, 3] - node[bi, 3]))
+        if L_V < 1e-9:
+            continue
+        di = int(np.atleast_1d(find_index(
+            deformation[:, 0], node[bi, 0]))[0])
+        ei = int(np.atleast_1d(find_index(
+            deformation[:, 0], node[ti, 0]))[0])
+        if di < 0 or ei < 0:
+            continue
+        di += int(lci_defo[dc - 1])
+        ei += int(lci_defo[dc - 1])
+        tx = (deformation[ei, 2] - deformation[di, 2]) / L_V
+        ty = (deformation[ei, 3] - deformation[di, 3]) / L_V
+        xb, yb = float(node[bi, 1]), float(node[bi, 2])
+        A.append([1.0, 0.0, -yb])
+        b.append(tx)
+        A.append([0.0, 1.0, xb])
+        b.append(ty)
+    if len(b) < 3:
+        return 0.0
+    sol = np.linalg.lstsq(np.asarray(A), np.asarray(b), rcond=None)[0]
+    return float(math.hypot(sol[0] - sol[2] * y0, sol[1] + sol[2] * x0))
+
+
+def drift_textable(D, load_case_name, delta_case, collect_node, case_height,
+                   centers=None, drift_limit=200.0):
+    """層間変形角一覧表のTeX行を組み立てる (13soukan.tex の表形式).
+
+    行形式 (tabular {|c|c|c|c|c|}, 列: 方向/層/最大層間変形角/
+    剛心位置層間変形角/判定):
+      '+KX &8F & 1/1849& 1/2201&OK \\\\ \\cline{2-5}'
+    方向は荷重ケース名、層は上層から下層の順に並べる。
+
+    最大層間変形角 = 当該層の全算定部材の 1/dL の最大 (dL の最小)。
+    剛心位置層間変形角 = 各部材の層間変形角ベクトル ((上端変位-下端変位)/
+    鉛直長) を剛体床 (並進+回転: θx=a-c·y, θy=b+c·x) で最小二乗フィットし
+    剛心位置 (centers) で評価した値。centers が無い場合は '--'。
+    判定 = 最大層間変形角が 1/drift_limit 以下 (dL >= drift_limit) で OK。
+
+    centers: (層数 x 2) 各層の [剛心X, 剛心Y] (calc_qr_center の
+             center[:, 2:4])。None なら剛心位置列は '--'。
+    """
+    collect_node = np.atleast_2d(np.asarray(collect_node, dtype=float))
+    n_story = len(case_height)
+    lines = []
+    for j0, dc in enumerate([int(c) for c in delta_case]):
+        label = _tex_escape(load_case_name[dc - 1])
+        c0 = 4 + 5 * j0
+        first = True
+        for ij in range(n_story, 0, -1):
+            rows = collect_node[collect_node[:, 0] == ij, :]
+            dl = rows[:, c0] if rows.size else np.zeros(0)
+            ok_rows = rows[dl > 0, :]
+            if ok_rows.shape[0] == 0:
+                cell_max = '--'
+                cell_c = '--'
+                judge = '--'
+            else:
+                dl_min = float(np.min(ok_rows[:, c0]))
+                cell_max = '1/%d' % int(round(dl_min))
+                judge = 'OK' if dl_min >= float(drift_limit) else 'NG'
+                cell_c = '--'
+                if centers is not None and ij - 1 < len(centers):
+                    ang = _story_drift_at(
+                        D, ok_rows, dc,
+                        float(centers[ij - 1][0]),
+                        float(centers[ij - 1][1]))
+                    if ang > 1e-12:
+                        cell_c = '1/%d' % int(round(1.0 / ang))
+            # 方向ブロックの最終行 (最下層) は \hline で締める
+            tail = '\\\\ \\hline' if ij == 1 else '\\\\\\cline{2-5}'
+            lines.append('%s&%dF & %s& %s&%s %s'
+                         % ((label + ' ') if first else '', ij,
+                            cell_max, cell_c, judge, tail))
+            first = False
+    return lines
+
+
+def rigidity_textable(D, kx_dc, ky_dc, collect_node, case_height, gcenters,
+                      rs_low=0.6):
+    """剛性率結果一覧表のTeX行を組み立てる (14hensingousin.tex の表形式).
+
+    行形式 (tabular {|c|c|c|c|c|c|c|}, 列: 階/θx/θy/Rsx/Rsy/Fsx/Fsy):
+      '2F & 1/392& 1/309&1.20&1.10& 1.00  & 1.00 \\\\ \\hline'
+    層は上層から下層の順。
+
+    層間変形角 θx/θy は各層の重心位置の値 (剛体床フィット、
+    _story_drift_at 参照)。kx_dc/ky_dc は X/Y方向の地震力ケースの
+    load_case_no_defo への1-based位置。
+    剛性率 Rs = 各層の剛性 (1/θ) / 全層平均 (令82条の6)。
+    形状係数 Fs = 1.0 (Rs >= rs_low) / 2 - Rs/rs_low (Rs < rs_low)。
+    gcenters: (層数 x 2) 各層の [重心X, 重心Y] (calc_qr_center の
+              center[:, 0:2])。評価不能な層は '--'。
+    """
+    collect_node = np.atleast_2d(np.asarray(collect_node, dtype=float))
+    n_story = len(case_height)
+    rs = np.zeros((n_story, 2))
+    for ij in range(1, n_story + 1):
+        rows = collect_node[collect_node[:, 0] == ij, :]
+        if rows.shape[0] == 0 or ij - 1 >= len(gcenters):
+            continue
+        x0 = float(gcenters[ij - 1][0])
+        y0 = float(gcenters[ij - 1][1])
+        for k, dcv in enumerate((kx_dc, ky_dc)):
+            ang = _story_drift_at(D, rows, int(dcv), x0, y0)
+            rs[ij - 1, k] = (1.0 / ang) if ang > 1e-12 else 0.0
+
+    Rs = np.zeros((n_story, 2))
+    for k in range(2):
+        valid = rs[:, k] > 0
+        mean = float(np.mean(rs[valid, k])) if np.any(valid) else 0.0
+        if mean > 0:
+            Rs[:, k] = rs[:, k] / mean
+
+    lines = []
+    for ij in range(n_story, 0, -1):
+        cells = []
+        for k in range(2):
+            cells.append('1/%d' % int(round(rs[ij - 1, k]))
+                         if rs[ij - 1, k] > 0 else '--')
+        for k in range(2):
+            cells.append('%.2f' % Rs[ij - 1, k]
+                         if rs[ij - 1, k] > 0 else '--')
+        for k in range(2):
+            if rs[ij - 1, k] > 0:
+                r0 = Rs[ij - 1, k]
+                fs = 1.0 if r0 >= rs_low else 2.0 - r0 / rs_low
+                cells.append('%.2f' % fs)
+            else:
+                cells.append('--')
+        lines.append('%dF & %s& %s&%s&%s& %s  & %s \\\\\\hline'
+                     % tuple([ij] + cells))
+    return lines
+
+
 def plot_qr_drift(D, out_dir, load_case_name, delta_case, axes_idx,
                   z_point, case_height, scope='all', calc_groups=None,
                   mergins=(3.0, 3.0, 3.0, 5.0), fontsize=(3, 5, 5, 7, 5),
-                  paper_orient=2, paper_size=4, limit_sec_no=9000.0):
-    """層間変形角図PDFの一括生成. 戻り値: 生成PDFパスのlist.
+                  paper_orient=2, paper_size=4, limit_sec_no=9000.0,
+                  centers=None, drift_limit=200.0,
+                  gcenters=None, rigidity_cases=None):
+    """層間変形角図PDFの一括生成.
+
+    戻り値: (生成PDFパスのlist, 層間変形角一覧表TeX行list,
+             剛性率結果一覧表TeX行list)
 
     delta_case: load_case_no_defo への1-based位置リスト
     case_height: 層ごとの z_point 1-based index列 (stories_to_case_height)
+    centers: 各層の剛心 [X, Y] (剛心位置層間変形角の評価用、省略可)
+    gcenters: 各層の重心 [X, Y] (剛性率表の評価用、省略可)
+    rigidity_cases: (kx_dc, ky_dc) X/Y方向地震ケースの load_case_no_defo
+                    への1-based位置。gcenters と両方あるときのみ剛性率表を
+                    出力する。
     """
     from .qr_center import pick_sheardrift, figure_drift
     os.makedirs(out_dir, exist_ok=True)
@@ -513,36 +682,171 @@ def plot_qr_drift(D, out_dir, load_case_name, delta_case, axes_idx,
                 fig_no, case_height[ij - 1], axis_name_select,
                 axis_element_select, axis_node_select, axis_plot_coefi,
                 element, limit_sec_no, out_dir=out_dir)
-    return _new_pdfs(out_dir, _t0)
+    tex_lines = drift_textable(D, load_case_name, delta_case, collect_node,
+                               case_height, centers=centers,
+                               drift_limit=drift_limit)
+    rs_lines = []
+    if gcenters is not None and rigidity_cases is not None:
+        rs_lines = rigidity_textable(D, rigidity_cases[0], rigidity_cases[1],
+                                     collect_node, case_height, gcenters)
+    return _new_pdfs(out_dir, _t0), tex_lines, rs_lines
 
 
 # ---------------------------------------------------------------------------
 # 重心・剛心・偏心率 (MIDAS_QRplot_fig.m 890-1219行の非対話版)
 # ---------------------------------------------------------------------------
 
-def plot_qr_center(D, out_dir, load_case_name, N_case, KX_case, KY_case,
-                   axes_idx, z_point, case_height, scope='all',
-                   calc_groups=None, plate_up=1.0,
-                   mergins=(3.0, 3.0, 3.0, 5.0), fontsize=(3, 5, 5, 7, 5),
-                   axisname_location=1.7, line_location=1.5,
-                   paper_orient=2, paper_size=4, limit_sec_no=9000.0,
-                   k_mode='fem', brace_baisu=None, thickness=None):
-    """重心・剛心・偏心率の図+表の一括生成.
+_K_SENTINEL = 99999999999999.0  # qr_center: delta==0 のときの剛性表示値
 
-    N_case/KX_case/KY_case: load_case_no_defo への1-based位置 (スカラ)
-    k_mode: 'fem'   = 原典どおり各部材の Q/δ から剛性を評価
-            'baisu' = 壁倍率×壁長で剛性を評価 (板=厚み値が倍率、
-                      ブレース=brace_baisu {断面番号: 倍率}。
-                      deformation・plate_stress 不要)
-    戻り値: (pdf_paths, table_rows, tex_lines)
-      table_rows: [層, gx, gy, lx, ly, KR, rex, rey, Rex, Rey, Fex, Fey]
-    NOTE: plate_up は原典では板要素応力の読込直後に尋ねるが割増の適用箇所は
-          figure_rekr 内には無い (板剛性は変形のみ使用)。互換のため受けるが
-          未使用 (原典どおり)。
+
+def _merge_plate_walls_display(collect_node, node2, plate, node_orig):
+    """板壁を図の表示用に1本へまとめる (偏心率の計算値には影響しない).
+
+    collect_node の板要素行 (2列目の要素番号が plate 表にあるもの) の
+    下辺を求め、同一直線上で端点節点を共有して連続するものをグループ化し
+    剛性値 (5列目以降) を合算した1行へ置き換える。代表節点は壁下辺の
+    両端点に置いた表示用節点 (node2 末尾へ追加) を指すため、図では
+    壁全長の線+1注記として描かれる (せん断力分担図の _plate_picks_merge
+    と同じ考え方の表示専用マージ。qr_center / qr_baisu 両方式の
+    collect_node に対応)。
+
+    戻り値: (collect_node_disp, node2_disp)
     """
-    from .qr_center import (figure_rekr, wg_center, kr_re, calc_REXY,
-                            textable_REXY, figure_w_center, figure_g_center)
-    os.makedirs(out_dir, exist_ok=True)
+    collect_node = np.atleast_2d(np.asarray(collect_node, dtype=float))
+    node2 = np.atleast_2d(np.asarray(node2, dtype=float))
+    if plate is None or np.size(plate) == 0 or collect_node.shape[0] == 0:
+        return collect_node, node2
+    plate = np.atleast_2d(np.asarray(plate, dtype=float))
+    node_orig = np.atleast_2d(np.asarray(node_orig, dtype=float))
+    pos = {int(r[0]): (float(r[1]), float(r[2]), float(r[3]))
+           for r in node_orig}
+    tol = 1e-6
+
+    # 板要素番号 → 下辺の両端点 (最下端の2節点)。取れない板は None。
+    edge = {}
+    for r in plate:
+        nds = [int(v) for v in r[3:7] if int(v) > 0]
+        pts = [pos[n] for n in nds if n in pos]
+        if len(pts) < 3:
+            edge[int(r[0])] = None
+            continue
+        zmin = min(p[2] for p in pts)
+        low = [p for p in pts if abs(p[2] - zmin) <= 1e-3]
+        edge[int(r[0])] = (low[0], low[1]) if len(low) == 2 else None
+
+    nod2pos = {int(r[0]): (float(r[1]), float(r[2])) for r in node2}
+    keep_rows = []
+    seg_rows = []   # (行, (x1,y1), (x2,y2), z下端)
+    for row in collect_node:
+        e = edge.get(int(row[1]))
+        if e is not None:
+            # 誤マージ防止: 行の代表節点(下端)が板下辺の中点付近にあること
+            # (壁IDと板要素番号の衝突や非矩形板はマージせずそのまま表示)
+            mid = ((e[0][0] + e[1][0]) / 2.0, (e[0][1] + e[1][1]) / 2.0)
+            rp = nod2pos.get(int(row[2]))
+            if rp is None or math.hypot(rp[0] - mid[0],
+                                        rp[1] - mid[1]) > 1e-3:
+                e = None
+        if e is None:
+            keep_rows.append(row)
+        else:
+            seg_rows.append((row, (e[0][0], e[0][1]), (e[1][0], e[1][1]),
+                             e[0][2]))
+
+    # レベルごとに 平行+端点共有 でグループ化 (union-find)
+    n = len(seg_rows)
+    parent = list(range(n))
+
+    def _find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for a in range(n):
+        row_a, a1, a2, _za = seg_rows[a]
+        da = (a2[0] - a1[0], a2[1] - a1[1])
+        la = math.hypot(da[0], da[1])
+        for b in range(a + 1, n):
+            row_b, b1, b2, _zb = seg_rows[b]
+            if row_a[0] != row_b[0]:
+                continue  # 別レベル
+            db = (b2[0] - b1[0], b2[1] - b1[1])
+            lb = math.hypot(db[0], db[1])
+            if abs(da[0] * db[1] - da[1] * db[0]) > tol * max(la * lb, tol):
+                continue  # 平行でない
+            share = any(abs(pa[0] - pb[0]) <= tol
+                        and abs(pa[1] - pb[1]) <= tol
+                        for pa in (a1, a2) for pb in (b1, b2))
+            if share:
+                parent[_find(a)] = _find(b)
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+
+    next_no = float(np.max(node2[:, 0])) if node2.size else 0.0
+    new_nodes = []
+    merged_rows = []
+    for idxs in groups.values():
+        rows = [seg_rows[i][0] for i in idxs]
+        pts = []
+        for i in idxs:
+            pts.extend([seg_rows[i][1], seg_rows[i][2]])
+        z_lo = min(seg_rows[i][3] for i in idxs)
+        # 方向へ射影して壁全長の両端点を取る
+        p0 = pts[0]
+        dvec = None
+        for i in idxs:
+            s1, s2 = seg_rows[i][1], seg_rows[i][2]
+            d = (s2[0] - s1[0], s2[1] - s1[1])
+            if math.hypot(d[0], d[1]) > tol:
+                dvec = d
+                break
+        if dvec is None:
+            dvec = (1.0, 0.0)
+        tvals = [(pt[0] - p0[0]) * dvec[0] + (pt[1] - p0[1]) * dvec[1]
+                 for pt in pts]
+        pmin = pts[int(np.argmin(tvals))]
+        pmax = pts[int(np.argmax(tvals))]
+        next_no += 1
+        n1 = next_no
+        new_nodes.append([n1, pmin[0], pmin[1], z_lo])
+        next_no += 1
+        n2 = next_no
+        new_nodes.append([n2, pmax[0], pmax[1], z_lo])
+        mrow = np.array(rows[0], dtype=float).copy()
+        mrow[1] = min(float(r[1]) for r in rows)
+        mrow[2] = n1
+        mrow[3] = n2
+        for c in range(4, collect_node.shape[1]):
+            vals = [float(r[c]) for r in rows]
+            if any(v >= _K_SENTINEL * 0.99 for v in vals):
+                mrow[c] = _K_SENTINEL
+            else:
+                mrow[c] = sum(vals)
+        merged_rows.append(mrow)
+
+    out_rows = keep_rows + merged_rows
+    collect_node_disp = (np.vstack(out_rows) if out_rows
+                         else np.zeros((0, collect_node.shape[1])))
+    node2_disp = (np.vstack((node2, np.asarray(new_nodes, dtype=float)))
+                  if new_nodes else node2)
+    return collect_node_disp, node2_disp
+
+
+def calc_qr_center(D, load_case_name, N_case, KX_case, KY_case,
+                   z_point, case_height, scope='all', calc_groups=None,
+                   limit_sec_no=9000.0, k_mode='fem', brace_baisu=None,
+                   thickness=None):
+    """重心・剛心・偏心率の計算部 (plot_qr_center の図生成を除いた前半).
+
+    戻り値: (collect_node, node2, center, kr, re, element,
+             KX_case, KY_case)
+      center: (層数 x 4) [重心X, 重心Y, 剛心X, 剛心Y]
+      KX_case/KY_case: baisu方式では N_case へ読み替えた値を返す
+    """
+    from .qr_center import figure_rekr, wg_center, kr_re
     if k_mode != 'baisu' and not np.size(D.deformation):
         raise ValueError('偏心率 (Q/δ方式) には deformation ファイルの'
                          '入力が必要です。')
@@ -553,9 +857,6 @@ def plot_qr_center(D, out_dir, load_case_name, N_case, KX_case, KY_case,
 
     element = (D.element if scope != 'group'
                else _select_element(D, calc_groups))
-    (axis_plot_coefi, axis_name_select, axis_element_select,
-     axis_node_select) = pick_coefi(axes_idx, D.node, D.axis_node,
-                                    D.axis_name, D.axis_element)
 
     if k_mode == 'baisu':
         from .qr_baisu import figure_rekr_baisu
@@ -604,6 +905,42 @@ def plot_qr_center(D, out_dir, load_case_name, N_case, KX_case, KY_case,
                            center[ii - 1, :])
         kr[ii - 1, 0] = kr_i
         re[ii - 1, :] = re_i
+    return (collect_node, node2, center, kr, re, element,
+            KX_case, KY_case)
+
+
+def plot_qr_center(D, out_dir, load_case_name, N_case, KX_case, KY_case,
+                   axes_idx, z_point, case_height, scope='all',
+                   calc_groups=None, plate_up=1.0,
+                   mergins=(3.0, 3.0, 3.0, 5.0), fontsize=(3, 5, 5, 7, 5),
+                   axisname_location=1.7, line_location=1.5,
+                   paper_orient=2, paper_size=4, limit_sec_no=9000.0,
+                   k_mode='fem', brace_baisu=None, thickness=None):
+    """重心・剛心・偏心率の図+表の一括生成.
+
+    N_case/KX_case/KY_case: load_case_no_defo への1-based位置 (スカラ)
+    k_mode: 'fem'   = 原典どおり各部材の Q/δ から剛性を評価
+            'baisu' = 壁倍率×壁長で剛性を評価 (板=厚み値が倍率、
+                      ブレース=brace_baisu {断面番号: 倍率}。
+                      deformation・plate_stress 不要)
+    戻り値: (pdf_paths, table_rows, tex_lines)
+      table_rows: [層, gx, gy, lx, ly, KR, rex, rey, Rex, Rey, Fex, Fey]
+    NOTE: plate_up は原典では板要素応力の読込直後に尋ねるが割増の適用箇所は
+          figure_rekr 内には無い (板剛性は変形のみ使用)。互換のため受けるが
+          未使用 (原典どおり)。
+    """
+    from .qr_center import (calc_REXY, textable_REXY, figure_w_center,
+                            figure_g_center)
+    os.makedirs(out_dir, exist_ok=True)
+    (collect_node, node2, center, kr, re, element,
+     KX_case, KY_case) = calc_qr_center(
+        D, load_case_name, N_case, KX_case, KY_case, z_point, case_height,
+        scope=scope, calc_groups=calc_groups, limit_sec_no=limit_sec_no,
+        k_mode=k_mode, brace_baisu=brace_baisu, thickness=thickness)
+    (axis_plot_coefi, axis_name_select, axis_element_select,
+     axis_node_select) = pick_coefi(axes_idx, D.node, D.axis_node,
+                                    D.axis_name, D.axis_element)
+    n_story = len(case_height)
     REXY = np.atleast_2d(calc_REXY(center, re))
     tex_lines = textable_REXY(case_height, kr, re, center, REXY)
 
@@ -619,46 +956,61 @@ def plot_qr_center(D, out_dir, load_case_name, N_case, KX_case, KY_case,
                      + ['%.3f' % v for v in REXY[ii, :]]
                      + ['%.3f' % v for v in FEXY[ii, :]])
 
+    # 図の表示用: 分割された板壁を1本へまとめる (偏心率の計算値には無関係)
+    collect_node_disp, node2_disp = _merge_plate_walls_display(
+        collect_node, node2, D.plate, D.node)
+
     mL, mR, mT, mB = [float(v) for v in mergins]
     f_s, f_d, f_a, f_t, f_re = [float(v) for v in fontsize]
+    # ファイル名: 名前ソートで 軸力図→剛心X→剛心Y (各レベル昇順) に並ぶよう
+    # 「1_軸力図_01F_...」形式にする
+    from .draw_model import _safe_name
+    _cn = [str(s).rstrip() for s in load_case_name]
+    name_N = _safe_name(_cn[int(np.atleast_1d(N_case)[0]) - 1])
+    name_KX = _safe_name(_cn[int(np.atleast_1d(KX_case)[0]) - 1])
+    name_KY = _safe_name(_cn[int(np.atleast_1d(KY_case)[0]) - 1])
     import time as _time
     _t0 = _time.time()
     for ii in range(1, n_story + 1):
-        pick_id = np.where(collect_node[:, 0] - ii == 0)[0]
-        collect_node2 = collect_node[pick_id, :]
+        pick_id = np.where(collect_node_disp[:, 0] - ii == 0)[0]
+        collect_node2 = collect_node_disp[pick_id, :]
         if not collect_node2.shape[0]:
             print('注意: 層%d に偏心率の算定対象部材がありません' % ii)
             continue
-        on_idx = np.atleast_1d(find_index(node2[:, 0], collect_node2[:, 2]))
-        plotline = node2[on_idx[on_idx >= 0].astype(int), 1:4]
+        on_idx = np.atleast_1d(find_index(node2_disp[:, 0],
+                                          collect_node2[:, 2]))
+        plotline = node2_disp[on_idx[on_idx >= 0].astype(int), 1:4]
         z_sel = np.asarray(z_point, dtype=float)[
             [i - 1 for i in case_height[ii - 1]]]
         # 重心 (plot_no=5)
         figure_w_center(
             f_s, element, mL, mR, mT, mB, axisname_location, line_location,
-            f_d, f_a, f_t, load_case_name, collect_node2, node2,
+            f_d, f_a, f_t, load_case_name, collect_node2, node2_disp,
             plotline[:, 0], plotline[:, 1], N_case, z_sel,
             paper_orient, paper_size, 5, center[ii - 1, :],
             axis_name_select, axis_element_select, axis_node_select,
-            axis_plot_coefi, limit_sec_no, out_dir=out_dir)
+            axis_plot_coefi, limit_sec_no, out_dir=out_dir,
+            out_name='1_軸力図_%02dF_%s.pdf' % (ii, name_N))
         # X方向剛心 (plot_no=6, xy=1)
         figure_g_center(
             f_s, element, mL, mR, mT, mB, axisname_location, line_location,
-            f_d, f_a, f_t, load_case_name, collect_node2, node2,
+            f_d, f_a, f_t, load_case_name, collect_node2, node2_disp,
             plotline[:, 0], plotline[:, 1], KX_case, z_sel,
             paper_orient, paper_size, 6, center[ii - 1, :],
             kr[ii - 1, :], re[ii - 1, :], REXY[ii - 1, :], 1,
             axis_name_select, axis_element_select, axis_node_select,
-            axis_plot_coefi, limit_sec_no, out_dir=out_dir)
+            axis_plot_coefi, limit_sec_no, out_dir=out_dir,
+            out_name='2_剛心X_%02dF_%s.pdf' % (ii, name_KX))
         # Y方向剛心 (plot_no=7, xy=2)
         figure_g_center(
             f_s, element, mL, mR, mT, mB, axisname_location, line_location,
-            f_d, f_a, f_t, load_case_name, collect_node2, node2,
+            f_d, f_a, f_t, load_case_name, collect_node2, node2_disp,
             plotline[:, 0], plotline[:, 1], KY_case, z_sel,
             paper_orient, paper_size, 7, center[ii - 1, :],
             kr[ii - 1, :], re[ii - 1, :], REXY[ii - 1, :], 2,
             axis_name_select, axis_element_select, axis_node_select,
-            axis_plot_coefi, limit_sec_no, out_dir=out_dir)
+            axis_plot_coefi, limit_sec_no, out_dir=out_dir,
+            out_name='3_剛心Y_%02dF_%s.pdf' % (ii, name_KY))
     return _new_pdfs(out_dir, _t0), table, tex_lines
 
 
@@ -730,7 +1082,9 @@ def plot_qr_shear(D, out_dir, load_case_name, case_S, sei_direction,
         D.load_case_index_wall, D.load_case_no_wall, load_case_name,
         paper_orient, paper_size, case_S, z_point, D.link, D.sections,
         case_height, c_no, g_no, w_no, v_no, sei_direction, out_dir,
-        QR_TeX_txt=None, fig_no=100)
+        QR_TeX_txt=None, fig_no=100,
+        plate=D.plate, plate_stress=D.plate_stress,
+        load_case_index_plate=D.load_case_index_plate)
     return pdf_paths, list(tex_lines or [])
 
 

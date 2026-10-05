@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<!-- 積雪後の降雨を考慮した積雪荷重の割増係数（非多雪区域・特定緩勾配屋根部分）
+     出典：平成19年国土交通省告示第594号 第2第三号（平成30年国交告第80号で改正、平成31年1月15日施行）
+           国住指第3699号（平成30年1月15日）技術的助言 1.特定緩勾配屋根部分の考え方／2.割り増し係数αの計算の考え方
+           建築基準法施行令 第86条（垂直積雪量 d、屋根形状係数 μb=√cos(1.5β)）
+     検算：構造ソフト「今月のイチオシ 2018年8月号」 θ=8°, L=29.8m → dr≒0.06 と一致 -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>積雪割増係数計算</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Shippori+Mincho:wght@600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --paper:#f5f6f4; --panel:#fdfdfb; --ink:#22262a; --ink2:#5f666d;
+  --line:#d9dddf; --line2:#868f96;
+  --acc:#3d6582; --acc-soft:#e3ebf1; --rain:#4f7f8a;
+  --ok:#2f6b38; --ok-soft:#e4f0e3; --warn:#9c4522; --warn-soft:#f7e8df;
+  --hilite:#eef3f6; --big:#2a4a61;
+  --mono:"IBM Plex Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#191c1f; --panel:#22262a; --ink:#e4e7e9; --ink2:#a0a8ae;
+    --line:#3a4046; --line2:#6b757e;
+    --acc:#8fb3cf; --acc-soft:#2a3540; --rain:#8cbcc6;
+    --ok:#7dbb86; --ok-soft:#24352a; --warn:#e08a63; --warn-soft:#42301f;
+    --hilite:#28323a; --big:#b6d2e8; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#191c1f; --panel:#22262a; --ink:#e4e7e9; --ink2:#a0a8ae;
+  --line:#3a4046; --line2:#6b757e;
+  --acc:#8fb3cf; --acc-soft:#2a3540; --rain:#8cbcc6;
+  --ok:#7dbb86; --ok-soft:#24352a; --warn:#e08a63; --warn-soft:#42301f;
+  --hilite:#28323a; --big:#b6d2e8; color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Noto Sans JP","Yu Gothic UI",sans-serif; font-size:13.5px; line-height:1.65;
+  padding-block:0 48px; padding-inline:20px;
+}
+@media (max-width:600px){ body{padding-inline:16px} }
+header.app{
+  max-width:1240px; margin:0 auto; padding-block:26px 12px;
+  border-bottom:2px solid var(--acc); display:flex; flex-wrap:wrap; gap:6px 24px; align-items:baseline;
+}
+header.app h1{font-family:"Shippori Mincho",serif; font-weight:700; font-size:23px; margin:0; letter-spacing:.05em;}
+header.app .src{color:var(--ink2); font-size:12px;}
+main{max-width:1240px; margin:18px auto 0; display:grid; grid-template-columns:minmax(300px,400px) 1fr; gap:18px; align-items:start;}
+main > .col:first-child{position:sticky; top:12px;}
+@media (max-width:980px){ main{grid-template-columns:1fr} main > .col:first-child{position:static} body{padding-bottom:84px} }
+section.card{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px 16px 16px; min-width:0;}
+section.card h2{font-size:14px; margin:0 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); color:var(--acc); letter-spacing:.14em;}
+section.card h3{font-size:13px; margin:14px 0 6px; color:var(--ink2); font-weight:500;}
+.col{display:flex; flex-direction:column; gap:18px; min-width:0;}
+.row{display:grid; grid-template-columns:9.5em 1fr; gap:6px 10px; align-items:center; margin-bottom:7px;}
+.row label{color:var(--ink2); font-size:12.5px;}
+.row .in{display:flex; align-items:center; gap:6px; min-width:0;}
+.row .unit{color:var(--ink2); font-size:12px; white-space:nowrap;}
+.row .aux{color:var(--ink2); font-size:11.5px; font-family:var(--mono); white-space:nowrap;}
+input[type=text]{font:inherit; font-size:13px; color:var(--ink); background:var(--paper); border:1px solid var(--line2); border-radius:4px; padding:4px 7px; width:100%; min-width:0;}
+input[type=number], select{
+  font:inherit; font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--paper);
+  border:1px solid var(--line2); border-radius:4px; padding:4px 7px; width:100%; min-width:0;
+}
+input[type=number]{max-width:7.5em; text-align:right;}
+select{font-family:inherit;}
+input:focus, select:focus{outline:2px solid var(--acc); outline-offset:1px;}
+.radio{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12.5px;}
+.radio label{color:var(--ink); display:flex; gap:4px; align-items:center; cursor:pointer;}
+.note{font-size:11.5px; color:var(--ink2); margin:4px 0 0;}
+.sub{border-left:3px solid var(--acc-soft); padding-left:10px; margin:6px 0 4px;}
+.sub .row{grid-template-columns:calc(9.5em - 13px) 1fr;}
+input.err{outline:2px solid var(--warn); outline-offset:1px;}
+
+/* 判定 */
+ul.chk{list-style:none; margin:0; padding:0; display:grid; gap:4px;}
+ul.chk li{display:grid; grid-template-columns:1.6em 1fr auto; gap:6px; align-items:baseline; padding:3px 8px; border-radius:4px;}
+ul.chk li .m{font-weight:700; text-align:center;}
+ul.chk li.ok .m{color:var(--ok);}
+ul.chk li.ng{background:var(--warn-soft);}
+ul.chk li.ng .m{color:var(--warn);}
+ul.chk li .v{font-family:var(--mono); font-size:12px; color:var(--ink2); white-space:nowrap;}
+.verdict{margin-top:10px; padding:8px 12px; border-radius:6px; font-weight:500;}
+.verdict.ok{background:var(--ok-soft); color:var(--ok);}
+.verdict.ng{background:var(--hilite); color:var(--ink2);}
+.verdict.err{background:var(--warn-soft); color:var(--warn);}
+
+/* 結果 */
+.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px;}
+.kpi{background:var(--hilite); border-radius:6px; padding:9px 12px;}
+.kpi .k{font-size:11.5px; color:var(--ink2);}
+.kpi .n{font-family:var(--mono); font-size:22px; font-weight:600; color:var(--big); line-height:1.3;}
+.kpi .n small{font-size:12px; font-weight:400; color:var(--ink2); margin-left:3px;}
+.kpi.main{background:var(--acc-soft); outline:1.5px solid var(--acc);}
+
+/* 図 */
+.chart{width:100%; height:auto; display:block;}
+.chart text{font-family:var(--mono); font-size:11px; fill:var(--ink2);}
+.chart .axis{stroke:var(--line2); stroke-width:1;}
+.chart .grid{stroke:var(--line); stroke-width:1;}
+.chart .l10{stroke:var(--rain); stroke-width:2; fill:none; stroke-dasharray:7 4;}
+.chart .l50{stroke:var(--acc); stroke-width:2; fill:none;}
+.chart .lcur{stroke:var(--ink2); stroke-width:1.5; fill:none; stroke-dasharray:5 4;}
+.chart .pt{fill:var(--warn); stroke:var(--panel); stroke-width:2;}
+.chart .lab{font-family:"Noto Sans JP",sans-serif; font-size:11.5px;}
+.chart .halo{paint-order:stroke; stroke:var(--panel); stroke-width:4px; stroke-linejoin:round;}
+@media (max-width:600px){ .chart text, .chart .lab{font-size:20px} }
+.legend{display:flex; flex-wrap:wrap; gap:4px 16px; font-size:12px; color:var(--ink2); margin-top:4px;}
+.legend span::before{content:""; display:inline-block; width:18px; height:0; border-top:2px solid; vertical-align:middle; margin-right:5px;}
+.legend .a::before{border-top:2px dashed var(--rain);}
+.legend .b::before{border-color:var(--acc);}
+.legend .c::before{border-top:1.5px dashed var(--ink2);}
+
+/* 計算書 */
+pre.calc{
+  font-family:var(--mono); font-size:12.5px; line-height:1.75; background:var(--paper); border:1px solid var(--line);
+  border-radius:6px; padding:10px 12px; margin:0; white-space:pre-wrap; word-break:break-word; overflow-x:auto;
+}
+.bar{display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px;}
+.bar h2{margin:0; border:0; padding:0;}
+section.card .bar h2{margin:0; border:0; padding:0;}
+.bar{flex-wrap:wrap;}
+.tools{display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
+.seg{display:inline-flex; border:1px solid var(--line2); border-radius:4px; overflow:hidden;}
+.seg button{font:inherit; font-size:12.5px; padding:4px 12px; border:0; background:var(--panel); color:var(--ink2); cursor:pointer;}
+.seg button + button{border-left:1px solid var(--line2);}
+.seg button[aria-selected="true"]{background:var(--acc-soft); color:var(--acc); font-weight:500;}
+button.btn.ghost{background:var(--panel); color:var(--acc); display:inline-flex; align-items:center; gap:3px;}
+button.btn.ghost:hover{background:var(--hilite); filter:none;}
+button.btn{font:inherit; font-size:12.5px; padding:4px 14px; border:1px solid var(--acc); background:var(--acc); color:var(--panel); border-radius:4px; cursor:pointer;}
+button.btn:hover{filter:brightness(1.1);}
+button:focus-visible{outline:2px solid var(--acc); outline-offset:2px;}
+/* 狭幅時の結果バー */
+.mini{display:none;}
+@media (max-width:980px){
+  .mini{display:flex; position:fixed; left:0; right:0; bottom:0; z-index:5; gap:18px; justify-content:center; align-items:baseline;
+    background:var(--panel); border-top:2px solid var(--acc); padding:8px 16px; font-size:12px; color:var(--ink2);}
+  .mini b{font-family:var(--mono); font-size:18px; color:var(--big); margin-left:4px;}
+}
+table.dr{border-collapse:collapse; font-size:12px; margin-top:6px;}
+table.dr th, table.dr td{border:1px solid var(--line); padding:3px 10px; text-align:center;}
+table.dr th{background:var(--hilite); font-weight:500; color:var(--ink2);}
+table.dr td{font-family:var(--mono);}
+footer{max-width:1240px; margin:18px auto 0; font-size:11.5px; color:var(--ink2);}
+footer li{margin-bottom:2px;}
+</style>
+
+<header class="app">
+  <h1>積雪後の降雨を考慮した積雪荷重の割増係数</h1>
+  <span class="src">平成19年国交告第594号 第2第三号（平成30年国交告第80号改正・平成31年1月15日施行）／ 国住指第3699号</span>
+</header>
+
+<form autocomplete="off" onsubmit="return false">
+<main>
+  <div class="col">
+    <section class="card">
+      <h2>入力</h2>
+      <h3>区域・積雪</h3>
+      <div class="row"><label for="zone">区域</label>
+        <div class="in"><select id="zone">
+          <option value="normal" selected>多雪区域以外</option>
+          <option value="heavy">多雪区域</option>
+        </select></div></div>
+      <div class="row"><label for="dcm">垂直積雪量 d</label>
+        <div class="in"><input id="dcm" type="number" step="1" min="0" value="30"><span class="unit">cm</span></div></div>
+      <div class="row"><label for="w">単位荷重</label>
+        <div class="in"><input id="w" type="number" step="1" min="0" value="20"><span class="unit">N/m²/cm</span></div></div>
+      <div class="row"><label for="slab">屋根版の構造</label>
+        <div class="in"><select id="slab">
+          <option value="light" selected>S造・木造等（RC・SRC以外）</option>
+          <option value="rc">RC造・SRC造</option>
+        </select></div></div>
+
+      <h3>屋根形状（国住指第3699号 2.）</h3>
+      <div class="row"><label for="shape">形状</label>
+        <div class="in"><select id="shape">
+          <option value="gable" selected>切妻・片流れ</option>
+          <option value="m">M形・のこぎり</option>
+          <option value="arc">円弧</option>
+          <option value="mount">山折れ</option>
+          <option value="valley">谷折れ</option>
+        </select></div></div>
+
+      <div id="g-simple" class="sub">
+        <div class="row"><label for="La">水平投影長さ L<sub>a</sub></label>
+          <div class="in"><input id="La" type="number" step="0.1" min="0" value="25"><span class="unit">m</span></div></div>
+        <div class="row" id="r-th"><label for="tha">屋根勾配 θ<sub>a</sub></label>
+          <div class="in"><input id="tha" type="number" step="0.1" min="0" value="2"><span class="unit">°</span><span class="aux" id="tha-aux"></span></div></div>
+        <div class="row" id="r-H" hidden><label for="Ha">最上端〜最下端の高低差</label>
+          <div class="in"><input id="Ha" type="number" step="0.01" min="0" value="2.5"><span class="unit">m</span><span class="aux" id="Ha-aux"></span></div></div>
+        <p class="note" id="simple-note">L<sub>a</sub>：棟から軒先まで（軒の出を含む）。</p>
+      </div>
+
+      <div id="g-fold" class="sub" hidden>
+        <div class="row"><label for="L1">上部（棟側）L<sub>1</sub></label>
+          <div class="in"><input id="L1" type="number" step="0.1" min="0" value="15"><span class="unit">m</span></div></div>
+        <div class="row"><label for="th1">上部勾配 θ<sub>1</sub></label>
+          <div class="in"><input id="th1" type="number" step="0.1" min="0" value="3"><span class="unit">°</span><span class="aux" id="th1-aux"></span></div></div>
+        <div class="row"><label for="L2">下部（軒側）L<sub>2</sub></label>
+          <div class="in"><input id="L2" type="number" step="0.1" min="0" value="8"><span class="unit">m</span></div></div>
+        <div class="row"><label for="th2">下部勾配 θ<sub>2</sub></label>
+          <div class="in"><input id="th2" type="number" step="0.1" min="0" value="10"><span class="unit">°</span><span class="aux" id="th2-aux"></span></div></div>
+        <div class="row"><label>d<sub>r</sub> 算定勾配 θ</label>
+          <div class="radio">
+            <label><input type="radio" name="thmode" value="part" checked><span id="part-lab">θ<sub>1</sub>（上部）</span></label>
+            <label><input type="radio" name="thmode" value="eq">等価勾配 θ<sub>eq</sub></label>
+          </div></div>
+        <p class="note">L<sub>a</sub> = L<sub>1</sub> + L<sub>2</sub>（軒の出を含む）。</p>
+      </div>
+
+      <h3>屋根形状係数（令86条4項）</h3>
+      <div class="row"><label for="mumode">勾配による低減</label>
+        <div class="in"><select id="mumode">
+          <option value="on" selected>行う（μb = √cos(1.5β)）</option>
+          <option value="off">行わない（μb = 1.0）</option>
+        </select></div></div>
+      <div class="row" id="r-beta"><label for="beta">μ<sub>b</sub> 用勾配 β</label>
+        <div class="in"><input id="beta" type="number" step="0.1" min="0" placeholder="自動"><span class="unit">°</span><span class="aux" id="beta-aux"></span></div></div>
+      <p class="note" id="beta-note">空欄のときは d<sub>r</sub> 算定勾配 θ を用いる。μ<sub>b</sub> = √cos(1.5β)（β &gt; 60° で 0）。</p>
+
+      <h3>計算書の表（荷重条件の表に載せる項目）</h3>
+      <div class="row"><label for="t-down">雪下ろし等による低減</label>
+        <div class="in"><input id="t-down" type="text" value="行わない"></div></div>
+      <div class="row"><label for="t-how">垂直積雪深の算定</label>
+        <div class="in"><input id="t-how" type="text" value="条例による"></div></div>
+      <div class="row"><label for="t-rule">参照した条例</label>
+        <div class="in"><input id="t-rule" type="text" value="" placeholder="例：長野県建築基準法施行細則"></div></div>
+      <p class="note">空欄の項目は表に出力しない。</p>
+    </section>
+
+  </div>
+
+  <div class="col">
+    <section class="card">
+      <h2>適用判定（特定緩勾配屋根部分）</h2>
+      <ul class="chk" id="chk"></ul>
+      <div class="verdict" id="verdict"></div>
+    </section>
+
+    <section class="card">
+      <h2>結果</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="k">d<sub>r</sub></div><div class="n" id="o-dr">—</div></div>
+        <div class="kpi"><div class="k">μ<sub>b</sub></div><div class="n" id="o-mu">—</div></div>
+        <div class="kpi main"><div class="k">割増係数 α</div><div class="n" id="o-a">—</div></div>
+        <div class="kpi"><div class="k">積雪荷重 S（割増前 → 後）</div><div class="n" id="o-S">—</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>d<sub>r</sub> と屋根勾配の関係</h2>
+      <svg class="chart" id="chart" viewBox="0 0 640 300" role="img" aria-label="drと屋根勾配の関係"></svg>
+      <div class="legend"><span class="a">L = 10 m</span><span class="b">L ≥ 50 m</span><span class="c" id="lg-cur">L = 25 m（入力値）</span></div>
+    </section>
+
+    <section class="card">
+      <div class="bar"><h2>計算書</h2>
+        <div class="tools">
+          <div class="seg" role="tablist" aria-label="表示形式">
+            <button type="button" role="tab" aria-selected="true" data-view="text">テキスト</button>
+            <button type="button" role="tab" aria-selected="false" data-view="tex">TeX（詳細）</button>
+            <button type="button" role="tab" aria-selected="false" data-view="table">TeX（表）</button>
+          </div>
+          <button type="button" class="btn" id="copy">コピー</button>
+          <button type="button" class="btn ghost" id="dl" title="TeXソース（\input 用の断片）を保存"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>.tex</button>
+        </div>
+      </div>
+      <pre class="calc" id="calc"></pre>
+    </section>
+    <section class="card">
+      <h2>d<sub>r</sub> の表（告示第594号 第2第三号）</h2>
+      <table class="dr">
+        <tr><th>水平投影長さ（m）</th><th>屋根勾配（度）</th><th>d<sub>r</sub>（m）</th></tr>
+        <tr><td rowspan="2">10</td><td>2 以下</td><td>0.05</td></tr>
+        <tr><td>15</td><td>0.01</td></tr>
+        <tr><td rowspan="2">50 以上</td><td>2 以下</td><td>0.14</td></tr>
+        <tr><td>15</td><td>0.03</td></tr>
+      </table>
+      <p class="note">表以外の数値は、長さ・勾配それぞれ直線補間。</p>
+    </section>
+  </div>
+</main>
+</form>
+<div class="mini" aria-live="polite"><span>α<b id="m-a">—</b></span><span>S<b id="m-S">—</b> N/m²</span></div>
+
+<footer>
+  <ul>
+    <li>告示第594号 第2第三号：多雪区域以外で垂直積雪量 0.15 m 以上の区域にある建築物の、屋根版が RC 造・SRC 造でない特定緩勾配屋根部分（最上端から最下端までの水平投影長さ 10 m 以上・勾配 15° 以下）は、令86条の積雪荷重に α を乗じる（α &lt; 1.0 のときは 1.0）。特別な調査・研究による場合はこの限りでない（同号ただし書）。</li>
+    <li>国住指第3699号 1.：折れ屋根は最上端〜最下端を結ぶ直線の勾配・長さで判定し、該当しなくても一部が要件に該当すれば全体を特定緩勾配屋根部分とする（θ<sub>eq</sub> &gt; 15° のときは非該当）。円弧屋根は最上端〜最下端を結ぶ直線で判定。</li>
+    <li>等価勾配 θ<sub>eq</sub> = 1 / ( l<sub>1</sub>²/θ<sub>1</sub> + (2l<sub>1</sub>l<sub>2</sub> + l<sub>2</sub>²)/θ<sub>2</sub> )、l<sub>1</sub> = L<sub>1</sub>/(L<sub>1</sub>+L<sub>2</sub>)、l<sub>2</sub> = L<sub>2</sub>/(L<sub>1</sub>+L<sub>2</sub>)。M形・のこぎり屋根は谷どいの水勾配（桁行方向）による検討は不要。山折れは θ<sub>1</sub>（上部）又は θ<sub>eq</sub>、谷折れは θ<sub>2</sub>（下部）又は θ<sub>eq</sub> を屋根全体の勾配とみなして d<sub>r</sub> を算定（同助言 2. 4)・5)）。</li>
+    <li>割増係数は、谷部・軒先の樋の詰まり防止など適切な維持管理により雨水・融雪水が有効に排水されることが前提（同助言 2.）。</li>
+  </ul>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const rad = d => d * Math.PI / 180;
+const f = (x, n) => Number.isFinite(x) ? x.toFixed(n) : "—";
+const sun = th => th > 0 && th < 90 ? (10 * Math.tan(rad(th))).toFixed(2) + "寸" : "";
+const num = id => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : NaN; };
+
+// 告示第594号 第2第三号の表＋直線補間
+function drAt(L, th){
+  const t = Math.min(Math.max(th, 2), 15);
+  const lerp = (a, b) => a + (b - a) * (t - 2) / 13;
+  const d10 = lerp(0.05, 0.01), d50 = lerp(0.14, 0.03);
+  const Lc = Math.min(Math.max(L, 10), 50);
+  return { d10, d50, dr: d10 + (d50 - d10) * (Lc - 10) / 40, t, Lc };
+}
+const thetaEq = (L1, th1, L2, th2) => {
+  const l1 = L1 / (L1 + L2), l2 = L2 / (L1 + L2);
+  return 1 / (l1 * l1 / th1 + (2 * l1 * l2 + l2 * l2) / th2);
+};
+
+function geometry(){
+  const shape = $("shape").value;
+  const g = { shape };
+  if (shape === "mount" || shape === "valley"){
+    const L1 = num("L1"), th1 = num("th1"), L2 = num("L2"), th2 = num("th2");
+    const La = L1 + L2;
+    const H = L1 * Math.tan(rad(th1)) + L2 * Math.tan(rad(th2));
+    const chord = Math.atan2(H, La) * 180 / Math.PI;
+    const eq = thetaEq(L1, th1, L2, th2);
+    const mode = document.querySelector('input[name=thmode]:checked').value;
+    const partTh = shape === "mount" ? th1 : th2;
+    Object.assign(g, { L1, th1, L2, th2, La, chord, eq, mode,
+      theta: mode === "eq" ? eq : partTh,
+      thetaName: mode === "eq" ? "θeq" : (shape === "mount" ? "θ1" : "θ2") });
+    const chordOK = La >= 10 && chord <= 15;
+    const partOK = (L1 >= 10 && th1 <= 15) || (L2 >= 10 && th2 <= 15);
+    g.applies = (chordOK || partOK) && eq <= 15;
+    g.items = [
+      ["最上端〜最下端の直線：L ≥ 10 m かつ 勾配 ≤ 15°", chordOK || partOK, `L=${f(La,2)}m, ${f(chord,2)}°` + (chordOK ? "" : partOK ? "（一部が該当）" : "")],
+      ["等価勾配 θeq ≤ 15°", eq <= 15, `θeq=${f(eq,2)}°`],
+    ];
+  } else {
+    const La = num("La");
+    let th;
+    if (shape === "arc"){ th = Math.atan2(num("Ha"), La) * 180 / Math.PI; }
+    else th = num("tha");
+    Object.assign(g, { La, theta: th, thetaName: "θa" });
+    g.applies = La >= 10 && th <= 15;
+    g.items = [
+      ["水平投影長さ L ≥ 10 m", La >= 10, `L=${f(La,2)}m`],
+      [shape === "arc" ? "最上端〜最下端の直線の勾配 ≤ 15°" : "屋根勾配 ≤ 15°", th <= 15, `${f(th,2)}°`],
+    ];
+  }
+  return g;
+}
+
+function render(){
+  const shape = $("shape").value;
+  const fold = shape === "mount" || shape === "valley";
+  $("g-simple").hidden = fold; $("g-fold").hidden = !fold;
+  $("r-th").hidden = shape === "arc"; $("r-H").hidden = shape !== "arc";
+  $("part-lab").innerHTML = shape === "valley" ? "θ<sub>2</sub>（下部）" : "θ<sub>1</sub>（上部）";
+  $("simple-note").innerHTML = shape === "m" ? "L<sub>a</sub>：谷（軒）から棟まで1山分（軒の出を含む）。" :
+    shape === "arc" ? "最上端と最下端を結んだ直線の勾配で θ を求める（軒の出を含む）。" :
+    "L<sub>a</sub>：棟から軒先まで（軒の出を含む）。";
+  ["tha","th1","th2"].forEach(id => $(id + "-aux").textContent = sun(num(id)));
+
+  // 入力の完全性チェック（空欄・負値は計算しない）
+  const need = { dcm:"垂直積雪量 d", w:"単位荷重" };
+  if (fold) Object.assign(need, { L1:"L1", th1:"θ1", L2:"L2", th2:"θ2" });
+  else Object.assign(need, shape === "arc" ? { La:"La", Ha:"高低差" } : { La:"La", tha:"θa" });
+  const bad = Object.keys(need).filter(id => !(num(id) >= 0) || (fold && /^th/.test(id) && num(id) === 0));
+  const bv = $("beta").value.trim();
+  if ($("mumode").value === "on" && bv !== "" && !(num("beta") >= 0 && num("beta") <= 90)) { bad.push("beta"); need.beta = "μb 用勾配 β（0〜90°）"; }
+  document.querySelectorAll("input[type=number]").forEach(e => e.classList.toggle("err", bad.includes(e.id)));
+  if (bad.length){ showInvalid("入力不足・不正：" + bad.map(id => need[id]).join("、")); return; }
+
+  const dcm = num("dcm"), d = dcm / 100, w = num("w");
+  const g = geometry();
+  if (shape === "arc") $("Ha-aux").textContent = Number.isFinite(g.theta) ? `θa=${f(g.theta,2)}°` : "";
+  const betaIn = num("beta");
+  const beta = Number.isFinite(betaIn) ? betaIn : g.theta;
+  $("beta-aux").textContent = Number.isFinite(betaIn) ? "" : (Number.isFinite(g.theta) ? `→ ${f(g.theta,2)}°` : "");
+  const muOff = $("mumode").value === "off";
+  $("r-beta").hidden = $("beta-note").hidden = muOff;
+  const mu = muOff ? 1.0 : beta > 60 ? 0 : Math.sqrt(Math.cos(rad(1.5 * beta)));
+
+  const zoneOK = $("zone").value === "normal", dOK = d >= 0.15, slabOK = $("slab").value === "light";
+  const items = [
+    ["多雪区域以外の区域", zoneOK, zoneOK ? "" : "多雪区域"],
+    ["垂直積雪量 d ≥ 15 cm", dOK, `d=${f(dcm,0)}cm`],
+    ["屋根版が RC 造・SRC 造でない", slabOK, slabOK ? "" : "RC・SRC造"],
+    ...g.items,
+  ];
+  $("chk").innerHTML = items.map(([t, ok, v]) =>
+    `<li class="${ok ? "ok" : "ng"}"><span class="m">${ok ? "✓" : "✕"}</span><span>${t}</span><span class="v">${v}</span></li>`).join("");
+  const applies = zoneOK && dOK && slabOK && g.applies;
+  const R = drAt(g.La, g.theta);
+  const muZero = mu <= 0;
+  const aRaw = muZero ? NaN : 0.7 + Math.sqrt(R.dr / (mu * d));
+  const alpha = applies && !muZero ? Math.max(1.0, aRaw) : 1.0;
+  const S0 = w * dcm * mu, S = S0 * alpha;
+  const vd = $("verdict");
+  vd.className = "verdict " + (applies && !muZero ? "ok" : "ng");
+  vd.textContent = !applies ? "非該当 → 割増なし（α = 1.0）"
+    : muZero ? "μb = 0（β > 60°）のため S = 0、割増の対象外"
+    : aRaw < 1.0 ? `特定緩勾配屋根部分に該当（α 計算値 ${f(aRaw,3)} < 1.0 → α = 1.0）`
+    : "特定緩勾配屋根部分に該当 → 割増係数 α を乗じる";
+  $("o-dr").innerHTML = applies ? `${f(R.dr,4)}<small>m</small>` : "—";
+  $("o-mu").textContent = f(mu, 3);
+  $("o-a").textContent = f(alpha, 3);
+  $("o-S").innerHTML = `${f(S0,0)} → ${f(S,0)}<small>N/m²</small>`;
+  $("m-a").textContent = f(alpha, 3); $("m-S").textContent = f(S, 0);
+
+  drawChart(g, R, applies && !muZero);
+  const o = { dcm, d, w, g, beta, betaIn, mu, muOff, R, aRaw, alpha, S0, S, applies: applies && !muZero, muZero, items, zoneOK };
+  out.text = calcText(o); out.tex = texSource(o); out.table = tableTex(o); showCalc();
+}
+
+function showInvalid(msg){
+  $("chk").innerHTML = "";
+  const vd = $("verdict"); vd.className = "verdict err"; vd.textContent = msg;
+  ["o-dr","o-mu","o-a","o-S","m-a","m-S"].forEach(id => $(id).textContent = "—");
+  $("chart").innerHTML = ""; out.text = msg; out.tex = out.table = "% " + msg + "\n"; showCalc();
+  $("beta-aux").textContent = ""; $("Ha-aux").textContent = "";
+}
+
+const out = { text:"", tex:"", table:"", view:"text" };
+function showCalc(){ $("calc").textContent = out[out.view]; }
+
+// ---- 荷重条件の表（既存計算書の table 書式。マーカー行の間が差し替え部分）----
+function tableTex(o){
+  const { g, R } = o, L = [];
+  const esc = s => s.replace(/([%&#_$])/g, "\\$1");
+  const row = (k, v) => `${k} & ${v} \\\\`;
+  const mark = "%%%%%%%%%%%%%%";
+  L.push(T`\def\arraystretch{1.2}`, T`\begin{table}[h]`, T`\hspace{2.0cm}`, T`\begin{tabular}{p{12zw}p{20zw}} `);
+  L.push(row("勾配による低減", o.muOff ? "行わない"
+    : T`行う（$\mu_b=\sqrt{\cos(1.5\beta)}=${f(o.mu,3)}$）`));
+  const down = $("t-down").value.trim();
+  if (down) L.push(row("雪下ろし等による低減", esc(down)));
+  L.push(mark + "↓以下をペースト↓" + mark + "%%%%%%%%%%%SNOW_Tex_txt_SNOW_Tex_txt_SNOW_Tex_txt");
+  const how = $("t-how").value.trim(), rule = $("t-rule").value.trim();
+  if (how) L.push(row("垂直積雪深の算定", esc(how)));
+  if (rule) L.push(row("参照した条例", esc(rule)));
+  L.push(T`&\\`);
+  L.push(row("多雪区域", o.zoneOK ? "該当しない" : "該当する"));
+  L.push(row("垂直積雪深", T`$d=${f(o.dcm,1)}~cm$`));
+  L.push(row("積雪の単位荷重", T`$\rho=${f(o.w,1)}~N/cm/m^2$`));
+  const S0f = o.muOff ? T`d\cdot\rho` : T`\mu_b\cdot d\cdot\rho`;
+  if (o.applies){
+    L.push(row("特定緩勾配屋根部分", T`該当する（$L=${f(g.La,1)}~m$，$\theta=${f(g.theta,1)}^\circ$）`));
+    L.push(row("積雪後の降雨による割増", T`$d_r=${f(R.dr,3)}~m$`));
+    L.push(row("", T`$\alpha=0.7+\sqrt{d_r/(\mu_b\cdot d)}=${f(o.alpha,3)}$`));
+  } else {
+    L.push(row("特定緩勾配屋根部分", "該当しない"));
+    L.push(row("積雪後の降雨による割増", T`$\alpha=1.0$`));
+  }
+  L.push(row("積雪荷重（割増前）", T`$S_0=${S0f}=${f(o.S0/1000,3)}~kN/m^2$`));
+  L.push(T`割増後の積雪荷重 & $S=\alpha\cdot S_0=${f(o.S/1000,3)}~kN/m^2$`);
+  L.push(mark + "↑以上にペースト↑" + mark + "%%%%%%%%%%%SNOW_Tex_txt_SNOW_Tex_txt_SNOW_Tex_txt");
+  L.push(T`\end{tabular}`, T`\end{table}`);
+  return L.join("\n") + "\n";
+}
+
+// ---- TeX ソース（計算書へ \input する断片。jsbook + amsmath + multirow 前提）----
+const T = String.raw;
+function texSource(o){
+  const { g, R } = o, L = [], n = f;
+  const fold = g.shape === "mount" || g.shape === "valley";
+  const shapeName = { gable:"切妻・片流れ屋根", m:"M形・のこぎり屋根", arc:"円弧屋根", mount:"山折れ屋根", valley:"谷折れ屋根" }[g.shape];
+  const thTeX = { "θa":T`\theta_a`, "θ1":T`\theta_1`, "θ2":T`\theta_2`, "θeq":T`\theta_{eq}` }[g.thetaName];
+  // 符号の説明は1符号1行（colbase/tex.py _syms と同じ体裁）
+  const syms = items => [T`\par\noindent\begin{tabular}{@{\hspace{1zw}}l@{\ :\ }p{0.80\linewidth}}`,
+    ...items.map(([a, b]) => a + " & " + b + T` \\`), T`\end{tabular}\par\smallskip`];
+  const tx = t => t.replace(/\b([dL])=([\d.]+)(cm|m)/g, T`$$$1=$2$$\,$3`).replace(/(^|\s|：)([dL])(?=\s[≥≤])/g, "$1$$$2$$").replace(/≥/g, T`$\geq$`).replace(/≤/g, T`$\leq$`).replace(/θeq/g, T`$\theta_{eq}$`)
+    .replace(/°/g, T`$^\circ$`).replace(/μb/g, T`$\mu_b$`);
+
+  L.push("% 積雪後の降雨を考慮した積雪荷重の割増係数（snow_rain_factor.html で作成）");
+  L.push(T`\onecolumn`);
+  L.push(T`\noindent\textbf{積雪後の降雨を考慮した積雪荷重の割増係数}\par\medskip`);
+
+  L.push(T`\noindent\textbf{(1) 検討方針}\par\smallskip`);
+  L.push(o.applies
+    ? T`\noindent 多雪区域以外の区域（垂直積雪量 0.15\,m 以上）にあり、屋根版が鉄筋コンクリート造及び鉄骨鉄筋コンクリート造でない特定緩勾配屋根部分（最上端から最下端までの水平投影の長さ 10\,m 以上、屋根勾配 $15^\circ$ 以下）を有するため、平成19年国土交通省告示第594号 第2第三号により、令第86条により計算した積雪荷重に割増係数 $\alpha$ を乗じる。$d_r$ の算定に用いる水平投影の長さ $L$ 及び屋根勾配 $\theta$ は、国住指第3699号（平成30年1月15日）2.\ による。\par\medskip`
+    : T`\noindent 平成19年国土交通省告示第594号 第2第三号の適用条件を確認した結果、特定緩勾配屋根部分の割増しの対象に該当しないため、令第86条による積雪荷重とする（$\alpha=1.0$）。\par\medskip`);
+
+  L.push(T`\noindent\textbf{(2) 算定式}`);
+  L.push(T`\begin{equation*}\alpha=0.7+\sqrt{\frac{d_r}{\mu_b\,d}}\end{equation*}`);
+  L.push(T`\noindent ここに、`);
+  L.push(...syms([
+    [T`$\alpha$`, T`割増係数（1.0 未満の場合は 1.0）`],
+    [T`$d_r$`, T`特定緩勾配屋根部分の最上端から最下端までの水平投影の長さ $L$ 及び屋根勾配 $\theta$ に応じて下表に掲げる数値（m）。表に掲げる数値以外の場合は、それぞれ直線補間した数値`],
+    [T`$\mu_b$`, T`令第86条第4項の屋根形状係数 $\mu_b=\sqrt{\cos(1.5\beta)}$（$\beta$：屋根勾配（度））`],
+    [T`$d$`, T`令第86条第1項の垂直積雪量（m）`],
+  ]));
+  L.push(T`\begin{center}\begin{tabular}{|c|c|c|}\hline`);
+  L.push(T`水平投影の長さ $L$（m） & 屋根勾配 $\theta$（度） & $d_r$（m） \\ \hline`);
+  L.push(T`\multirow{2}{*}{10} & 2 以下 & 0.05 \\ \cline{2-3}`);
+  L.push(T` & 15 & 0.01 \\ \hline`);
+  L.push(T`\multirow{2}{*}{50 以上} & 2 以下 & 0.14 \\ \cline{2-3}`);
+  L.push(T` & 15 & 0.03 \\ \hline`);
+  L.push(T`\end{tabular}\end{center}`);
+  if (fold){
+    L.push((g.shape === "mount" ? T`\noindent 山折れ屋根は、上部の屋根勾配 $\theta_1$` : T`\noindent 谷折れ屋根は、下部の屋根勾配 $\theta_2$`)
+      + T` 又は次式の等価勾配 $\theta_{eq}$ を屋根全体の勾配とみなす（国住指第3699号 2.）。`);
+    L.push(T`\begin{equation*}\theta_{eq}=1\Big/\left(\frac{l_1^2}{\theta_1}+\frac{2l_1l_2+l_2^2}{\theta_2}\right),\qquad l_1=\frac{L_1}{L_1+L_2},\quad l_2=\frac{L_2}{L_1+L_2}\end{equation*}`);
+    L.push(T`\noindent ここに、`);
+    L.push(...syms([
+      [T`$L_1$, $\theta_1$`, "上部（棟側）の屋根の水平投影の長さ（m）及び勾配（度）"],
+      [T`$L_2$, $\theta_2$`, "下部（軒側）の屋根の水平投影の長さ（m）及び勾配（度）"],
+    ]));
+  }
+  L.push(T`\medskip`);
+
+  L.push(T`\noindent\textbf{(3) 計算}\par\smallskip`);
+  const Ha = num("Ha");
+  const geo = fold
+    ? T`$L_1=${n(g.L1,2)}$\,m、$\theta_1=${n(g.th1,2)}^\circ$、$L_2=${n(g.L2,2)}$\,m、$\theta_2=${n(g.th2,2)}^\circ$`
+    : g.shape === "arc"
+      ? T`$L_a=${n(g.La,2)}$\,m、最上端と最下端の高低差 ${n(Ha,2)}\,m より $\theta_a=\tan^{-1}(${n(Ha,2)}/${n(g.La,2)})=${n(g.theta,2)}^\circ$`
+      : T`$L_a=${n(g.La,2)}$\,m、$\theta_a=${n(g.theta,2)}^\circ$`;
+  L.push(T`\noindent 屋根形状：${shapeName}（${geo}）\par`);
+  L.push(T`\noindent 垂直積雪量 $d=${n(o.dcm,0)}$\,cm、積雪の単位荷重 ${n(o.w,0)}\,N/m$^2$/cm\par\smallskip`);
+
+  L.push(T`\begin{center}\begin{tabular}{|l|c|c|}\hline`);
+  L.push(T`適用条件 & 本建築物 & 判定 \\ \hline`);
+  o.items.forEach(([t, ok, v]) => L.push(tx(t) + " & " + (v ? tx(v) : "--") + " & " + (ok ? "該当" : T`\textbf{非該当}`) + T` \\ \hline`));
+  L.push(T`\end{tabular}\end{center}`);
+
+  const rows = [];
+  if (fold){
+    const l1 = g.L1 / g.La, l2 = g.L2 / g.La;
+    rows.push(T`L&=L_1+L_2=${n(g.L1,2)}+${n(g.L2,2)}=${n(g.La,2)}\ \mathrm{m}`);
+    rows.push(T`\theta_{eq}&=1\Big/\left(\frac{${n(l1,3)}^2}{${n(g.th1,2)}}+\frac{2\times${n(l1,3)}\times${n(l2,3)}+${n(l2,3)}^2}{${n(g.th2,2)}}\right)=${n(g.eq,2)}^\circ`);
+  }
+  const bsrc = Number.isFinite(o.betaIn) ? "" : T`\qquad(\beta=${thTeX})`;
+  rows.push(o.muOff ? T`\mu_b&=1.0\qquad(\text{勾配による低減を行わない})` : o.muZero
+    ? T`\mu_b&=0\qquad(\beta=${n(o.beta,2)}^\circ>60^\circ)`
+    : T`\mu_b&=\sqrt{\cos(1.5\times${n(o.beta,2)}^\circ)}=${n(o.mu,3)}${bsrc}`);
+  if (o.applies){
+    rows.push(T`d_{r,10}&=0.05+(0.01-0.05)\times\frac{${n(R.t,2)}-2}{13}=${n(R.d10,4)}\ \mathrm{m}\qquad(L=10\ \mathrm{m},\ ${thTeX}=${n(g.theta,2)}^\circ)`);
+    rows.push(T`d_{r,50}&=0.14+(0.03-0.14)\times\frac{${n(R.t,2)}-2}{13}=${n(R.d50,4)}\ \mathrm{m}\qquad(L\geq50\ \mathrm{m})`);
+    rows.push(T`d_r&=${n(R.d10,4)}+(${n(R.d50,4)}-${n(R.d10,4)})\times\frac{${n(R.Lc,2)}-10}{40}=${n(R.dr,4)}\ \mathrm{m}`);
+    rows.push(T`\alpha&=0.7+\sqrt{\frac{${n(R.dr,4)}}{${n(o.mu,3)}\times${n(o.d,2)}}}=${n(o.aRaw,3)}` + (o.aRaw < 1 ? T`<1.0\qquad\therefore\ \alpha=1.0` : ""));
+  }
+  L.push(T`\begin{align*}`, rows.join(T`\\` + "\n"), T`\end{align*}`);
+  if (o.applies && (g.theta < 2 || g.La > 50))
+    L.push(T`\noindent ※ 表の範囲外のため、` + [g.theta < 2 ? T`$\theta=2^\circ$` : "", g.La > 50 ? T`$L=50$\,m` : ""].filter(Boolean).join("、") + T` の数値を用いる。\par`);
+  if (fold) L.push(T`\noindent ※ 折れ屋根の $\mu_b$ の算定に用いる勾配 $\beta$ は設計者判断による。\par`);
+
+  L.push(T`\noindent 積雪荷重`);
+  L.push(T`\begin{align*}`);
+  L.push(T`S_0&=${n(o.w,0)}\times${n(o.dcm,0)}\times${n(o.mu,3)}=${n(o.S0,0)}\ \mathrm{N/m^2}\\`);
+  L.push(T`S&=\alpha\,S_0=${n(o.alpha,3)}\times${n(o.S0,0)}=${n(o.S,0)}\ \mathrm{N/m^2}`);
+  L.push(T`\end{align*}`);
+  return L.join("\n") + "\n";
+}
+
+function calcText(o){
+  const { g, R } = o, L = [];
+  L.push("■ 積雪後の降雨を考慮した積雪荷重の割増係数");
+  L.push("  （平成19年国交告第594号 第2第三号、国住指第3699号）");
+  L.push("");
+  L.push(`垂直積雪量 d = ${f(o.dcm,0)} cm = ${f(o.d,2)} m`);
+  L.push(`単位荷重 = ${f(o.w,0)} N/m²/cm`);
+  const shapeName = { gable:"切妻・片流れ屋根", m:"M形・のこぎり屋根", arc:"円弧屋根", mount:"山折れ屋根", valley:"谷折れ屋根" }[g.shape];
+  L.push(`屋根形状：${shapeName}`);
+  if (g.shape === "mount" || g.shape === "valley"){
+    L.push(`  L1 = ${f(g.L1,2)} m, θ1 = ${f(g.th1,2)}°（上部）`);
+    L.push(`  L2 = ${f(g.L2,2)} m, θ2 = ${f(g.th2,2)}°（下部）`);
+    L.push(`  La = L1 + L2 = ${f(g.La,2)} m`);
+    L.push(`  最上端〜最下端を結ぶ直線の勾配 = ${f(g.chord,2)}°`);
+    const l1 = g.L1 / g.La, l2 = g.L2 / g.La;
+    L.push(`  l1 = ${f(l1,3)}, l2 = ${f(l2,3)}`);
+    L.push(`  θeq = 1/(l1²/θ1 + (2·l1·l2 + l2²)/θ2) = ${f(g.eq,2)}°`);
+  } else {
+    L.push(`  La = ${f(g.La,2)} m, θa = ${f(g.theta,2)}°` + (g.shape === "arc" ? `（高低差 ${f(num("Ha"),2)} m より）` : ""));
+  }
+  L.push("");
+  L.push("[適用判定]");
+  o.items.forEach(([t, ok, v]) => L.push(`  ${ok ? "○" : "×"} ${t}${v ? "  (" + v + ")" : ""}`));
+  L.push(`  → ${o.applies ? "特定緩勾配屋根部分に該当する" : "該当しない（α = 1.0）"}`);
+  L.push("");
+  const bsrc = Number.isFinite(o.betaIn) ? "" : `（= ${g.thetaName}）`;
+  if (o.muOff) L.push("[屋根形状係数]  勾配による低減を行わない：μb = 1.0");
+  else {
+    L.push(`[屋根形状係数]  β = ${f(o.beta,2)}°${bsrc}`);
+    L.push(o.muZero ? "  β > 60° のため μb = 0" : `  μb = √cos(1.5β) = √cos(${f(1.5*o.beta,2)}°) = ${f(o.mu,3)}`);
+  }
+  if (!o.muOff && g.shape === "mount" || g.shape === "valley") L.push("  ※折れ屋根の μb は設計者判断（部分ごとの勾配で別途確認も可）");
+  if (o.applies){
+    L.push("");
+    L.push(`[dr]  L = ${f(g.La,2)} m${g.La !== R.Lc ? ` → ${f(R.Lc,0)} m` : ""}, θ = ${g.thetaName} = ${f(g.theta,2)}°${g.theta !== R.t ? ` → ${f(R.t,0)}°` : ""}`);
+    L.push(`  L = 10 m : dr10 = 0.05 + (0.01 − 0.05)×(${f(R.t,2)} − 2)/13 = ${f(R.d10,4)} m`);
+    L.push(`  L ≥ 50 m : dr50 = 0.14 + (0.03 − 0.14)×(${f(R.t,2)} − 2)/13 = ${f(R.d50,4)} m`);
+    L.push(`  dr = ${f(R.d10,4)} + (${f(R.d50,4)} − ${f(R.d10,4)})×(${f(R.Lc,2)} − 10)/40 = ${f(R.dr,4)} m`);
+    L.push("");
+    L.push("[割増係数]");
+    L.push(`  α = 0.7 + √(dr/(μb·d)) = 0.7 + √(${f(R.dr,4)}/(${f(o.mu,3)}×${f(o.d,2)})) = ${f(o.aRaw,3)}`);
+    if (o.aRaw < 1.0) L.push("  α < 1.0 のため α = 1.0");
+  }
+  L.push("");
+  L.push("[積雪荷重]");
+  L.push(`  S0 = ${f(o.w,0)} × ${f(o.dcm,0)} × ${f(o.mu,3)} = ${f(o.S0,0)} N/m²`);
+  L.push(`  S  = α·S0 = ${f(o.alpha,3)} × ${f(o.S0,0)} = ${f(o.S,0)} N/m²`);
+  return L.join("\n");
+}
+
+function drawChart(g, R, applies){
+  const W = 640, H = 300, x0 = 52, x1 = 620, y0 = 260, y1 = 16;
+  const X = t => x0 + (t / 16) * (x1 - x0), Y = v => y0 - (v / 0.16) * (y0 - y1);
+  let s = "";
+  for (let t = 0; t <= 16; t += 2) s += `<line class="grid" x1="${X(t)}" y1="${y1}" x2="${X(t)}" y2="${y0}"/><text x="${X(t)}" y="${y0 + 16}" text-anchor="middle">${t}</text>`;
+  for (let v = 0; v <= 0.16001; v += 0.04) s += `<line class="grid" x1="${x0}" y1="${Y(v)}" x2="${x1}" y2="${Y(v)}"/><text x="${x0 - 6}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(2)}</text>`;
+  s += `<line class="axis" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y0}"/><line class="axis" x1="${x0}" y1="${y0}" x2="${x0}" y2="${y1}"/>`;
+  s += `<text class="lab" x="${(x0 + x1) / 2}" y="${H - 4}" text-anchor="middle">屋根勾配 θ（°）</text>`;
+  s += `<text class="lab" x="14" y="${(y0 + y1) / 2}" text-anchor="middle" transform="rotate(-90 14 ${(y0 + y1) / 2})">dr（m）</text>`;
+  const path = Lv => { const p = []; for (let t = 0; t <= 15.0001; t += 0.5) p.push(`${X(t).toFixed(1)},${Y(drAt(Lv, t).dr).toFixed(1)}`); return p.join(" "); };
+  s += `<polyline class="l10" points="${path(10)}"/><polyline class="l50" points="${path(50)}"/>`;
+  s += `<line class="grid" x1="${X(15)}" y1="${y1}" x2="${X(15)}" y2="${y0}" style="stroke:var(--warn);stroke-dasharray:3 3"/><text x="${X(15) + 4}" y="${y1 + 24}" class="lab halo" style="fill:var(--warn)">15°</text>`;
+  s += `<text x="${X(0) + 6}" y="${Y(0.05) - 7}" class="halo" style="fill:var(--rain)">L=10 m</text>`;
+  s += `<text x="${X(0) + 6}" y="${Y(0.14) - 7}" class="halo" style="fill:var(--acc)">L≥50 m</text>`;
+  const Lok = Number.isFinite(g.La);
+  if (Lok && g.La > 10 && g.La < 50) s += `<polyline class="lcur" points="${path(g.La)}"/>`;
+  if (applies && Number.isFinite(R.dr)){
+    const px = X(Math.min(g.theta, 16)), py = Y(R.dr);
+    s += `<circle class="pt" cx="${px}" cy="${py}" r="5.5"/>`;
+    const right = px + 110 > X(15), ly = py < 40 ? py + 20 : py - 9;
+    s += `<text class="halo" x="${right ? px - 9 : px + 9}" y="${ly}" text-anchor="${right ? "end" : "start"}" style="fill:var(--ink)">dr=${R.dr.toFixed(4)} m</text>`;
+  }
+  $("chart").innerHTML = s;
+  $("lg-cur").hidden = !(Lok && g.La > 10 && g.La < 50);
+  $("lg-cur").textContent = `L = ${f(g.La,1)} m（入力値）`;
+}
+
+document.querySelectorAll("input,select").forEach(e => e.addEventListener("input", render));
+document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+  out.view = b.dataset.view;
+  document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-selected", x === b));
+  showCalc();
+}));
+$("dl").addEventListener("click", () => {
+  const a = document.createElement("a");
+  const tbl = out.view === "table";
+  a.href = URL.createObjectURL(new Blob([tbl ? out.table : out.tex], { type:"text/x-tex;charset=utf-8" }));
+  a.download = tbl ? "snow_table.tex" : "snow_rain_factor.tex"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$("copy").addEventListener("click", () => {
+  const done = t => { $("copy").textContent = t; setTimeout(() => $("copy").textContent = "コピー", 1500); };
+  navigator.clipboard.writeText(out[out.view]).then(() => done("コピーしました"), () => {
+    getSelection().selectAllChildren($("calc")); done("選択しました（Ctrl+C）");
+  });
+});
+window.addEventListener("pageshow", render);
+render();
+</script>

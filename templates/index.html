@@ -139,7 +139,13 @@
   <button data-tab="dxf">DXF</button>
   <button data-tab="vwdxf">DXF(VW10J)</button>
   <button data-tab="quantity">数量集計</button>
+  <button data-tab="capfig">断面符号図 (MIDAS風)</button>
   <button data-tab="loadmap">荷重分布図</button>
+  <button data-tab="joint">木造梁接合部</button>
+  <button data-tab="diaphragm">木造水平構面</button>
+  <button data-tab="rcdetail">RC定着・接合部</button>
+  <button data-tab="colbase">S露出柱脚</button>
+  <button data-tab="rcslab">RCスラブ</button>
   <button data-tab="wallqty">木造壁量計算</button>
   <button data-tab="nvalue">N値計算</button>
 </nav>
@@ -165,7 +171,8 @@
            placeholder="例: C:\work\壁式事例2 (空欄=mgtと同じフォルダ)">
     <button class="sub" onclick="pickDir('mgt_out_base')">フォルダの選択</button>
     <span class="hint">生成物は &lt;出力先&gt;\mgtkit_out\ のタブ別フォルダ
-      (model / stress / ratio_tex / ratio_plot / tex / dxf / qr) に保存されます。
+      (model / stress / ratio_tex / ratio_plot / tex / dxf / qr / loadmap /
+      jointchk / diaphragm / rcdetail / colbase) に保存されます。
       mgtを「アップロード」で読み込んだ場合はmgtが一時フォルダ(AppData)扱いに
       なるため、ここに事例フォルダを指定してください。</span>
   </div>
@@ -554,8 +561,11 @@
     <div class="row"><b>荷重ケース (deformationのケース)</b>
       <span class="groupbox-inline" id="q_dr_case_box"></span></div>
     <div class="row"><button class="act" onclick="runQrDrift()">
-      層間変形角PDF生成</button></div>
+      層間変形角PDF生成</button>
+      <span class="hint">一覧表TeXの剛心位置層間変形角は
+        5. の剛心ケース設定を使って計算します (未設定なら「--」)。</span></div>
     <div id="qr_dr_msg"></div><div id="qr_dr_pdfs"></div>
+    <div id="qr_dr_tex"></div>
   </fieldset>
 
   <fieldset>
@@ -622,7 +632,8 @@
         用途「木合板検定のみ」では「検定実行」で断面検定に続けて
         木合板耐力壁の検定 (厚み=壁倍率、許容 qa×倍率×壁長、
         検定比=｜壁内平均Fxy｜/(qa×倍率)。階ごとに検定、床・屋根は自動除外)
-        を実行し、結果を一覧に追記します。
+        を実行し、結果を一覧に追記します。検定比は検定比図の板要素にも
+        表示されます (壁単位の値。長期ケースは対象外のため外形線のみ)。
         「応力度検定 (S板/RC板)」に使う場合は長期を含む全ケースの出力が
         必要です (未検証経路)。</span>
     </div>
@@ -1004,8 +1015,19 @@
   <div id="qty_out"></div>
 </section>
 
+{% include '_tab_capfig.html' %}
+
 {% include '_tab_loadmap.html' %}
 
+{% include '_tab_jointchk.html' %}
+
+{% include '_tab_diaphragm.html' %}
+
+{% include '_tab_rcdetail.html' %}
+
+{% include '_tab_colbase.html' %}
+
+{% include '_tab_rcslab.html' %}
 {% include '_tab_wallqty.html' %}
 {% include '_tab_vwdxf.html' %}
 {% include '_tab_nvalue.html' %}
