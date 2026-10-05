@@ -1157,6 +1157,30 @@ function fmtRatio(v) {
 
 let CHECK = null;
 
+// 要素番号リストのタブ区切りテキストをクリップボードへコピー
+// (断面検定と梁接合部検定 (jointchk.js) で共用)
+async function copyEleList(btn, eles) {
+  const text = eles.join('\t');
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch (e) {
+    // クリップボードAPIが使えない環境向けのフォールバック
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+    ta.remove();
+  }
+  if (btn) {
+    btn.textContent = ok ? 'コピーしました' : 'コピーできませんでした';
+    setTimeout(() => { btn.textContent = 'タブ区切りでコピー'; }, 1800);
+  }
+}
+
 // ケース読込: 応力ファイルの荷重ケース一覧と種別既定値(自動判定)を表示
 const CTYPE_LABEL = {
   L: '長期',
