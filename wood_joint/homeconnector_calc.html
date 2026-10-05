@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<!-- ホームコネクター接合部 耐力・回転剛性計算
+     出典：ホームコネクター工法 設計マニュアル 第2_02版（2021.5.15、スクリムテックジャパン）
+       2章 耐力表を用いた簡易設計（表2-1、(2.1)式）
+       3章 詳細設計：(3.1) 単体引張、(3.5.1)〜(3.5.7) 単体剪断、(3.7.1)〜(3.7.7) 曲げ耐力・回転剛性、
+             (3.8.1)〜(3.8.4) 柱脚、(3.9.1)〜(3.9.5) 柱-梁・継手
+     検算：ユーザー計算ツール「ホームコネクター.xlsx」TYPE-A〜D と一致（S・Fc を同値入力時） -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ホームコネクター接合部計算</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Shippori+Mincho:wght@600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --paper:#f7f5ef; --panel:#fffdf8; --ink:#29241c; --ink2:#6b6355;
+  --line:#ddd6c8; --line2:#a89a80;
+  --wood:#8b5e2f; --wood-soft:#f0e6d7; --steel:#4a6076; --steel-soft:#e3e9ee;
+  --ok:#3a7d44; --warn:#b3542e; --warn-soft:#f7e8df;
+  --hilite:#faf3e3; --big:#5c3d17; --tens:#b3542e; --comp:#4a6076;
+  --mono:"IBM Plex Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#201c16; --panel:#2a251d; --ink:#e9e2d3; --ink2:#a89d89;
+    --line:#453d30; --line2:#5a5040;
+    --wood:#c99a5e; --wood-soft:#3a3022; --steel:#8fa7bc; --steel-soft:#2c3640;
+    --ok:#7dbb86; --warn:#e08a63; --warn-soft:#42301f;
+    --hilite:#38301f; --big:#e3b378; --tens:#e08a63; --comp:#8fa7bc;  color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#201c16; --panel:#2a251d; --ink:#e9e2d3; --ink2:#a89d89;
+  --line:#453d30; --line2:#5a5040;
+  --wood:#c99a5e; --wood-soft:#3a3022; --steel:#8fa7bc; --steel-soft:#2c3640;
+  --ok:#7dbb86; --warn:#e08a63; --warn-soft:#42301f;
+  --hilite:#38301f; --big:#e3b378; --tens:#e08a63; --comp:#8fa7bc;  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Noto Sans JP","Yu Gothic UI",sans-serif; font-size:13.5px; line-height:1.65;
+  padding-block:0 48px; padding-inline:20px;
+}
+@media (max-width:600px){ body{padding-inline:16px} }
+header.app{
+  max-width:1240px; margin:0 auto; padding-block:26px 12px;
+  border-bottom:2px solid var(--wood); display:flex; flex-wrap:wrap; gap:8px 24px; align-items:baseline;
+}
+header.app h1{font-family:"Shippori Mincho",serif; font-weight:700; font-size:24px; margin:0; letter-spacing:.06em;}
+header.app .src{color:var(--ink2); font-size:12px;}
+nav.tabs{max-width:1240px; margin:14px auto 0; display:flex; gap:6px; flex-wrap:wrap;}
+nav.tabs button{font:inherit; font-size:13px; padding:7px 16px; border:1px solid var(--line2); background:var(--panel); color:var(--ink2); border-radius:5px 5px 0 0; cursor:pointer;}
+nav.tabs button[aria-selected=true]{background:var(--wood); color:#fffdf8; border-color:var(--wood); font-weight:700;}
+.wrap{max-width:1240px; margin:12px auto 0; display:grid; grid-template-columns:450px 1fr; gap:22px; align-items:start;}
+@media (max-width:980px){ .wrap{grid-template-columns:1fr} }
+
+.panel{background:var(--panel); border:1px solid var(--line); border-radius:6px; min-width:0;}
+.panel h2{font-size:13px; letter-spacing:.14em; margin:0; padding:10px 14px; border-bottom:1px solid var(--line); color:var(--wood); font-weight:700;}
+fieldset{border:none; margin:0; padding:12px 14px 14px; border-bottom:1px dashed var(--line); min-width:0;}
+fieldset:last-child{border-bottom:none}
+legend{font-weight:700; font-size:12.5px; padding:0; letter-spacing:.08em; color:var(--ink);}
+legend .no{color:var(--wood); font-family:var(--mono); margin-right:6px;}
+.row{display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:8px; align-items:flex-end;}
+label.f{display:flex; flex-direction:column; gap:3px; font-size:11.5px; color:var(--ink2);}
+label.f b{font-weight:500}
+input[type=number],input[type=text],select{font:inherit; color:var(--ink); background:var(--paper); border:1px solid var(--line2); border-radius:4px; padding:5px 7px; width:96px;}
+input[type=number]{font-family:var(--mono); text-align:right}
+input.w70{width:72px}
+select{width:auto; max-width:100%}
+input:focus,select:focus,button:focus{outline:2px solid var(--wood); outline-offset:1px}
+.hint{font-size:11px; color:var(--ink2); margin-top:6px;}
+table.rows{border-collapse:collapse; margin-top:8px; font-size:12px;}
+table.rows th,table.rows td{padding:2px 6px 2px 0; text-align:left; font-weight:500; color:var(--ink2);}
+table.rows input{width:78px}
+.subhead{font-size:12px; font-weight:700; color:var(--wood); margin-top:10px; letter-spacing:.06em;}
+
+.res{display:flex; flex-direction:column; gap:16px; min-width:0;}
+.bigcard{background:var(--panel); border:1px solid var(--wood); border-radius:6px; padding:16px 20px; display:flex; flex-wrap:wrap; gap:10px 36px; align-items:baseline;}
+.bigcard .lbl{font-size:12px; letter-spacing:.1em; color:var(--ink2); display:block}
+.bigcard .val{font-family:var(--mono); font-weight:600; font-size:28px; color:var(--big); line-height:1.1}
+.bigcard .unitv{font-family:var(--mono); font-weight:600; font-size:14px; color:var(--ink)}
+.bigcard small{font-size:11.5px; color:var(--ink2); display:block}
+section.step{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px 16px 14px; min-width:0;}
+section.step h3{margin:0 0 8px; font-size:13px; font-weight:700; letter-spacing:.06em; display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;}
+section.step h3 .eq{font-family:var(--mono); font-weight:400; font-size:11px; color:var(--wood);}
+.tscroll{overflow-x:auto}
+table.t{border-collapse:collapse; width:100%; font-size:12.5px;}
+table.t th,table.t td{border:1px solid var(--line); padding:4px 9px; text-align:left; vertical-align:top;}
+table.t th{background:var(--wood-soft); font-weight:500; white-space:nowrap;}
+table.t td.n{font-family:var(--mono); text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;}
+tr.gov td{background:var(--hilite); font-weight:700;}
+tr.gov td:first-child::after{content:" ◀ 支配"; color:var(--wood); font-size:11px; font-weight:700;}
+.kv{display:flex; flex-wrap:wrap; gap:4px 26px; font-size:12.5px; margin:4px 0;}
+.kv span{white-space:nowrap}
+.kv .v{font-family:var(--mono); font-weight:600;}
+.formula{font-family:var(--mono); font-size:12px; background:var(--paper); border:1px dashed var(--line2); border-radius:4px; padding:6px 10px; margin:6px 0; overflow-x:auto; white-space:nowrap;}
+.warnbox{background:var(--warn-soft); border:1px solid var(--warn); border-radius:5px; padding:8px 12px; color:var(--ink); font-size:12.5px;}
+.okmark{color:var(--ok); font-weight:700}
+.ngmark{color:var(--warn); font-weight:700}
+.note{color:var(--ink2); font-size:11.5px; margin-top:6px;}
+ul.notes{margin:6px 0 0; padding-left:1.4em; font-size:12px; color:var(--ink2);}
+svg text{font-family:"Noto Sans JP",sans-serif}
+.copyrow{display:flex; gap:10px; align-items:center; margin-bottom:6px}
+.btn{font:inherit; font-size:12px; padding:5px 14px; border:1px solid var(--wood); background:var(--wood); color:#fffdf8; border-radius:4px; cursor:pointer;}
+textarea.rep{width:100%; min-height:260px; font-family:var(--mono); font-size:12px; background:var(--paper); color:var(--ink); border:1px solid var(--line2); border-radius:4px; padding:8px;}
+</style>
+
+<header class="app">
+  <h1>ホームコネクター接合部計算</h1>
+  <span class="src">ホームコネクター工法 設計マニュアル 第2_02版（2021.5）2章 簡易設計・3章 詳細設計</span>
+</header>
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="m" aria-selected="true">曲げ耐力・回転剛性（3.7〜3.10）</button>
+  <button role="tab" data-tab="q" aria-selected="false">単体剪断耐力（3.5）</button>
+  <button role="tab" data-tab="s" aria-selected="false">簡易設計（2章 耐力表）</button>
+</nav>
+
+<!-- ============ TAB M ============ -->
+<div class="wrap" id="tab-m">
+<div class="panel">
+  <h2>入力条件</h2>
+  <fieldset>
+    <legend><span class="no">01</span>接合形式</legend>
+    <div class="row">
+      <label class="f"><b>接合部記号</b><input type="text" id="sym" value="HC-A" style="width:90px"></label>
+      <label class="f"><b>接合形式</b>
+        <select id="jt">
+          <option value="single">単体（梁端・RC-木直接柱脚 3.8①）</option>
+          <option value="T">柱-梁 ト型接合（3.9①）</option>
+          <option value="X">柱-梁 十字接合（3.9②）</option>
+          <option value="sp1">梁継手 同一部材（3.10①）</option>
+          <option value="sp2">梁継手 異種部材（3.10②）</option>
+          <option value="box">柱脚 箱形柱脚金物（3.8②）</option>
+          <option value="plate">柱脚 板状ベースプレート（3.8③）</option>
+        </select>
+      </label>
+    </div>
+    <div class="hint" id="jtHint"></div>
+  </fieldset>
+  <fieldset>
+    <legend><span class="no">02</span>コネクター</legend>
+    <div class="row">
+      <label class="f"><b>外径 d (mm)</b><select id="d"><option>10</option><option>18</option><option selected>24</option></select></label>
+      <label class="f"><b>挿入孔径 Rh (mm)</b><input type="number" id="Rh" value="27" step="1"></label>
+      <label class="f"><b>埋込長さ l (mm)</b><input type="number" id="l" value="300" step="5"></label>
+    </div>
+    <div class="hint">Rh = d+3〜d+6（図3-4）。l は部材A（梁）側の埋め込み長さ。</div>
+  </fieldset>
+  <fieldset>
+    <legend><span class="no">03</span>部材A（梁／柱脚では柱）断面・材料</legend>
+    <div id="matA"></div>
+  </fieldset>
+  <fieldset>
+    <legend><span class="no">04</span>配置（圧縮縁からの距離）</legend>
+    <div class="row">
+      <label class="f"><b>部材せい D (mm)</b><input type="number" id="D" value="360"></label>
+    </div>
+    <div class="subhead">引張負担 g<sub>a</sub>・m<sub>a</sub>（1段目＝最外端）</div>
+    <table class="rows" id="trows"></table>
+    <div class="subhead">圧縮負担 q<sub>a</sub>・n<sub>a</sub>（1段目＝圧縮縁最近傍）</div>
+    <table class="rows" id="crows"></table>
+    <div class="hint">本数0の段は無視。g<sub>1</sub> は本数>0の引張段の最大値を採用。</div>
+  </fieldset>
+  <fieldset id="fsB" hidden>
+    <legend><span class="no">05</span><span id="lgB">部材B</span></legend>
+    <div class="row" id="rowlB">
+      <label class="f"><b id="lbllB">埋込長さ (mm)</b><input type="number" id="lB" value="300" step="5"></label>
+    </div>
+    <div id="matB"></div>
+    <div id="splitIn" hidden>
+      <div class="subhead">柱の割裂（3.9.2）</div>
+      <div class="row">
+        <label class="f"><b>柱せい h (mm)</b><input type="number" id="hc" value="450"></label>
+        <label class="f"><b>取付角 α (°)</b><input type="number" id="alp" value="90"></label>
+        <label class="f"><b>Cr (N/mm<sup>1.5</sup>)</b><input type="number" id="Cr" value="12" step="0.5"></label>
+      </div>
+      <div class="hint">Cr：J1=12.0、J2=10.0、J3=8.0（部材BのJ区分から自動、編集可）。柱幅は部材Bの b。</div>
+    </div>
+  </fieldset>
+  <fieldset id="fsBase" hidden>
+    <legend><span class="no">05</span>ベースプレート・アンカー</legend>
+    <div class="row" id="rowBox">
+      <label class="f"><b>E (N/mm²)</b><input type="number" id="Eab" value="205000"></label>
+      <label class="f"><b>a<sub>t</sub> 引張アンカー断面積計 (mm²)</b><input type="number" id="at" value="706"></label>
+      <label class="f"><b>d<sub>t</sub> (mm)</b><input type="number" id="dt" value="150"></label>
+      <label class="f"><b>d<sub>c</sub> (mm)</b><input type="number" id="dc" value="150"></label>
+      <label class="f"><b>l<sub>b</sub> アンカー長さ (mm)</b><input type="number" id="lb" value="400"></label>
+    </div>
+    <div class="row" id="rowPlate">
+      <label class="f"><b>ΔS アンカー＋BPの変形 (mm)</b><input type="number" id="dS" value="0.5" step="0.05"></label>
+    </div>
+    <div class="hint" id="baseHint"></div>
+  </fieldset>
+  <fieldset>
+    <legend><span class="no">06</span>設計応力（任意）・剪断耐力</legend>
+    <div class="row">
+      <label class="f"><b>M<sub>L</sub> (kN·m)</b><input type="number" id="ML" value="14.6" class="w70"></label>
+      <label class="f"><b>Q<sub>L</sub> (kN)</b><input type="number" id="QL" value="19.9" class="w70"></label>
+      <label class="f"><b>N<sub>L</sub> (kN)</b><input type="number" id="NL" value="8.8" class="w70"></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>M<sub>S</sub> (kN·m)</b><input type="number" id="MS" value="22.7" class="w70"></label>
+      <label class="f"><b>Q<sub>S</sub> (kN)</b><input type="number" id="QS" value="23.3" class="w70"></label>
+      <label class="f"><b>N<sub>S</sub> (kN)</b><input type="number" id="NS" value="17.2" class="w70"></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>剪断耐力/本</b>
+        <select id="qsrc"><option value="tbl">表2-1から</option><option value="man">手入力</option></select></label>
+      <label class="f"><b>長期 (kN/本)</b><input type="number" id="qL1" value="8.07" class="w70" step="0.01"></label>
+      <label class="f"><b>短期 (kN/本)</b><input type="number" id="qS1" value="14.67" class="w70" step="0.01"></label>
+      <label class="f"><b>使用環境</b><select id="envM"><option value="1">Ⅲ ×1.0</option><option value="0.85">Ⅱ ×0.85</option><option value="0.7">Ⅰ ×0.7</option></select></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>引張 長期/短期</b>
+        <select id="nrat"><option value="xl">1/3・2/3（Excelツールと同じ）</option><option value="m">1.1/3・2/3（(3.7.5)と同比率）</option></select></label>
+    </div>
+    <div class="hint">表2-1は d ごとに「定着長 ≦ l」となる最大の行を採用（補間なし）。剪断・引張は全コネクター本数で評価。詳細剪断（3.5）の結果は手入力で反映。</div>
+  </fieldset>
+</div>
+
+<div class="res">
+  <div class="bigcard" id="bigM"></div>
+  <section class="step">
+    <h3>仕様一覧<span class="eq">記号ごとに登録 → CSVで書き出し</span></h3>
+    <div class="copyrow" style="flex-wrap:wrap">
+      <button class="btn" id="spAdd">この仕様を登録／上書き</button>
+      <button class="btn" id="spCopy">CSVをコピー</button>
+      <button class="btn" id="spSave">CSVを保存</button>
+      <label class="btn" style="display:inline-block">CSVを読込<input type="file" id="spFile" accept=".csv,text/csv" hidden></label>
+      <span class="note" id="spMsg"></span>
+    </div>
+    <div class="tscroll" id="spList"></div>
+    <div class="note">登録内容はこのブラウザに保存されます。「読込」で入力欄に戻せます。CSVの保存はローカルで開いたHTMLのみ有効（Artifact上ではコピーを使用）。応力（06欄のM・Q・N）は含めません。</div>
+  </section>
+  <div id="warnM"></div>
+  <section class="step"><h3>断面・配置と応力分布<span class="eq">図3-6</span></h3><div id="svgM"></div></section>
+  <section class="step" id="stA"></section>
+  <section class="step" id="stB" hidden></section>
+  <section class="step" id="stJ"></section>
+  <section class="step" id="stChk"></section>
+  <section class="step">
+    <h3>計算書転記用テキスト</h3>
+    <div class="copyrow"><button class="btn" data-copy="repM">コピー</button><span class="note" id="cpM"></span></div>
+    <textarea class="rep" id="repM" readonly></textarea>
+  </section>
+  <section class="step">
+    <h3>計算の前提・注記</h3>
+    <ul class="notes">
+      <li>λ（中立軸）は (3.7.2) と (3.7.4) で代数的に同一式（k·l = AtftR·l/S）となるため共通値。</li>
+      <li>M<sub>ucal</sub> = min(①,②)。① は最外端コネクターが引抜量 S に達した時、② は圧縮縁が F<sub>c</sub> に達した時の弾性モーメント。</li>
+      <li>K<sub>R</sub> = M<sub>S</sub>/θ、θ = tan⁻¹(S<sub>S</sub>/(g<sub>1</sub>−λ))、S<sub>S</sub> = 2S/3（(3.7.6)(3.7.7)）。</li>
+      <li>S はマニュアル値（繊維平行0.4mm・直交0.6mm）を既定とする。添付Excelツールでは S=0.67mm を使用しているので、Excelと照合する場合は S を手入力。</li>
+      <li>繊維直交方向挿入時は E<sub>w</sub> = E/(30〜50)、F<sub>c</sub> → F<sub>cv</sub>（中央部めり込み）。</li>
+      <li>引張耐力 ΣAtftR の長期・短期倍率はマニュアルに明記がないため選択式（Excelは長期=短期/2）。</li>
+      <li>板状BP柱脚（3.8.4）は式どおり S（2/3倍しない）と M<sub>ucal</sub> で評価。</li>
+    </ul>
+  </section>
+</div>
+</div>
+
+<!-- ============ TAB Q ============ -->
+<div class="wrap" id="tab-q" hidden>
+<div class="panel">
+  <h2>入力条件</h2>
+  <fieldset>
+    <legend><span class="no">01</span>剪断接合形式（図3-5）</legend>
+    <div class="row">
+      <label class="f"><b>形式</b>
+        <select id="qt">
+          <option value="i">（ⅰ）二面剪断 木-木（柱を貫通）</option>
+          <option value="ii">（ⅱ）一面剪断 木-木</option>
+          <option value="iii" selected>（ⅲ）一面剪断 木-鋼材</option>
+        </select></label>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend><span class="no">02</span>寸法</legend>
+    <div class="row">
+      <label class="f"><b>d (mm)</b><select id="qd"><option>10</option><option>18</option><option selected>24</option></select></label>
+      <label class="f"><b>主材側定着長 l (mm)</b><input type="number" id="ql" value="300"></label>
+      <label class="f" id="qlsW"><b>側材側定着長 l' (mm)</b><input type="number" id="qls" value="300"></label>
+      <label class="f"><b>本数 n</b><input type="number" id="qn" value="4" class="w70"></label>
+    </div>
+    <div class="hint">（ⅰ）l＝中央材（柱）内の長さ、l'＝片側梁内の長さ。（ⅱ）l＝主材、l'＝側材。</div>
+  </fieldset>
+  <fieldset>
+    <legend><span class="no">03</span>支圧強度（表3-2）</legend>
+    <div class="row">
+      <label class="f"><b>主材 樹種区分</b><select id="qJm"><option>J1</option><option>J2</option><option>J3</option></select></label>
+      <label class="f"><b>荷重方向</b><select id="qDm"><option value="0">繊維方向</option><option value="1">繊維直交</option></select></label>
+      <label class="f"><b>Fe (N/mm²)</b><input type="number" id="qFe" step="0.1"></label>
+    </div>
+    <div class="row" id="qSideRow">
+      <label class="f"><b>側材 樹種区分</b><select id="qJs"><option>J1</option><option>J2</option><option>J3</option></select></label>
+      <label class="f"><b>荷重方向</b><select id="qDs"><option value="0">繊維方向</option><option value="1">繊維直交</option></select></label>
+      <label class="f"><b>Fe' (N/mm²)</b><input type="number" id="qFes" step="0.1"></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>F 接合具基準強度</b><input type="number" id="qF" value="235"></label>
+      <label class="f"><b>jKf</b><input type="number" id="qKf" value="0.6667" step="0.01" class="w70"></label>
+      <label class="f"><b>使用環境 jKm</b><select id="qKm"><option value="1">Ⅲ 1.0</option><option value="0.85">Ⅱ 0.85</option><option value="0.7">Ⅰ 0.7</option></select></label>
+    </div>
+    <div class="hint">Fe は区分・方向の変更で表3-2の値に再設定（編集可）。梁端の鉛直剪断は梁側では繊維直交、柱側（柱面に直交挿入）では繊維方向の支圧となる。</div>
+  </fieldset>
+</div>
+<div class="res">
+  <div class="bigcard" id="bigQ"></div>
+  <section class="step" id="stQ"></section>
+  <section class="step">
+    <h3>計算書転記用テキスト</h3>
+    <div class="copyrow"><button class="btn" data-copy="repQ">コピー</button><span class="note" id="cpQ"></span></div>
+    <textarea class="rep" id="repQ" readonly style="min-height:200px"></textarea>
+  </section>
+</div>
+</div>
+
+<!-- ============ TAB S ============ -->
+<div class="wrap" id="tab-s" hidden>
+<div class="panel">
+  <h2>入力条件</h2>
+  <fieldset>
+    <legend><span class="no">01</span>コネクター（表2-1）</legend>
+    <div class="row">
+      <label class="f"><b>仕様</b><select id="sSpec"></select></label>
+      <label class="f"><b>使用環境</b><select id="sEnv"><option value="1">Ⅲ ×1.0</option><option value="0.85">Ⅱ ×0.85</option><option value="0.7">Ⅰ ×0.7</option></select></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>全本数 n</b><input type="number" id="sN" value="4" class="w70"></label>
+      <label class="f"><b>引張側本数（曲げ）</b><input type="number" id="sNt" value="2" class="w70"></label>
+      <label class="f"><b>d 芯〜圧縮端 (mm)</b><input type="number" id="sd" value="250"></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>接合相手</b><select id="sRC"><option value="0">木-木／S-木</option><option value="1">RC-木（引張1/2）</option></select></label>
+    </div>
+    <div class="hint">適用範囲：3階以下、部材断面150×450以下（2.1）。樹種：スギ・ヒノキ・カラマツ・オウシュウアカマツ・ベイマツ、含水率20%以下（表2-2）。(2.1)式は引張側1段配置に限る。</div>
+  </fieldset>
+  <fieldset>
+    <legend><span class="no">02</span>設計応力（任意）</legend>
+    <div class="row">
+      <label class="f"><b>N<sub>L</sub></b><input type="number" id="sNL" value="0" class="w70"></label>
+      <label class="f"><b>Q<sub>L</sub></b><input type="number" id="sQL" value="0" class="w70"></label>
+      <label class="f"><b>M<sub>L</sub></b><input type="number" id="sML" value="0" class="w70"></label>
+    </div>
+    <div class="row">
+      <label class="f"><b>N<sub>S</sub></b><input type="number" id="sNS" value="0" class="w70"></label>
+      <label class="f"><b>Q<sub>S</sub></b><input type="number" id="sQS" value="0" class="w70"></label>
+      <label class="f"><b>M<sub>S</sub></b><input type="number" id="sMS" value="0" class="w70"></label>
+    </div>
+    <div class="hint">単位 kN・kN·m。</div>
+  </fieldset>
+</div>
+<div class="res">
+  <div class="bigcard" id="bigS"></div>
+  <section class="step" id="stS"></section>
+  <section class="step">
+    <h3>計算書転記用テキスト</h3>
+    <div class="copyrow"><button class="btn" data-copy="repS">コピー</button><span class="note" id="cpS"></span></div>
+    <textarea class="rep" id="repS" readonly style="min-height:160px"></textarea>
+  </section>
+</div>
+</div>
+
+<script>
+/*CORE_START*/
+// ---------- データ（設計マニュアル） ----------
+// 表2-1 [仕様, d, 定着長, NL, NS, QL, QS]
+const T21 = [
+  ["L-70φ10",10,35,1.65,3.30,0.84,1.52],["L-100φ10",10,50,2.35,4.70,1.05,1.91],
+  ["L-100φ18",18,50,4.20,8.40,2.15,3.91],["L-150φ18",18,75,6.35,12.70,3.18,5.78],
+  ["L-200φ18",18,100,8.40,16.80,3.56,6.48],["L-250φ18",18,125,10.60,21.20,4.03,7.33],
+  ["L-300φ18",18,150,12.70,25.40,4.54,8.25],["L-300φ24",24,150,16.95,33.90,6.73,12.24],
+  ["L-400φ24",24,200,22.60,45.20,8.07,14.67],["L-500φ24",24,250,28.20,56.40,8.07,14.67]];
+// 表3-2 基準支圧強度 [繊維方向, 直交]
+const FE = {J1:[25.4,12.7], J2:[22.4,11.2], J3:[19.4,9.7]};
+const CR = {J1:12.0, J2:10.0, J3:8.0};
+
+function t21Lookup(d, l){
+  let best=null;
+  for(const r of T21) if(r[1]===d && r[2]<=l+1e-9) best=r;
+  return best;
+}
+
+// ---------- (3.1)(3.7.1)〜(3.7.7) 片側部材の曲げ耐力・回転剛性 ----------
+// p: {Rh,l,b,E(N/mm2 実効),Fc(実効),ft,S, rowsT:[{g,m}], rowsC:[{q,n}]}
+function calcSide(p){
+  const r = {};
+  r.At = Math.PI*p.Rh*p.l;
+  r.omega = 0.016*p.l/Math.sqrt(p.Rh);
+  r.R = Math.tanh(r.omega)/r.omega;
+  r.T0 = r.At*p.ft*r.R;                 // AtftR (N) 1本あたり
+  r.k = r.T0/p.S;                       // N/mm
+  const T = p.rowsT.filter(x=>x.m>0), C = p.rowsC.filter(x=>x.n>0);
+  r.sm = T.reduce((s,x)=>s+x.m,0); r.sn = C.reduce((s,x)=>s+x.n,0);
+  r.smg = T.reduce((s,x)=>s+x.m*x.g,0); r.snq = C.reduce((s,x)=>s+x.n*x.q,0);
+  if(!T.length){ r.err="引張負担コネクターがありません"; return r; }
+  r.g1 = Math.max(...T.map(x=>x.g));
+  const A = r.T0*(r.sm+r.sn), B = p.b*p.S*p.E/p.l;
+  r.lam = (-A + Math.sqrt(A*A + 2*B*r.T0*(r.smg+r.snq)))/B;   // (3.7.2)
+  const lam=r.lam, y1=r.g1-lam;
+  if(y1<=0){ r.err="中立軸 λ が最外端コネクター位置 g1 を超えています"; return r; }
+  const sq = C.reduce((s,x)=>s+x.n*(lam-x.q)**2,0) + T.reduce((s,x)=>s+x.m*(x.g-lam)**2,0);
+  r.sq = sq;
+  // ① 引張側最外端の引抜け
+  r.M1w = B*lam**3/(3*y1); r.M1c = r.T0*sq/y1; r.M1 = r.M1w+r.M1c;            // N·mm
+  r.sig1 = p.E*p.S*lam/(p.l*y1);                                              // ①時の圧縮縁応力
+  // ② 圧縮縁の降伏
+  r.M2w = p.b*p.Fc*lam**2/3; r.M2c = r.k*p.l*p.Fc*sq/(lam*p.E); r.M2 = r.M2w+r.M2c;
+  r.slip2 = p.Fc*p.l*y1/(lam*p.E);                                             // ②時の最外端引抜量
+  r.mode = r.M1<=r.M2 ? 1 : 2;
+  r.Mu = Math.min(r.M1,r.M2)/1e6;       // kN·m
+  r.MS = 2*r.Mu/3; r.ML = 1.1*r.Mu/3;   // (3.7.5)
+  r.SS = 2*p.S/3;
+  r.theta = Math.atan(r.SS/y1);         // (3.7.7)
+  r.KR = r.MS/r.theta;                  // (3.7.6) kN·m/rad
+  // 各段の1本あたり力（Mucal時）
+  const f = r.mode===1 ? (y)=>r.T0*y/y1 : (y)=>r.k*p.l*p.Fc*y/(lam*p.E);
+  r.rowT = T.map(x=>({pos:x.g,cnt:x.m,y:x.g-lam,F:f(x.g-lam)}));
+  r.rowC = C.map(x=>({pos:x.q,cnt:x.n,y:lam-x.q,F:f(lam-x.q)}));
+  r.sigU = r.mode===1 ? r.sig1 : p.Fc;
+  return r;
+}
+function series(a,b){ return a*b/(a+b); }
+
+// ---------- (3.5.1)〜(3.5.7) 単体剪断 ----------
+function calcShear(q){
+  const al=q.ls/q.l, be=q.Fes/q.Fe, ga=q.F/q.Fe, dl=q.d/q.l, modes=[];
+  if(q.type==="i"){
+    modes.push(["Ⅰa","2αβ",2*al*be,"I"]);
+    modes.push(["Ⅰb","1",1,"I"]);
+    modes.push(["Ⅲ","√(8α²β²(1+β)/(2β+1)²+8βγ(d/l)²/(3(2β+1)))−2αβ/(2β+1)",
+      Math.sqrt(8*al*al*be*be*(1+be)/(2*be+1)**2 + 8*be*ga*dl*dl/(3*(2*be+1))) - 2*al*be/(2*be+1),"III"]);
+    modes.push(["Ⅳ","(d/l)√(8βγ/(3(1+β)))",dl*Math.sqrt(8*be*ga/(3*(1+be))),"IV"]);
+  }else if(q.type==="ii"){
+    modes.push(["Ⅰa","αβ",al*be,"I"]);
+    modes.push(["Ⅰb","1",1,"I"]);
+    modes.push(["Ⅱ","(√(β+2β²(1+α+α²)+α²β³)−β(1+α))/(1+β)",
+      (Math.sqrt(be+2*be*be*(1+al+al*al)+al*al*be**3)-be*(1+al))/(1+be),"II"]);
+    modes.push(["Ⅲa","√(2β(1+β)/(2+β)²+2βγ(d/l)²/(3(2+β)))−β/(2+β)",
+      Math.sqrt(2*be*(1+be)/(2+be)**2 + 2*be*ga*dl*dl/(3*(2+be))) - be/(2+be),"III"]);
+    modes.push(["Ⅲb","√(2α²β²(1+β)/(2β+1)²+2βγ(d/l)²/(3(2β+1)))−αβ/(2β+1)",
+      Math.sqrt(2*al*al*be*be*(1+be)/(2*be+1)**2 + 2*be*ga*dl*dl/(3*(2*be+1))) - al*be/(2*be+1),"III"]);
+    modes.push(["Ⅳ","(d/l)√(2βγ/(3(1+β)))",dl*Math.sqrt(2*be*ga/(3*(1+be))),"IV"]);
+  }else{
+    modes.push(["Ⅰ","1",1,"I"]);
+    modes.push(["Ⅲ","√(2+(2/3)γ(d/l)²)−1",Math.sqrt(2+2/3*ga*dl*dl)-1,"III"]);
+    modes.push(["Ⅳ","(d/l)√(2γ/3)",dl*Math.sqrt(2*ga/3),"IV"]);
+  }
+  let gi=0; modes.forEach((m,i)=>{ if(m[2]<modes[gi][2]) gi=i; });
+  const C=modes[gi][2], cls=modes[gi][3];
+  const ru = cls==="I"?1.0:(cls==="IV"?1.2:1.1);                 // 表3-3
+  const Py = C*q.Fe*q.d*q.l;                                      // (3.5.3) N
+  const Pu0 = ru*Py;
+  const P0a = 0.5*Py, P0b = 0.5*q.Kf*Pu0;                          // jK0=1/2
+  const P0 = Math.min(P0a,P0b);                                    // (3.5.1)
+  const Kd = [["長期",1.1],["中長期",1.43],["中短期",1.6],["短期",2.0]];
+  const Pa = Kd.map(([nm,k])=>[nm,k,k*q.Km*P0]);                   // (3.5.2)
+  return {al,be,ga,modes,gi,C,ru,Py,Pu0,P0a,P0b,P0,Pa};
+}
+/*CORE_END*/
+
+// ---------- 材料プリセット ----------
+const SPECIES = {
+  sugi:{nm:"スギ",J:"J3",Fcv:6.0,ft:{sawn:4.5,sawnE:4.5,lvl:4.5,glu:5.4,gluA:5.4,clt:5.4},g11:"G3",g12:"S"},
+  hinoki:{nm:"ヒノキ",J:"J2",Fcv:7.8,ft:{sawn:4.5,sawnE:4.5,glu:6.3,gluA:6.3},g11:"G2",g12:"K"},
+  karamatsu:{nm:"カラマツ",J:"J1",Fcv:7.8,ft:{sawn:4.5,sawnE:4.5,lvl:5.4,glu:6.3,gluA:6.3,clt:6.3},g11:"G2",g12:"K"},
+  oushu:{nm:"オウシュウアカマツ",J:"J2",Fcv:6.0,ft:{sawn:4.5,sawnE:4.5,glu:5.4,gluA:5.4},g11:"G1",g12:"S"},
+  beimatsu:{nm:"ベイマツ",J:"J1",Fcv:9.0,ft:{sawn:4.5,sawnE:4.5,lvl:4.5,glu:6.3,gluA:6.3},g11:"G1",g12:"A"},
+};
+const KINDS = {sawn:"製材（無等級）",sawnE:"製材（機械等級）",glu:"集成材（同一等級・4枚以上）",gluA:"集成材（異等級対称）",lvl:"LVL（A種）",clt:"CLT（手入力）"};
+// [等級, Fc, E0(kN/mm2)]
+const GRADES = {
+  sawn:{A:[["無等級",22.2,6.9]],K:[["無等級",20.7,4.9]],S:[["無等級",17.7,4.9]]},
+  sawnE:{
+    G1:[["E70",9.6,6.9],["E90",16.8,8.8],["E110",24.6,10.8],["E130",31.8,12.7],["E150",39.0,14.7]],
+    G2:[["E50",11.4,4.9],["E70",18.0,6.9],["E90",24.6,8.8],["E110",31.2,10.8],["E130",37.8,12.7],["E150",44.4,14.7]],
+    G3:[["E50",19.2,4.9],["E70",23.4,6.9],["E90",28.2,8.8],["E110",32.4,10.8],["E130",37.2,12.7],["E150",41.4,14.7]]},
+  glu:[["E150-F465",39.2,15.0],["E135-F405",33.4,13.5],["E120-F375",30.1,12.0],["E105-F345",28.1,10.5],
+       ["E95-F315",26.0,9.5],["E85-F300",24.3,8.5],["E75-F270",22.3,7.5],["E65-F225",20.6,6.5]],
+  gluA:[["E150-F435",33.4,15.0],["E135-F375",29.7,13.5],["E120-F330",25.9,12.0],["E105-F300",23.2,10.5],
+        ["E95-F270",21.7,9.5],["E85-F255",19.5,8.5],["E75-F240",17.6,7.5],["E65-F225",16.7,6.5]],
+  lvl:[["160E特級",41.4,16.0],["160E一級",40.2,16.0],["160E二級",37.2,16.0],["140E特級",36.0,14.0],["140E一級",34.8,14.0],["140E二級",32.4,14.0],
+       ["120E特級",31.2,12.0],["120E一級",30.0,12.0],["120E二級",28.8,12.0],["110E特級",28.2,11.0],["110E一級",27.0,11.0],["110E二級",25.8,11.0],
+       ["100E特級",25.8,10.0],["100E一級",25.2,10.0],["100E二級",23.4,10.0]],
+  clt:[["手入力",12.0,5.0]],
+};
+function gradeList(sp,kind){
+  const s=SPECIES[sp];
+  if(kind==="sawn") return GRADES.sawn[s.g12];
+  if(kind==="sawnE") return GRADES.sawnE[s.g11];
+  return GRADES[kind];
+}
+
+const $ = id=>document.getElementById(id);
+const num = id=>{ const v=parseFloat($(id).value); return isFinite(v)?v:0; };
+const fx = (v,n=2)=>isFinite(v)?v.toLocaleString("ja-JP",{minimumFractionDigits:n,maximumFractionDigits:n}):"—";
+
+function matUI(P, dflt){
+  const spOpts = Object.entries(SPECIES).map(([k,v])=>`<option value="${k}">${v.nm}</option>`).join("");
+  const kOpts = Object.entries(KINDS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("");
+  $("mat"+P).innerHTML = `
+  <div class="row">
+    <label class="f"><b>樹種</b><select id="${P}sp">${spOpts}</select></label>
+    <label class="f"><b>材種</b><select id="${P}kind">${kOpts}</select></label>
+    <label class="f"><b>等級</b><select id="${P}gr"></select></label>
+  </div>
+  <div class="row">
+    <label class="f"><b>幅 b (mm)</b><input type="number" id="${P}b" value="${dflt.b}"></label>
+    <label class="f"><b>挿入方向</b><select id="${P}dir"><option value="0">繊維平行</option><option value="1">繊維直交</option></select></label>
+    <label class="f"><b>引抜量 S (mm)</b><input type="number" id="${P}S" value="0.4" step="0.01" class="w70"></label>
+  </div>
+  <div class="row">
+    <label class="f"><b>E (kN/mm²)</b><input type="number" id="${P}E" step="0.1" class="w70"></label>
+    <label class="f"><b>Fc (N/mm²)</b><input type="number" id="${P}Fc" step="0.1" class="w70"></label>
+    <label class="f"><b>Fcv (N/mm²)</b><input type="number" id="${P}Fcv" step="0.1" class="w70"></label>
+    <label class="f"><b>ft (N/mm²)</b><input type="number" id="${P}ft" step="0.1" class="w70"></label>
+  </div>
+  <div class="row">
+    <label class="f"><b>直交時 E÷</b><input type="number" id="${P}div" value="30" class="w70"></label>
+    <label class="f"><b>J区分</b><select id="${P}J"><option>J1</option><option>J2</option><option>J3</option></select></label>
+  </div>
+  <div class="hint" id="${P}hint"></div>`;
+  $(P+"sp").value=dflt.sp; $(P+"kind").value=dflt.kind; $(P+"dir").value=dflt.dir;
+  const fillGr=()=>{
+    const gl=gradeList($(P+"sp").value,$(P+"kind").value);
+    $(P+"gr").innerHTML=gl.map((g,i)=>`<option value="${i}">${g[0]}</option>`).join("");
+  };
+  const applyPreset=()=>{
+    const sp=SPECIES[$(P+"sp").value], kind=$(P+"kind").value;
+    const g=gradeList($(P+"sp").value,kind)[+$(P+"gr").value||0];
+    $(P+"E").value=g[2]; $(P+"Fc").value=g[1]; $(P+"Fcv").value=sp.Fcv; $(P+"J").value=sp.J;
+    const ft=sp.ft[kind];
+    $(P+"ft").value = ft ?? sp.ft.sawn;
+    const h=[];
+    h.push("ft：表3-1"+(ft?"":"に該当材種なし→製材値を仮設定"));
+    if(kind==="sawn") h.push("Fc・E：資料表1.2");
+    else if(kind==="sawnE") h.push("Fc・E：資料表1.1");
+    else if(kind==="glu") h.push("Fc・E：資料表2.1（4枚以上）");
+    else if(kind==="gluA") h.push("Fc・E：資料表2.2");
+    else if(kind==="lvl") h.push("Fc・E：資料表3.1（120E二級Fcは表記12.8を28.8と読替）");
+    else h.push("CLT：Fc・Eを手入力");
+    h.push("Fcv：資料表1.3/2.3");
+    if($(P+"sp").value==="oushu") h.push("オウシュウアカマツのJ区分は表3-2に記載なし→J2仮定");
+    if($(P+"sp").value==="beimatsu" && kind==="glu") h.push("添付Excel注記：米松集成材は ft=5.4 として下さい");
+    $(P+"hint").textContent=h.join("／");
+  };
+  $(P+"sp").addEventListener("change",()=>{fillGr();applyPreset();});
+  $(P+"kind").addEventListener("change",()=>{fillGr();applyPreset();});
+  $(P+"gr").addEventListener("change",applyPreset);
+  $(P+"dir").addEventListener("change",()=>{ $(P+"S").value = $(P+"dir").value==="1"?0.6:0.4; });
+  fillGr();
+  if(dflt.gr!=null) $(P+"gr").value=dflt.gr;
+  applyPreset();
+  if(dflt.dir==="1") $(P+"S").value=0.6;
+}
+function readMat(P){
+  const dir=$(P+"dir").value==="1", E=num(P+"E")*1000, div=num(P+"div")||30;
+  return {b:num(P+"b"),dir,S:num(P+"S"),E0:E,E:dir?E/div:E,Fc:dir?num(P+"Fcv"):num(P+"Fc"),Fc0:num(P+"Fc"),Fcv:num(P+"Fcv"),ft:num(P+"ft"),J:$(P+"J").value,div,
+    name:`${SPECIES[$(P+"sp").value].nm} ${KINDS[$(P+"kind").value].replace(/（.*）/,"")} ${$(P+"gr").selectedOptions[0]?.text||""}`};
+}
+
+// 配置入力
+const NR=4;
+function rowsUI(){
+  const dT=[[315,2],[255,0],[0,0],[0,0]], dC=[[45,2],[105,0],[0,0],[0,0]];
+  $("trows").innerHTML="<tr><th></th><th>g (mm)</th><th>m (本)</th></tr>"+dT.map((v,i)=>`<tr><td>${i+1}段</td><td><input type="number" id="g${i}" value="${v[0]}"></td><td><input type="number" id="m${i}" value="${v[1]}" class="w70"></td></tr>`).join("");
+  $("crows").innerHTML="<tr><th></th><th>q (mm)</th><th>n (本)</th></tr>"+dC.map((v,i)=>`<tr><td>${i+1}段</td><td><input type="number" id="q${i}" value="${v[0]}"></td><td><input type="number" id="n${i}" value="${v[1]}" class="w70"></td></tr>`).join("");
+}
+function readRows(){
+  const T=[],C=[];
+  for(let i=0;i<NR;i++){ T.push({g:num("g"+i),m:Math.round(num("m"+i))}); C.push({q:num("q"+i),n:Math.round(num("n"+i))}); }
+  return {T,C};
+}
+
+const JT = {
+  single:{B:false,hint:"部材A単体の (3.7.1)〜(3.7.6) で M・K<sub>R</sub> を算定。RC-木直接柱脚はコンクリート側定着長 ≧ 2l が前提。"},
+  T:{B:true,lg:"部材B（柱）",ll:"柱側定着長 h<sub>e</sub> (mm)",hint:"M は梁側（l）で算定。K = Ka·Kb/(Ka+Kb)、Kb は柱側 h<sub>e</sub>・柱材料で算定（3.9.3）。柱側は通常「繊維直交」。"},
+  X:{B:true,lg:"部材B（柱）",ll:null,hint:"M は梁側で算定。K は柱・梁とも定着長 l として直列（3.9.4）。柱側は通常「繊維直交」。"},
+  sp1:{B:false,hint:"同一部材の継手：M = 片側の M、K = K<sub>R</sub>/2。"},
+  sp2:{B:true,lg:"部材B（継手相手）",ll:"部材B側埋込長さ (mm)",hint:"異種部材の継手：M = min(M<sub>A</sub>, M<sub>B</sub>)、K = Ka·Kb/(Ka+Kb)（3.9.5）。"},
+  box:{B:false,base:"box",hint:"箱形柱脚金物（剛体仮定）：<sub>cmb</sub>K<sub>R</sub> = K<sub>R</sub>·K<sub>BS</sub>/(K<sub>R</sub>+K<sub>BS</sub>)（3.8.1）。降伏はアンカー側で生じる設計とすること。"},
+  plate:{B:false,base:"plate",hint:"板状BP：<sub>c</sub>K<sub>R</sub> = M<sub>ucal</sub>/<sub>c</sub>θ、<sub>c</sub>θ = tan⁻¹((S+ΔS)/(g<sub>1</sub>−λ))（3.8.3）(3.8.4)。ΔS は露出柱脚の設計法による。"},
+};
+
+function sideRows(r,lbl){
+  const rows=[...r.rowT.map((x,i)=>["引張 g"+(i+1),x]),...r.rowC.map((x,i)=>["圧縮 q"+(i+1),x])];
+  return `<div class="tscroll"><table class="t"><tr><th>段</th><th>位置 (mm)</th><th>本数</th><th>中立軸からの距離 (mm)</th><th>1本あたり力 (kN)</th><th>負担M (kN·m)</th></tr>`+
+    rows.map(([nm,x])=>`<tr><td>${nm}</td><td class="n">${fx(x.pos,0)}</td><td class="n">${x.cnt}</td><td class="n">${fx(x.y,1)}</td><td class="n">${fx(x.F/1000,2)}</td><td class="n">${fx(x.cnt*x.F*Math.abs(x.y)/1e6,2)}</td></tr>`).join("")+
+    `</table></div><div class="note">${lbl}：M<sub>ucal</sub>時の値（1本あたり力の符号は距離の符号に従う。引張段で y<0 は圧縮側に位置）。</div>`;
+}
+function sideHTML(title,p,r,m){
+  if(r.err) return `<h3>${title}</h3><div class="warnbox">${r.err}</div>`;
+  const md1=r.mode===1, g=v=>fx(v/1e6,2);
+  return `<h3>${title}<span class="eq">(3.1)(3.7.1)〜(3.7.7)</span></h3>
+  <div class="kv"><span>材料 <span class="v">${m.name}</span></span><span>挿入 <span class="v">${m.dir?"繊維直交":"繊維平行"}</span></span>
+   <span>b <span class="v">${fx(p.b,0)}</span> mm</span><span>l <span class="v">${fx(p.l,0)}</span> mm</span><span>R<sub>h</sub> <span class="v">${fx(p.Rh,0)}</span> mm</span>
+   <span>E<sub>w</sub> <span class="v">${fx(p.E/1000,3)}</span> kN/mm²${m.dir?` (=E/${m.div})`:""}</span><span>F<sub>c</sub> <span class="v">${fx(p.Fc,1)}</span>${m.dir?" (Fcv)":""}</span>
+   <span>f<sub>t</sub> <span class="v">${fx(p.ft,1)}</span></span><span>S <span class="v">${fx(p.S,2)}</span> mm</span></div>
+  <div class="formula">A<sub>t</sub>=π·R<sub>h</sub>·l=${fx(r.At,0)} mm²　ω=0.016l/√R<sub>h</sub>=${fx(r.omega,4)}　R=tanhω/ω=${fx(r.R,4)}　A<sub>t</sub>f<sub>t</sub>R=${fx(r.T0/1000,2)} kN/本　k=A<sub>t</sub>f<sub>t</sub>R/S=${fx(r.k/1000,1)} kN/mm</div>
+  <div class="formula">Σm=${r.sm}　Σn=${r.sn}　Σm·g=${fx(r.smg,0)}　Σn·q=${fx(r.snq,0)}　→ λ=${fx(r.lam,2)} mm　g<sub>1</sub>=${fx(r.g1,0)}　g<sub>1</sub>−λ=${fx(r.g1-r.lam,2)} mm</div>
+  <div class="tscroll"><table class="t">
+   <tr><th>破壊モード</th><th>木材圧縮 (kN·m)</th><th>コネクター (kN·m)</th><th>M<sub>ucal</sub> (kN·m)</th><th>備考</th></tr>
+   <tr class="${md1?"gov":""}"><td>① 最外端引抜け (3.7.1)</td><td class="n">${g(r.M1w)}</td><td class="n">${g(r.M1c)}</td><td class="n">${g(r.M1)}</td><td>圧縮縁 σ=${fx(r.sig1,2)} N/mm² ${r.sig1<p.Fc?'<span class="okmark">&lt; Fc</span>':'<span class="ngmark">≧ Fc</span>'}</td></tr>
+   <tr class="${md1?"":"gov"}"><td>② 圧縮縁降伏 (3.7.3)</td><td class="n">${g(r.M2w)}</td><td class="n">${g(r.M2c)}</td><td class="n">${g(r.M2)}</td><td>最外端引抜量 ${fx(r.slip2,3)} mm</td></tr>
+  </table></div>
+  <div class="formula">M<sub>S</sub>=2M<sub>ucal</sub>/3=${fx(r.MS,2)}　M<sub>L</sub>=1.1M<sub>ucal</sub>/3=${fx(r.ML,2)} kN·m　θ=tan⁻¹(${fx(r.SS,3)}/${fx(r.g1-r.lam,2)})=${r.theta.toExponential(4)} rad　K<sub>R</sub>=M<sub>S</sub>/θ=${fx(r.KR,0)} kN·m/rad</div>
+  ${sideRows(r, md1?"モード①":"モード②")}`;
+}
+
+function drawSVG(D,b,rows,r){
+  if(r.err) return "";
+  const W=560, H=300, pad=24, sc=(H-2*pad)/D, bw=b*sc, x0=40, y0=pad;
+  const ys=v=>y0+v*sc;
+  let s=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px" role="img" aria-label="断面と応力分布">`;
+  s+=`<rect x="${x0}" y="${y0}" width="${bw}" height="${D*sc}" fill="var(--wood-soft)" stroke="var(--wood)"/>`;
+  s+=`<text x="${x0+bw/2}" y="${y0-8}" font-size="11" text-anchor="middle" fill="var(--ink2)">圧縮縁</text>`;
+  const dots=(pos,cnt,col)=>{ let t=""; for(let i=0;i<cnt;i++){ const cx=x0+bw*(i+1)/(cnt+1); t+=`<circle cx="${cx}" cy="${ys(pos)}" r="4" fill="${col}"/>`; } return t; };
+  rows.T.filter(x=>x.m>0).forEach(x=>s+=dots(x.g,x.m,"var(--tens)"));
+  rows.C.filter(x=>x.n>0).forEach(x=>s+=dots(x.q,x.n,"var(--comp)"));
+  const yl=ys(r.lam);
+  s+=`<line x1="${x0-12}" x2="${W-10}" y1="${yl}" y2="${yl}" stroke="var(--ink2)" stroke-dasharray="5 4"/>`;
+  s+=`<text x="${x0-14}" y="${yl+4}" font-size="11" text-anchor="end" fill="var(--ink)">λ</text>`;
+  s+=`<text x="${W-12}" y="${yl-5}" font-size="11" text-anchor="end" fill="var(--ink2)">中立軸 λ=${fx(r.lam,1)}</text>`;
+  // 応力分布
+  const xa=x0+bw+70, Fmax=Math.max(...r.rowT.map(x=>Math.abs(x.F)),...r.rowC.map(x=>Math.abs(x.F)),1);
+  const wmax=W-xa-60, fsc=wmax/Fmax;
+  s+=`<line x1="${xa}" x2="${xa}" y1="${y0}" y2="${y0+D*sc}" stroke="var(--line2)"/>`;
+  const wd=Math.min(80,wmax*0.6);
+  s+=`<polygon points="${xa},${y0} ${xa-wd},${y0} ${xa},${yl}" fill="var(--steel-soft)" stroke="var(--comp)"/>`;
+  s+=`<text x="${xa-wd}" y="${y0+14}" font-size="10.5" fill="var(--comp)">σ=${fx(r.sigU,1)}</text>`;
+  const arrow=(pos,F,col)=>{ const y=ys(pos), x2=xa+Math.abs(F)*fsc;
+    return `<line x1="${xa}" x2="${x2}" y1="${y}" y2="${y}" stroke="${col}" stroke-width="2.5"/><text x="${x2+6}" y="${y+4}" font-size="10.5" fill="${col}">${F>=0?"引":"圧"} ${fx(Math.abs(F)/1000,1)}kN</text>`; };
+  r.rowT.forEach(x=>s+=arrow(x.pos,x.F,"var(--tens)"));
+  r.rowC.forEach(x=>s+=arrow(x.pos,-x.F,"var(--comp)"));
+  s+=`<text x="${xa}" y="${H-4}" font-size="10.5" fill="var(--ink2)">M<tspan font-size="8" dy="2">ucal</tspan><tspan dy="-2">時　左：木材圧縮応力　右：コネクター1本あたり力</tspan></text>`;
+  s+=`<text x="${x0+bw/2}" y="${H-4}" font-size="10.5" text-anchor="middle" fill="var(--ink2)">b=${b} D=${D}</text>`;
+  return s+"</svg>";
+}
+
+function ratioCell(v){ if(!(v>0)) return `<td class="n">—</td><td>—</td>`; return `<td class="n">${fx(v,3)}</td><td>${v<=1?'<span class="okmark">OK</span>':'<span class="ngmark">NG</span>'}</td>`; }
+
+function runM(){
+  const jt=$("jt").value, J=JT[jt];
+  $("jtHint").innerHTML=J.hint;
+  $("fsB").hidden=!J.B; $("fsBase").hidden=!J.base; $("splitIn").hidden=jt!=="T";
+  if(J.B){ $("lgB").textContent=J.lg; $("rowlB").hidden=!J.ll; if(J.ll) $("lbllB").innerHTML=J.ll; }
+  if(J.base){ $("rowBox").hidden=J.base!=="box"; $("rowPlate").hidden=J.base!=="plate";
+    $("baseHint").innerHTML = J.base==="box"?"K<sub>BS</sub> = E·a<sub>t</sub>·(d<sub>t</sub>+d<sub>c</sub>)²/(2l<sub>b</sub>)（3.8.2）":"ΔS：降伏時モーメント作用時のアンカーボルト＋BPの変形（鉄骨造露出柱脚の設計法による）"; }
+  const d=+$("d").value, Rh=num("Rh"), l=num("l"), D=num("D"), rows=readRows();
+  const mA=readMat("A");
+  const pA={Rh,l,b:mA.b,E:mA.E,Fc:mA.Fc,ft:mA.ft,S:mA.S,rowsT:rows.T,rowsC:rows.C};
+  const rA=calcSide(pA);
+  let rB=null,pB=null,mB=null;
+  if(J.B){
+    mB=readMat("B");
+    const lB = jt==="X" ? l : num("lB");
+    pB={Rh,l:lB,b:mB.b,E:mB.E,Fc:mB.Fc,ft:mB.ft,S:mB.S,rowsT:rows.T,rowsC:rows.C};
+    rB=calcSide(pB);
+  }
+  const warns=[];
+  if(Rh<d+3-1e-9||Rh>d+6+1e-9) warns.push(`挿入孔径 Rh=${Rh} が d+3〜d+6（${d+3}〜${d+6}）の範囲外です。`);
+  const allPos=[...rows.T.filter(x=>x.m>0).map(x=>x.g),...rows.C.filter(x=>x.n>0).map(x=>x.q)];
+  if(allPos.some(v=>v<=0||v>=D)) warns.push("コネクター位置が断面外（0〜D）です。");
+  const fmin=Math.min(...allPos,...allPos.map(v=>D-v));
+  if(fmin<1.25*d-1e-9) warns.push(`縁距離 ${fx(fmin,1)}mm < 1.25d=${fx(1.25*d,1)}mm（図3-1）。剪断負担時は f' ≧ 45mm も確認。`);
+  const sorted=[...allPos].sort((a,b)=>a-b);
+  for(let i=1;i<sorted.length;i++) if(sorted[i]-sorted[i-1]<1.75*d-1e-9){ warns.push(`段間隔 ${fx(sorted[i]-sorted[i-1],1)}mm < 1.75d=${fx(1.75*d,1)}mm（図3-1、剪断負担時は2.5d）。`); break; }
+  if(rA.err) warns.push("部材A："+rA.err);
+  if(rB&&rB.err) warns.push("部材B："+rB.err);
+  $("warnM").innerHTML=warns.length?`<div class="warnbox">${warns.map(w=>"⚠ "+w).join("<br>")}</div>`:"";
+
+  $("svgM").innerHTML=drawSVG(D,mA.b,rows,rA);
+  $("stA").innerHTML=sideHTML(J.B?"部材A（"+(jt==="sp2"?"継手側A":"梁側")+"）の曲げ耐力・回転剛性 K<sub>a</sub>":"部材Aの曲げ耐力・回転剛性",pA,rA,mA);
+  $("stB").hidden=!J.B;
+  if(J.B) $("stB").innerHTML=sideHTML(jt==="sp2"?"部材B（継手側B）の曲げ耐力・回転剛性 K<sub>b</sub>":"部材B（柱側）の回転剛性 K<sub>b</sub>",pB,rB,mB);
+
+  // 接合部としての M・K
+  let Mu=NaN,MS=NaN,ML=NaN,K=NaN,jl=[],split=null;
+  if(!rA.err){
+    Mu=rA.Mu; MS=rA.MS; ML=rA.ML;
+    if(jt==="single"){ K=rA.KR; jl.push(`K = K<sub>R</sub> = ${fx(K,0)} kN·m/rad`); }
+    else if(jt==="sp1"){ K=rA.KR/2; jl.push(`K = K<sub>R</sub>/2 = ${fx(rA.KR,0)}/2 = ${fx(K,0)} kN·m/rad`); }
+    else if(J.B && rB && !rB.err){
+      if(jt==="sp2" && rB.Mu<rA.Mu){ Mu=rB.Mu; MS=rB.MS; ML=rB.ML; }
+      K=series(rA.KR,rB.KR);
+      jl.push(`K = K<sub>a</sub>·K<sub>b</sub>/(K<sub>a</sub>+K<sub>b</sub>) = ${fx(rA.KR,0)}×${fx(rB.KR,0)}/(${fx(rA.KR,0)}+${fx(rB.KR,0)}) = ${fx(K,0)} kN·m/rad`);
+      if(jt==="sp2") jl.push(`M<sub>ucal</sub> = min(${fx(rA.Mu,2)}, ${fx(rB.Mu,2)}) = ${fx(Mu,2)} kN·m`);
+      else jl.push(`曲げ耐力は梁側（部材A）の値を採用`);
+    }else if(jt==="box"){
+      const KBS=num("Eab")*num("at")*(num("dt")+num("dc"))**2/(2*num("lb"))/1e6;
+      K=series(rA.KR,KBS);
+      jl.push(`K<sub>BS</sub> = E·a<sub>t</sub>·(d<sub>t</sub>+d<sub>c</sub>)²/(2l<sub>b</sub>) = ${num("Eab")}×${num("at")}×${num("dt")+num("dc")}²/(2×${num("lb")}) = ${fx(KBS,0)} kN·m/rad`);
+      jl.push(`<sub>cmb</sub>K<sub>R</sub> = K<sub>R</sub>·K<sub>BS</sub>/(K<sub>R</sub>+K<sub>BS</sub>) = ${fx(K,0)} kN·m/rad`);
+    }else if(jt==="plate"){
+      const th=Math.atan((pA.S+num("dS"))/(rA.g1-rA.lam));
+      K=rA.Mu/th;
+      jl.push(`<sub>c</sub>θ = tan⁻¹((S+ΔS)/(g<sub>1</sub>−λ)) = tan⁻¹((${fx(pA.S,2)}+${fx(num("dS"),2)})/${fx(rA.g1-rA.lam,2)}) = ${th.toExponential(4)} rad`);
+      jl.push(`<sub>c</sub>K<sub>R</sub> = M<sub>ucal</sub>/<sub>c</sub>θ = ${fx(rA.Mu,2)}/${th.toExponential(4)} = ${fx(K,0)} kN·m/rad`);
+    }
+    if(jt==="T" && rB && !rB.err){
+      const TPa=rA.T0*rA.sm/1000, h=num("hc"), he=pB.l, b=mB.b, Cr=num("Cr"), a=num("alp")*Math.PI/180;
+      const ok = he<h;
+      const Pu = ok ? 2/Math.sin(a)*Cr*b*Math.sqrt(he/(1-he/h))/1000 : NaN;
+      split={TPa,Pu,h,he,b,Cr,alp:num("alp")};
+      jl.push(`割裂（3.9.2）：TPa = A<sub>t</sub>f<sub>t</sub>R×Σm = ${fx(rA.T0/1000,2)}×${rA.sm} = ${fx(TPa,2)} kN　&lt;　(2/sinα)·Cr·b·√(h<sub>e</sub>/(1−h<sub>e</sub>/h)) = 2/sin${num("alp")}°×${Cr}×${b}×√(${he}/(1−${he}/${h})) = ${fx(Pu,2)} kN　→ ${ok&&TPa<Pu?'<span class="okmark">OK</span>':'<span class="ngmark">NG</span>'}（TPa/許容 = ${fx(TPa/Pu,3)}）`);
+    }
+  }
+  $("stJ").innerHTML=`<h3>接合部の曲げ耐力・回転剛性<span class="eq">${{single:"(3.7.5)(3.7.6)",T:"(3.9.1)〜(3.9.3)",X:"(3.9.4)",sp1:"3.10①",sp2:"(3.9.5)",box:"(3.8.1)(3.8.2)",plate:"(3.8.3)(3.8.4)"}[jt]}</span></h3>`+
+    `<div class="formula" style="white-space:normal">${jl.join("<br>")}</div>`;
+
+  // 引張・剪断耐力、検定
+  const nAll=rA.sm+rA.sn;
+  const envM=+$("envM").value;
+  let q1L,q1S,qnote;
+  if($("qsrc").value==="tbl"){
+    const r=t21Lookup(d,l);
+    q1L=r?r[5]:0; q1S=r?r[6]:0; $("qL1").value=q1L; $("qS1").value=q1S;
+    qnote=r?`表2-1 ${r[0]}（定着長${r[2]}≦l=${l}）`:`表2-1 に d=${d}・定着長≦${l} の行なし`;
+  }else{ q1L=num("qL1"); q1S=num("qS1"); qnote="手入力"; }
+  $("qL1").disabled=$("qS1").disabled=$("qsrc").value==="tbl";
+  const QaL=q1L*envM*nAll, QaS=q1S*envM*nAll;
+  const nr=$("nrat").value==="xl"?1/3:1.1/3;
+  const T0=rA.T0/1000||0, NaS=2/3*T0*nAll, NaL=nr*T0*nAll;
+  const f={ML:num("ML"),MS:num("MS"),QL:num("QL"),QS:num("QS"),NL:num("NL"),NS:num("NS")};
+  const rr={ML:f.ML/ML,MS:f.MS/MS,QL:f.QL/QaL,QS:f.QS/QaS,NL:f.NL/NaL,NS:f.NS/NaS};
+  const nmL=(f.NL/NaL||0)+(f.ML/ML||0), nmS=(f.NS/NaS||0)+(f.MS/MS||0);
+  $("stChk").innerHTML=`<h3>許容耐力と検定<span class="eq">全本数 ${nAll} 本</span></h3>
+  <div class="tscroll"><table class="t"><tr><th>項目</th><th>許容耐力</th><th>設計応力</th><th>検定比</th><th>判定</th><th>根拠</th></tr>
+  <tr><td>曲げ 長期</td><td class="n">${fx(ML,2)} kN·m</td><td class="n">${fx(f.ML,2)}</td>${ratioCell(rr.ML)}<td>1.1M<sub>ucal</sub>/3</td></tr>
+  <tr><td>曲げ 短期</td><td class="n">${fx(MS,2)} kN·m</td><td class="n">${fx(f.MS,2)}</td>${ratioCell(rr.MS)}<td>2M<sub>ucal</sub>/3</td></tr>
+  <tr><td>剪断 長期</td><td class="n">${fx(QaL,2)} kN</td><td class="n">${fx(f.QL,2)}</td>${ratioCell(rr.QL)}<td>${fx(q1L,2)}×${envM}×${nAll}本　${qnote}</td></tr>
+  <tr><td>剪断 短期</td><td class="n">${fx(QaS,2)} kN</td><td class="n">${fx(f.QS,2)}</td>${ratioCell(rr.QS)}<td>${fx(q1S,2)}×${envM}×${nAll}本</td></tr>
+  <tr><td>引張 長期</td><td class="n">${fx(NaL,2)} kN</td><td class="n">${fx(f.NL,2)}</td>${ratioCell(rr.NL)}<td>${nr===1/3?"1/3":"1.1/3"}×A<sub>t</sub>f<sub>t</sub>R×${nAll}本</td></tr>
+  <tr><td>引張 短期</td><td class="n">${fx(NaS,2)} kN</td><td class="n">${fx(f.NS,2)}</td>${ratioCell(rr.NS)}<td>2/3×A<sub>t</sub>f<sub>t</sub>R×${nAll}本（(3.1)）</td></tr>
+  <tr><td>軸力＋曲げ 長期</td><td class="n">—</td><td class="n">—</td>${ratioCell(nmL)}<td>N/N<sub>a</sub>+M/M<sub>a</sub>（図3-3 参考事例）</td></tr>
+  <tr><td>軸力＋曲げ 短期</td><td class="n">—</td><td class="n">—</td>${ratioCell(nmS)}<td></td></tr>
+  </table></div>
+  <div class="note">図3-3の検定値参考事例：長期 軸力・剪断・曲げ・軸力+曲げ &lt;1.00、短期 軸力&lt;0.6・剪断&lt;0.5・曲げ&lt;0.6・軸力+曲げ&lt;1.00（設計者判断）。上表の判定は 1.0 基準。</div>`;
+
+  $("bigM").innerHTML = `
+   <div><span class="lbl">短期曲げ耐力 M<sub>S</sub></span><span class="val">${fx(MS,2)}</span> <span class="unitv">kN·m</span><small>長期 M<sub>L</sub> = ${fx(ML,2)} kN·m　M<sub>ucal</sub> = ${fx(Mu,2)}</small></div>
+   <div><span class="lbl">接合部回転剛性 K</span><span class="val">${isFinite(K)?fx(K,0):"—"}</span> <span class="unitv">kN·m/rad</span><small>${rA.err?"":`部材A K<sub>R</sub> = ${fx(rA.KR,0)}　支配 モード${rA.mode===1?"①引抜け":"②圧縮降伏"}`}</small></div>
+   <div><span class="lbl">引張耐力 A<sub>t</sub>f<sub>t</sub>R</span><span class="val">${fx(T0,2)}</span> <span class="unitv">kN/本</span><small>λ = ${fx(rA.lam,1)} mm</small></div>`;
+
+  // 転記テキスト
+  const L=[];
+  const sideTxt=(nm,p,r,m)=>{
+    if(r.err){ L.push(`${nm}：${r.err}`); return; }
+    L.push(`【${nm}】${m.name}　${m.dir?"繊維直交挿入":"繊維平行挿入"}`);
+    L.push(`  b=${p.b}mm  l=${p.l}mm  Rh=${p.Rh}mm  Ew=${fx(p.E/1000,3)}kN/mm2${m.dir?`(E/${m.div})`:""}  Fc=${fx(p.Fc,1)}N/mm2${m.dir?"(Fcv)":""}  ft=${fx(p.ft,1)}N/mm2  S=${p.S}mm`);
+    L.push(`  At=π・Rh・l=${fx(r.At,0)}mm2  ω=0.016l/√Rh=${fx(r.omega,4)}  R=tanhω/ω=${fx(r.R,4)}`);
+    L.push(`  At・ft・R=${fx(r.T0/1000,2)}kN/本  k=AtftR/S=${fx(r.k/1000,1)}kN/mm`);
+    L.push(`  λ=${fx(r.lam,2)}mm (3.7.2)  g1=${fx(r.g1,0)}mm  g1-λ=${fx(r.g1-r.lam,2)}mm`);
+    L.push(`  Mucal①=${fx(r.M1/1e6,2)}kN・m (3.7.1)  Mucal②=${fx(r.M2/1e6,2)}kN・m (3.7.3)  → Mucal=${fx(r.Mu,2)}kN・m`);
+    L.push(`  MS=2/3・Mucal=${fx(r.MS,2)}kN・m  ML=1.1/3・Mucal=${fx(r.ML,2)}kN・m (3.7.5)`);
+    L.push(`  θ=tan-1(2S/3/(g1-λ))=${r.theta.toExponential(4)}rad  KR=MS/θ=${fx(r.KR,0)}kN・m/rad (3.7.6)(3.7.7)`);
+  };
+  L.push("ホームコネクター接合部の検討（ホームコネクター工法設計マニュアル 第2_02版 3章）");
+  L.push(`接合形式：${$("jt").selectedOptions[0].text}　コネクター φ${d}  Rh=${Rh}mm`);
+  L.push("配置：引張 "+rows.T.filter(x=>x.m>0).map((x,i)=>`g${i+1}=${x.g}mm×${x.m}本`).join(", ")+"／圧縮 "+(rows.C.filter(x=>x.n>0).map((x,i)=>`q${i+1}=${x.q}mm×${x.n}本`).join(", ")||"なし"));
+  sideTxt(J.B?"部材A":"接合部",pA,rA,mA);
+  if(J.B&&rB) sideTxt("部材B",pB,rB,mB);
+  L.push("【接合部】"); jl.forEach(x=>L.push("  "+x.replace(/<[^>]+>/g,"").replace(/&lt;/g,"<")));
+  L.push(`  M(短期)=${fx(MS,2)}kN・m  M(長期)=${fx(ML,2)}kN・m  K=${fx(K,0)}kN・m/rad`);
+  L.push("【検定】");
+  const ln=(nm,a,u,fv,rv)=>{ if(rv>0) L.push(`  ${nm}: ${fx(fv,2)} / ${fx(a,2)} = ${fx(rv,3)} ${rv<=1?"≦1.0 OK":">1.0 NG"}`); };
+  ln("長期曲げ ML/MLa",ML,"",f.ML,rr.ML); ln("短期曲げ MS/MSa",MS,"",f.MS,rr.MS);
+  ln("長期剪断 QL/QLa",QaL,"",f.QL,rr.QL); ln("短期剪断 QS/QSa",QaS,"",f.QS,rr.QS);
+  ln("長期引張 NL/NLa",NaL,"",f.NL,rr.NL); ln("短期引張 NS/NSa",NaS,"",f.NS,rr.NS);
+  $("repM").value=L.join("\n");
+}
+
+// ---------- TAB Q ----------
+function setFe(which){
+  if(which!=="s") $("qFe").value=FE[$("qJm").value][+$("qDm").value];
+  if(which!=="m") $("qFes").value=FE[$("qJs").value][+$("qDs").value];
+}
+function runQ(){
+  const type=$("qt").value;
+  $("qlsW").hidden=type==="iii"; $("qSideRow").hidden=type==="iii";
+  const q={type,d:+$("qd").value,l:num("ql"),ls:type==="iii"?0:num("qls"),Fe:num("qFe"),Fes:type==="iii"?num("qFe"):num("qFes"),F:num("qF"),Kf:num("qKf"),Km:+$("qKm").value};
+  const r=calcShear(q), n=Math.round(num("qn"));
+  const cls=r.modes[r.gi][3];
+  $("stQ").innerHTML=`<h3>接合形式係数 C<span class="eq">${{i:"(3.5.4)",ii:"(3.5.5)",iii:"(3.5.6)"}[type]}</span></h3>
+  <div class="kv">${type!=="iii"?`<span>α=l'/l <span class="v">${fx(r.al,3)}</span></span><span>β=Fe'/Fe <span class="v">${fx(r.be,3)}</span></span>`:""}<span>γ=F/Fe <span class="v">${fx(r.ga,3)}</span></span><span>d/l <span class="v">${fx(q.d/q.l,4)}</span></span></div>
+  <div class="tscroll"><table class="t"><tr><th>モード</th><th>式</th><th>C</th></tr>
+  ${r.modes.map((m,i)=>`<tr class="${i===r.gi?"gov":""}"><td>${m[0]}</td><td style="font-family:var(--mono);font-size:11.5px">${m[1]}</td><td class="n">${fx(m[2],4)}</td></tr>`).join("")}
+  </table></div>
+  <div class="formula">P<sub>y</sub> = C·Fe·d·l = ${fx(r.C,4)}×${fx(q.Fe,1)}×${q.d}×${q.l} = ${fx(r.Py/1000,2)} kN (3.5.3)　r<sub>u</sub> = ${r.ru}（モード${cls}、表3-3）　P<sub>u0</sub> = r<sub>u</sub>·P<sub>y</sub> = ${fx(r.Pu0/1000,2)} kN</div>
+  <div class="formula">P<sub>0</sub> = min(jK<sub>0</sub>·P<sub>y</sub>, jK<sub>0</sub>·jK<sub>f</sub>·P<sub>u0</sub>) = min(${fx(r.P0a/1000,2)}, ${fx(r.P0b/1000,2)}) = ${fx(r.P0/1000,2)} kN (3.5.1)　jK<sub>0</sub>=1/2</div>
+  <div class="tscroll"><table class="t"><tr><th>荷重継続期間</th><th>jK<sub>d</sub></th><th>jK<sub>m</sub></th><th>P<sub>a</sub> (kN/本)</th><th>×${n}本 (kN)</th></tr>
+  ${r.Pa.map(p=>`<tr><td>${p[0]}</td><td class="n">${p[1]}</td><td class="n">${q.Km}</td><td class="n">${fx(p[2]/1000,2)}</td><td class="n">${fx(p[2]*n/1000,2)}</td></tr>`).join("")}
+  </table></div>
+  <div class="note">参考：表2-1（簡易設計）φ${q.d} の許容剪断耐力 ${T21.filter(x=>x[1]===q.d).map(x=>`${x[0]} 長${x[5]}/短${x[6]}`).join("、")} kN/本</div>`;
+  const PaL=r.Pa[0][2]/1000, PaS=r.Pa[3][2]/1000;
+  $("bigQ").innerHTML=`<div><span class="lbl">長期 P<sub>a</sub></span><span class="val">${fx(PaL,2)}</span> <span class="unitv">kN/本</span><small>×${n}本 = ${fx(PaL*n,2)} kN</small></div>
+   <div><span class="lbl">短期 P<sub>a</sub></span><span class="val">${fx(PaS,2)}</span> <span class="unitv">kN/本</span><small>×${n}本 = ${fx(PaS*n,2)} kN</small></div>
+   <div><span class="lbl">支配モード</span><span class="val">${r.modes[r.gi][0]}</span><small>C = ${fx(r.C,4)}</small></div>`;
+  $("repQ").value=[
+    "ホームコネクター単体の剪断耐力（設計マニュアル 3.5）",
+    `接合形式：${$("qt").selectedOptions[0].text}  φ${q.d}  l=${q.l}mm${type!=="iii"?`  l'=${q.ls}mm`:""}`,
+    `Fe=${q.Fe}N/mm2${type!=="iii"?`  Fe'=${q.Fes}N/mm2  α=${fx(r.al,3)}  β=${fx(r.be,3)}`:""}  F=${q.F}N/mm2  γ=${fx(r.ga,3)}`,
+    ...r.modes.map(m=>`  モード${m[0]}: C=${fx(m[2],4)}`),
+    `C=${fx(r.C,4)}（モード${r.modes[r.gi][0]}）  Py=C・Fe・d・l=${fx(r.Py/1000,2)}kN  ru=${r.ru}  Pu0=${fx(r.Pu0/1000,2)}kN`,
+    `P0=min(1/2・Py, 1/2・jKf・Pu0)=${fx(r.P0/1000,2)}kN`,
+    ...r.Pa.map(p=>`  ${p[0]}: Pa=${p[1]}×${q.Km}×P0=${fx(p[2]/1000,2)}kN/本  ×${n}本=${fx(p[2]*n/1000,2)}kN`)].join("\n");
+}
+
+// ---------- TAB S ----------
+function runS(){
+  const r=T21[+$("sSpec").value], env=+$("sEnv").value, n=Math.round(num("sN")), nt=Math.round(num("sNt")), dd=num("sd"), rc=$("sRC").value==="1";
+  const nf=rc?0.5:1;
+  const NL1=r[3]*env*nf, NS1=r[4]*env*nf, QL1=r[5]*env, QS1=r[6]*env;
+  const j=7/8*dd/1000;
+  const MuL=NL1*nt*j, MuS=NS1*nt*j;
+  const NaL=NL1*n, NaS=NS1*n, QaL=QL1*n, QaS=QS1*n;
+  const f={NL:num("sNL"),QL:num("sQL"),ML:num("sML"),NS:num("sNS"),QS:num("sQS"),MS:num("sMS")};
+  const row=(nm,a,u,fv,ex)=>`<tr><td>${nm}</td><td class="n">${fx(a,2)} ${u}</td><td class="n">${fx(fv,2)}</td>${ratioCell(fv/a)}<td>${ex}</td></tr>`;
+  $("stS").innerHTML=`<h3>表2-1による許容耐力<span class="eq">2.4〜2.9、(2.1)</span></h3>
+  <div class="kv"><span>仕様 <span class="v">${r[0]}</span></span><span>定着長 <span class="v">${r[2]}</span> mm</span><span>使用環境係数 <span class="v">${env}</span></span>${rc?'<span>RC側引張 <span class="v">×1/2</span>（2.9）</span>':""}</div>
+  <div class="tscroll"><table class="t"><tr><th>項目</th><th>許容耐力</th><th>設計応力</th><th>検定比</th><th>判定</th><th>算定</th></tr>
+  ${row("引張 長期",NaL,"kN",f.NL,`${r[3]}×${env}${rc?"×1/2":""}×${n}本`)}
+  ${row("引張 短期",NaS,"kN",f.NS,`${r[4]}×${env}${rc?"×1/2":""}×${n}本`)}
+  ${row("剪断 長期",QaL,"kN",f.QL,`${r[5]}×${env}×${n}本`)}
+  ${row("剪断 短期",QaS,"kN",f.QS,`${r[6]}×${env}×${n}本`)}
+  ${row("曲げ 長期",MuL,"kN·m",f.ML,`${fx(NL1,2)}×${nt}×7/8×${dd/1000}`)}
+  ${row("曲げ 短期",MuS,"kN·m",f.MS,`${fx(NS1,2)}×${nt}×7/8×${dd/1000}`)}
+  </table></div>
+  <div class="note">曲げ M<sub>u</sub> = n×許容引張耐力×j、j = 7/8·d（(2.1)式、引張側1段配置に限る）。回転剛性が必要な場合は3章（曲げ耐力・回転剛性タブ）による。</div>`;
+  $("bigS").innerHTML=`<div><span class="lbl">曲げ耐力 長期／短期</span><span class="val">${fx(MuL,2)}</span> <span class="unitv">/ ${fx(MuS,2)} kN·m</span><small>j = ${fx(j*1000,1)} mm</small></div>
+   <div><span class="lbl">引張 長期／短期</span><span class="val">${fx(NaL,2)}</span> <span class="unitv">/ ${fx(NaS,2)} kN</span></div>
+   <div><span class="lbl">剪断 長期／短期</span><span class="val">${fx(QaL,2)}</span> <span class="unitv">/ ${fx(QaS,2)} kN</span></div>`;
+  $("repS").value=[
+    "ホームコネクター接合部の検討（設計マニュアル 2章 耐力表を用いた簡易設計）",
+    `${r[0]}（定着長${r[2]}mm）  使用環境係数${env}${rc?"  RC-木接合：RC側引張耐力×1/2":""}`,
+    `引張：長期 ${r[3]}×${env}${rc?"×1/2":""}×${n}本=${fx(NaL,2)}kN  短期 ${fx(NaS,2)}kN`,
+    `剪断：長期 ${r[5]}×${env}×${n}本=${fx(QaL,2)}kN  短期 ${fx(QaS,2)}kN`,
+    `曲げ：Mu=n・Na・j  j=7/8×${dd}=${fx(j*1000,1)}mm  長期 ${fx(NL1,2)}×${nt}×${fx(j,4)}=${fx(MuL,2)}kN・m  短期 ${fx(MuS,2)}kN・m`].join("\n");
+}
+
+// ---------- 初期化 ----------
+rowsUI();
+matUI("A",{sp:"beimatsu",kind:"gluA",gr:3,dir:"0",b:120});
+matUI("B",{sp:"beimatsu",kind:"gluA",gr:3,dir:"1",b:180});
+$("lB").value=420;
+$("B"+"J").addEventListener("change",()=>{$("Cr").value=CR[$("BJ").value];});
+$("Cr").value=CR[$("BJ").value];
+["qJm","qDm"].forEach(id=>$(id).addEventListener("change",()=>{setFe("m");runQ();}));
+["qJs","qDs"].forEach(id=>$(id).addEventListener("change",()=>{setFe("s");runQ();}));
+setFe();
+$("sSpec").innerHTML=T21.map((r,i)=>`<option value="${i}">${r[0]}（定着長${r[2]}）</option>`).join("");
+$("sSpec").value=4;
+$("d").addEventListener("change",()=>{ $("Rh").value=+$("d").value+3; });
+
+document.querySelectorAll("#tab-m input,#tab-m select").forEach(e=>e.addEventListener("input",runM));
+document.querySelectorAll("#tab-m select").forEach(e=>e.addEventListener("change",runM));
+document.querySelectorAll("#tab-q input,#tab-q select").forEach(e=>{e.addEventListener("input",runQ);e.addEventListener("change",runQ);});
+document.querySelectorAll("#tab-s input,#tab-s select").forEach(e=>{e.addEventListener("input",runS);e.addEventListener("change",runS);});
+// matUI 内のプリセット変更後にも再計算
+document.addEventListener("change",e=>{ if(e.target.closest("#tab-m")) setTimeout(runM,0); });
+
+document.querySelectorAll("nav.tabs button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("nav.tabs button").forEach(x=>x.setAttribute("aria-selected",x===b));
+  ["m","q","s"].forEach(t=>$("tab-"+t).hidden = t!==b.dataset.tab);
+}));
+document.querySelectorAll("button[data-copy]").forEach(b=>b.addEventListener("click",async()=>{
+  const ta=$(b.dataset.copy), msg=$("cp"+b.dataset.copy.slice(-1));
+  try{ await navigator.clipboard.writeText(ta.value); msg.textContent="コピーしました"; }
+  catch(e){ ta.select(); document.execCommand("copy"); msg.textContent="コピーしました"; }
+  setTimeout(()=>msg.textContent="",1800);
+}));
+// ---------- 仕様一覧（登録・CSV書き出し／読込） ----------
+const SP_EXCL=new Set(["ML","MS","QL","QS","NL","NS","spFile"]);
+const MAT_KEYS=["sp","kind","gr"];
+function specKeys(){ return [...document.querySelectorAll("#tab-m input[id],#tab-m select[id]")].map(e=>e.id).filter(k=>!SP_EXCL.has(k)); }
+function readSpec(){
+  const o={};
+  specKeys().forEach(k=>o[k]=$(k).value);
+  o.jt_name=$("jt").selectedOptions[0].text;
+  ["A","B"].forEach(P=>o[P+"gr_name"]=$(P+"gr").selectedOptions[0]?.text||"");
+  return o;
+}
+function applySpec(o){
+  const set=(k,ev)=>{ if(o[k]==null||!$(k)) return; $(k).value=o[k]; if(ev) $(k).dispatchEvent(new Event("change",{bubbles:true})); };
+  ["A","B"].forEach(P=>MAT_KEYS.forEach(k=>set(P+k,true)));
+  specKeys().filter(k=>!MAT_KEYS.some(m=>k===("A"+m)||k===("B"+m))).forEach(k=>set(k,false));
+  $("jt").dispatchEvent(new Event("change",{bubbles:true}));
+  runM();
+}
+let SPECS=[];
+try{ SPECS=JSON.parse(localStorage.getItem("hc_specs")||"[]"); }catch(e){ SPECS=[]; }
+function saveSpecs(){ try{ localStorage.setItem("hc_specs",JSON.stringify(SPECS)); }catch(e){} }
+function spMsg(t){ $("spMsg").textContent=t; setTimeout(()=>{ if($("spMsg").textContent===t) $("spMsg").textContent=""; },2500); }
+function specSummary(o){
+  const rows=(a,b,n)=>[...Array(NR).keys()].filter(i=>+o[b+i]>0).map(i=>`${o[a+i]}×${o[b+i]}`).join(", ")||"—";
+  return {g:rows("g","m"),q:rows("q","n")};
+}
+function renderSpecs(){
+  if(!SPECS.length){ $("spList").innerHTML='<div class="note">登録された仕様はありません。記号を入力して「この仕様を登録／上書き」を押してください。</div>'; return; }
+  $("spList").innerHTML=`<table class="t"><tr><th>記号</th><th>接合形式</th><th>d/l</th><th>部材A</th><th>引張 g×m</th><th>圧縮 q×n</th><th></th></tr>`+
+    SPECS.map((o,i)=>{ const s=specSummary(o);
+      return `<tr><td>${o.sym}</td><td>${o.jt_name}</td><td class="n">φ${o.d} / ${o.l}</td><td>${SPECIES[o.Asp]?.nm||""} ${o.Agr_name} ${o.Adir==="1"?"直交":"平行"} b=${o.Ab}</td><td class="n">${s.g}</td><td class="n">${s.q}</td>
+      <td style="white-space:nowrap"><button class="btn" data-ld="${i}">読込</button> <button class="btn" data-del="${i}" style="background:transparent;color:var(--warn);border-color:var(--warn)">削除</button></td></tr>`; }).join("")+"</table>";
+}
+function csvEsc(v){ return `"${String(v??"").replace(/"/g,'""')}"`; }
+function specsCSV(){
+  const keys=["sym","jt_name",...new Set(SPECS.flatMap(o=>Object.keys(o)).filter(k=>k!=="sym"&&k!=="jt_name"))];
+  return [keys.join(","),...SPECS.map(o=>keys.map(k=>csvEsc(o[k])).join(","))].join("\r\n");
+}
+function parseCSV(t){
+  const out=[]; let row=[],f="",q=false;
+  for(let i=0;i<t.length;i++){ const c=t[i];
+    if(q){ if(c==='"'){ if(t[i+1]==='"'){f+='"';i++;} else q=false; } else f+=c; }
+    else if(c==='"') q=true; else if(c===","){row.push(f);f="";} else if(c==="\n"||c==="\r"){ if(c==="\r"&&t[i+1]==="\n") i++; row.push(f); out.push(row); row=[]; f=""; }
+    else f+=c; }
+  if(f!==""||row.length){ row.push(f); out.push(row); }
+  return out.filter(r=>r.some(x=>x!==""));
+}
+$("spAdd").addEventListener("click",()=>{
+  const o=readSpec(); o.sym=o.sym.trim();
+  if(!o.sym){ spMsg("接合部記号を入力してください"); return; }
+  const i=SPECS.findIndex(x=>x.sym===o.sym);
+  if(i>=0) SPECS[i]=o; else SPECS.push(o);
+  saveSpecs(); renderSpecs(); spMsg(i>=0?`${o.sym} を上書きしました`:`${o.sym} を登録しました`);
+});
+$("spList").addEventListener("click",e=>{
+  const ld=e.target.dataset.ld, del=e.target.dataset.del;
+  if(ld!=null){ applySpec(SPECS[+ld]); spMsg(`${SPECS[+ld].sym} を読み込みました`); }
+  if(del!=null){ const s=SPECS[+del].sym; SPECS.splice(+del,1); saveSpecs(); renderSpecs(); spMsg(`${s} を削除しました`); }
+});
+$("spCopy").addEventListener("click",async()=>{
+  if(!SPECS.length){ spMsg("登録された仕様がありません"); return; }
+  const t=specsCSV();
+  try{ await navigator.clipboard.writeText(t); spMsg("CSVをコピーしました"); }
+  catch(e){ $("repM").value=t; $("repM").select(); spMsg("下の転記欄にCSVを表示しました（選択してコピー）"); }
+});
+$("spSave").addEventListener("click",()=>{
+  if(!SPECS.length){ spMsg("登録された仕様がありません"); return; }
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob(["\ufeff"+specsCSV()],{type:"text/csv"}));
+  a.download="homeconnector_spec.csv"; document.body.appendChild(a); a.click(); a.remove();
+});
+$("spFile").addEventListener("change",async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const buf=await f.arrayBuffer();
+  let t=new TextDecoder("utf-8").decode(buf);
+  if(t.includes("\ufffd")) t=new TextDecoder("shift_jis").decode(buf);
+  const rows=parseCSV(t.replace(/^\ufeff/,""));
+  const keys=rows[0]; let n=0;
+  rows.slice(1).forEach(r=>{ const o={}; keys.forEach((k,i)=>o[k]=r[i]??""); if(!o.sym) return;
+    const i=SPECS.findIndex(x=>x.sym===o.sym); if(i>=0) SPECS[i]=o; else SPECS.push(o); n++; });
+  saveSpecs(); renderSpecs(); spMsg(`${n}件を読み込みました`); e.target.value="";
+});
+renderSpecs();
+
+runM(); runQ(); runS();
+</script>
