@@ -6,8 +6,10 @@
   2. 基点との差分計算 (追加/変更/削除)
   3. 提出対象外ファイルの除外 (実行ファイル・PDF などは受け取っても
      差分に含めず、基点の内容を維持する)
-  4. 安全チェック (サイズ/件数上限・秘密情報スキャン)
-  5. feature ブランチ作成 → 上書き → commit → push → PR 作成
+  4. 古い書き方のタブの登録を新しい書き方に直す (manager/tabconv.py。
+     直せないときはそのまま提出し、警告として知らせる)
+  5. 安全チェック (サイズ/件数上限・秘密情報スキャン)
+  6. feature ブランチ作成 → 上書き → commit → push → PR 作成
 を行う (manager/docs/decisions.md)。
 
 削除ファイルの確認や秘密情報警告など、ユーザー判断が要る箇所で
@@ -20,7 +22,8 @@ import re
 import shutil
 import tempfile
 
-from . import claude_helper, ghcli, installer, paths, safeio, versions
+from . import (claude_helper, ghcli, installer, paths, safeio, tabconv,
+               versions)
 from .gitcli import (GitError, ensure_work_repo,
                      reset_work_tree, run_git)
 
@@ -57,9 +60,19 @@ DEFAULT_ALLOWED_EXTENSIONS = [
 
 # 配布 ZIP に含めない開発用ファイル (.github/workflows/release.yml の除外と同期)。
 # これらは提出の差分対象外とし、基点の内容を常に維持する。
-DIST_EXCLUDE_DIRS = ('.github/', 'tests/', 'docs/', 'scripts/', 'manager/')
+# release.yml で ZIP から外すものは必ずここにも入れる (入れ忘れると、ZIP に
+# 無いだけのファイルが提出で「削除」に見える。test_manager_submit が照合する)。
+# .claude/ は管理者向けの CLAUDE.md・スキル (配布 ZIP からも外す)
+DIST_EXCLUDE_DIRS = ('.github/', 'tests/', 'docs/', 'scripts/', 'manager/',
+                     '.claude/')
 DIST_EXCLUDE_FILES = ('.gitignore', 'pytest.ini', 'requirements-dev.txt',
                       'CLAUDE.md', '.gitattributes')
+
+# メンバー向けの規約 (本体直下の CLAUDE.md。配布 ZIP にも入れる)。
+# 上の DIST_EXCLUDE_FILES で提出の差分からは外れるが、ZIP の中で書き換えられて
+# いたら「外した」ことを画面とログで知らせる (提出自体は止めない。管理者の
+# 方針 2026-10「変な使い方のときだけはじく・更新意欲をそがない」)
+RULE_FILES = ('CLAUDE.md',)
 
 # version.json は配布時に生成、settings.json はマネージャーの個人設定
 # (名前・API キー)、usage.json は API 利用量の個人記録。
@@ -174,7 +187,9 @@ def inspect_zip(zip_path):
         safeio.rmtree(tmp)
         raise SubmitError(
             '版の情報 (version.json) に基点の記録がありません。'
-            'マネージャーで取得した版を基に作業してください。')
+            'version.json が書き換えられていないか確かめ、マネージャーで'
+            '取得した版のフォルダにある version.json をそのまま入れて ZIP を'
+            '作り直してください。')
     return {'tmp': tmp, 'extract_dir': extract_dir,
             'base_version': info.get('version', '?'), 'base_commit': commit}
 
@@ -192,8 +207,10 @@ def compute_changes(workrepo, base_commit, extract_dir):
         run_git(['cat-file', '-e', base_commit + '^{commit}'], cwd=workrepo)
     except GitError:
         raise SubmitError(
-            'この ZIP の基点となる版がリポジトリの履歴に見つかりません。'
-            'マネージャーで配布された版を基に作業したか確認してください。')
+            'この ZIP の版の情報 (version.json) が、配布された版のどれとも'
+            '一致しません。version.json を書き換えずに、マネージャーで取得'
+            'した版のフォルダにある version.json をそのまま入れて ZIP を'
+            '作り直してください。')
 
     base_files = [
         p for p in run_git(['ls-tree', '-r', '--name-only', base_commit],
@@ -218,6 +235,28 @@ def compute_changes(workrepo, base_commit, extract_dir):
     deleted = sorted(base_set - set(zip_files))
     return {'added': added, 'modified': modified, 'deleted': deleted,
             'unchanged': unchanged}
+
+
+def changed_rule_files(workrepo, base_commit, extract_dir):
+    """ZIP の中で書き換えられていた規約のファイル (RULE_FILES) を返す.
+
+    規約は提出の差分の対象外 (_is_dist_scope) なので送られないが、黙って
+    外すと本人は通ったと思う。外したものを知らせるために使う。
+    ZIP に入っていない (従来の配布 ZIP) ときは何も言わない。
+    """
+    out = []
+    for rel in RULE_FILES:
+        path = os.path.join(extract_dir, rel)
+        if not os.path.isfile(path):
+            continue
+        with open(path, 'rb') as f:
+            data = f.read()
+        line = run_git(['ls-tree', base_commit, '--', rel],
+                       cwd=workrepo).split()
+        base_sha = line[2] if len(line) >= 3 else None
+        if base_sha != _hash_bytes(data):
+            out.append(rel)
+    return out
 
 
 def _blob_sha(workrepo, commit, rel):
@@ -316,8 +355,19 @@ def prepare_submission(zip_path, config=None, workrepo=None,
         prep['changes'] = compute_changes(workrepo, prep['base_commit'],
                                           prep['extract_dir'])
         prep['skipped'] = filter_unsupported(prep['changes'], config)
+        prep['rules_excluded'] = changed_rule_files(
+            workrepo, prep['base_commit'], prep['extract_dir'])
+        if prep['rules_excluded']:
+            log.info('規約のファイルの変更を提出から外しました: %s',
+                     ', '.join(prep['rules_excluded']))
+        prep['tabconv'] = _convert_old_style(prep, config, progress)
         ch = prep['changes']
         if not (ch['added'] or ch['modified'] or ch['deleted']):
+            if prep['rules_excluded']:
+                raise SubmitError(
+                    '変更が見つかったのはメンバー向けの規約 (%s) だけでした。'
+                    '規約は提出では変えられません (変えたいときは管理者に'
+                    '相談してください)。' % '、'.join(prep['rules_excluded']))
             if prep['skipped']:
                 raise SubmitError(
                     '変更が見つかったのは提出対象外の種類のファイルだけ'
@@ -327,10 +377,80 @@ def prepare_submission(zip_path, config=None, workrepo=None,
 
         progress('安全チェックを実行しています...')
         prep['safety'] = safety_check(ch, prep['extract_dir'], config)
+        # 古い書き方を直せなかった・一部を外したときは、確認画面の警告と
+        # PR 本文の「提出時の警告」に出す (黙って捨てない)
+        prep['safety']['warnings'].extend(prep['tabconv']['warnings'])
+        for rel in prep['rules_excluded']:
+            prep['safety']['warnings'].append(
+                '本体直下の %s (メンバー向けの規約) への変更は、提出に含めずに'
+                '外しました (ほかの変更はそのまま提出できます)。規約を'
+                '変えたいときは管理者に相談してください。' % rel)
         return prep
     except Exception:
         cleanup(prep)
         raise
+
+
+def _convert_old_style(prep, config, progress):
+    """古い書き方のタブの登録 (app.py / index.html / app.js への追記) を直す.
+
+    直せたら展開先のファイルを書き換えて差分を計算し直す。直せない・
+    直すものが無いときは展開先に触らない。変換の不具合で提出そのものを
+    止めないよう、想定外の例外はログに残して「そのまま提出」に倒す。
+    """
+    if not any(h in prep['changes']['modified'] for h in tabconv.HUB_FILES):
+        return {'status': 'none', 'warnings': [], 'report': [],
+                'needs_merge': False}
+    progress('タブの登録の書き方を確かめています...')
+    target = 'origin/%s' % (config or {}).get('base_branch', 'main')
+    try:
+        result = tabconv.plan(prep['workrepo'], prep['base_commit'],
+                              prep['extract_dir'], prep['changes'], target)
+        if result['status'] == 'converted':
+            tabconv.apply(result, prep['extract_dir'])
+            prep['changes'] = compute_changes(
+                prep['workrepo'], prep['base_commit'], prep['extract_dir'])
+            prep['skipped'] = filter_unsupported(prep['changes'], config)
+        return result
+    except SubmitError:
+        raise
+    except Exception:
+        log.exception('タブの登録を直す処理に失敗しました (そのまま提出します)')
+        return {'status': 'kept', 'report': [], 'needs_merge': False,
+                'warnings': ['タブの登録の書き方を確かめる処理でエラーが'
+                             '起きたため、そのまま提出します (原因はログ '
+                             'manager.log に残っています。管理者に知らせて'
+                             'ください)。']}
+
+
+def _merge_latest_for_converted_tabs(workrepo, user, config, progress):
+    """直したタブが β版の画面に出るよう、最新版をこの提出に取り込む.
+
+    基点 (提出者が取得した版) が見出し・自動登録より前の版だと、見出しに
+    直したタブはその版のままでは画面に出ない (β版は提出の中身で作る)。
+    最新版の取り込み (衝突解決の「最新版を取り込み」と同じ操作) を
+    ぶつからない場合に限って行う。ぶつかるときは取り込まずに続け、
+    従来どおり承認タブの衝突解決に任せる。
+    戻り値: 取り込めたら True。
+    """
+    base = (config or {}).get('base_branch', 'main')
+    progress('最新版を取り込んでいます...')
+    try:
+        run_git(['fetch', 'origin', base], cwd=workrepo, timeout=300)
+        run_git(['-c', 'user.name=%s' % user,
+                 '-c', 'user.email=%s@users.noreply.github.com' % user,
+                 'merge', '--no-ff', '--no-edit', '-m',
+                 '最新版 (%s) を取り込み: タブの見出しに直したタブを画面に出すため'
+                 % base, 'origin/%s' % base], cwd=workrepo)
+        return True
+    except GitError:
+        log.warning('最新版の取り込みはぶつかるため行いません '
+                    '(提出はそのまま続けます)', exc_info=True)
+        try:
+            run_git(['merge', '--abort'], cwd=workrepo)
+        except GitError:
+            log.warning('取り込みの取り消しに失敗しました', exc_info=True)
+        return False
 
 
 def cleanup(prep):
@@ -566,9 +686,14 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         diff_text = run_git(['diff', '--cached'], cwd=workrepo)
 
         notes = ''
+        conv = prep.get('tabconv') or {}
+        if conv.get('report'):
+            # 古い書き方を直した箇所 (承認する人が差分と見比べるため)
+            notes = '\n'.join(conv['report'])
         if prep['safety']['warnings']:
-            notes = ('# 提出時の警告 (承認時に確認)\n- '
-                     + '\n- '.join(prep['safety']['warnings']))
+            notes += ('\n\n' if notes else '') + (
+                '# 提出時の警告 (承認時に確認)\n- '
+                + '\n- '.join(prep['safety']['warnings']))
         # タイトルも本文も送信の前に用意する。自動作成のときは提出者に
         # 見せて直させるので、ここで取り消されても push 済みのブランチが
         # 残らない
@@ -614,6 +739,10 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         run_git(['-c', 'user.name=%s' % user,
                  '-c', 'user.email=%s@users.noreply.github.com' % user,
                  'commit', '-m', message], cwd=workrepo)
+        if (conv.get('status') == 'converted' and conv.get('needs_merge')
+                # 修正版の提出で、前回もう取り込んであれば要らない
+                and not tabconv.has_auto_registration(workrepo, 'HEAD')):
+            _merge_latest_for_converted_tabs(workrepo, user, config, progress)
 
         progress('GitHub へ送信しています...')
         run_git(['push', '-u', 'origin', branch], cwd=workrepo, timeout=300)

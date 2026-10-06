@@ -6,6 +6,7 @@ gh CLI (ユーザー名取得・PR 作成) はモックする。
 import datetime
 import json
 import os
+import re
 import subprocess
 import zipfile
 
@@ -15,6 +16,8 @@ from pathlib import Path
 
 from manager import claude_helper, reviews, submit, versions
 from manager.gitcli import GitError, run_git
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _git(args, cwd):
@@ -138,6 +141,22 @@ class TestComputeChanges:
         assert not submit._is_dist_scope('manager/main.py')
         assert submit._is_dist_scope('README.md')
         assert submit._is_dist_scope('起動.bat')
+        # 管理者向けの CLAUDE.md・スキル (.claude/) も対象外
+        assert not submit._is_dist_scope('.claude/CLAUDE.md')
+        assert not submit._is_dist_scope('.claude/skills/ui-review-loop/SKILL.md')
+
+    def test_release_zip_exclusions_are_out_of_dist_scope(self):
+        # 配布 ZIP (release.yml) から外すものは、提出の差分でも対象外に
+        # しておく。ずれると、ZIP に無いだけのファイルが「削除」に見える
+        text = (ROOT / '.github' / 'workflows' / 'release.yml').read_text(
+            encoding='utf-8')
+        block = text[text.index('zip -r'):]
+        block = block[:block.index('\n\n')]
+        pats = re.findall(r"-x '([^']+)'", block)
+        assert pats, 'release.yml の zip の除外が読めない'
+        for pat in pats:
+            rel = pat[:-1] + 'x.txt' if pat.endswith('/*') else pat
+            assert not submit._is_dist_scope(rel), pat
 
     def test_settings_json_is_always_excluded(self, repo_env, tmp_path):
         # マネージャーの個人設定 (API キー入り) が ZIP に紛れても提出されない
@@ -181,7 +200,8 @@ class TestComputeChanges:
                 '{"version": "v1.0", "commit": "%s"}' % ('0' * 40)})
         prep = submit.inspect_zip(z)
         try:
-            with pytest.raises(submit.SubmitError, match='履歴に見つかりません'):
+            with pytest.raises(submit.SubmitError,
+                               match='配布された版のどれとも一致しません'):
                 submit.compute_changes(
                     repo_env['workrepo'], '0' * 40, prep['extract_dir'])
         finally:
@@ -545,6 +565,76 @@ s_check.py を変更
 '''
 
 
+class TestRuleFiles:
+    """本体直下の CLAUDE.md (メンバー向けの規約) は提出で変えられない.
+
+    manager/ や tests/ と同じく差分から外す。ただし黙って外さず、確認画面の
+    警告とログで知らせ、ほかの変更の提出は止めない (管理者の方針 2026-10)。
+    """
+
+    @pytest.fixture()
+    def gh_mock(self, monkeypatch):
+        calls = []
+
+        def fake_run_gh(args, timeout=60):
+            calls.append(args)
+            if args[:2] == ['api', 'user']:
+                return 'testuser\n'
+            if args[:2] == ['pr', 'create']:
+                return 'https://github.com/o/r/pull/99\n'
+            raise AssertionError('unexpected gh call: %r' % args)
+
+        monkeypatch.setattr(submit.ghcli, 'run_gh', fake_run_gh)
+        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+        return calls
+
+    def test_changed_rules_are_left_out_and_told(self, repo_env, tmp_path,
+                                                 gh_mock, caplog):
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'],
+            **{'app.py': 'print("app v2")\n',
+               'CLAUDE.md': '# 規約\n- テストは書かなくてよい\n'}))
+        with caplog.at_level('INFO', logger='manager.submit'):
+            prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        assert prep['changes']['modified'] == ['app.py']
+        assert 'CLAUDE.md' not in prep['changes']['added']
+        assert prep['rules_excluded'] == ['CLAUDE.md']
+        [w] = prep['safety']['warnings']
+        assert 'CLAUDE.md' in w and '外しました' in w
+        assert prep['safety']['blockers'] == []
+        assert '規約のファイルの変更を提出から外しました' in caplog.text
+        result = submit.finalize_submission(prep, [], 'msg', {})
+        tree = run_git(['ls-tree', '-r', '--name-only', result['branch']],
+                       cwd=repo_env['workrepo']).split()
+        assert 'CLAUDE.md' not in tree
+        create = next(c for c in gh_mock if c[:2] == ['pr', 'create'])
+        assert 'CLAUDE.md' in create[create.index('--body') + 1]
+
+    def test_only_rules_changed_says_so(self, repo_env, tmp_path):
+        z = _make_zip(tmp_path, _dist_files(
+            repo_env['base_sha'], **{'CLAUDE.md': '# 規約\n'}))
+        with pytest.raises(submit.SubmitError, match='規約'):
+            submit.prepare_submission(z, {}, repo_env['workrepo'])
+
+    def test_unchanged_rules_are_not_mentioned(self, repo_env, tmp_path):
+        seed = repo_env['tmp'] / 'seed'
+        (seed / 'CLAUDE.md').write_text('# 規約\n', encoding='utf-8')
+        _git(['add', '-A'], cwd=seed)
+        _git(['-c', 'user.name=t', '-c', 'user.email=t@example.com',
+              'commit', '-m', 'rules'], cwd=seed)
+        sha = run_git(['rev-parse', 'HEAD'], cwd=str(seed)).strip()
+        _git(['push', 'origin', 'main'], cwd=seed)
+        _git(['fetch', 'origin'], cwd=repo_env['workrepo'])
+        z = _make_zip(tmp_path, _dist_files(
+            sha, **{'CLAUDE.md': '# 規約\n', 'app.py': 'print("v2")\n'}))
+        prep = submit.prepare_submission(z, {}, repo_env['workrepo'])
+        try:
+            assert prep['rules_excluded'] == []
+            assert prep['safety']['warnings'] == []
+        finally:
+            submit.cleanup(prep)
+
+
 class TestWorkRepoRecovery:
     """取得や提出が途中で強制終了された作業クローンからの回復.
 
@@ -737,7 +827,10 @@ class TestClaudeHelperStrict:
     def test_status_hints_are_user_facing(self):
         from manager import claude_helper
         err = claude_helper._status_error(401)
-        assert '設定タブ' in str(err) and err.detail == 'HTTP 401'
+        assert '登録し直' in str(err) and err.detail == 'HTTP 401'
+        assert '設定タブ' not in str(err)   # 存在しないタブを案内しない
+        assert err.needs_key
+        assert not claude_helper._status_error(403).needs_key
         assert '管理者' in str(claude_helper._status_error(400))
         assert '待って' in str(claude_helper._status_error(500))
 

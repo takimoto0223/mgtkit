@@ -24,16 +24,21 @@ _MAX_DIFF_CHARS = 30000
 class ClaudeError(Exception):
     """Claude API 呼び出しの失敗。str() はそのまま画面に出す日本語."""
 
-    def __init__(self, message, detail=''):
+    def __init__(self, message, detail='', needs_key=False):
         super().__init__(message)
         self.detail = detail
+        # キーの登録し直しで直る失敗か (画面に「登録し直す」ボタンを出す)
+        self.needs_key = needs_key
 
 
 # HTTP の番号ごとの「利用者が次に何をすればよいか」。番号は画面にも出す
 # (提出者が管理者へ伝えるときの手がかりになる)
 _STATUS_HINTS = {
-    401: 'Claude の API キーが受け付けられませんでした。'
-         '設定タブでキーを登録し直してください。',
+    # 行き先は失敗ダイアログの「API キーを登録し直す」ボタンが示すので、
+    # ここでは場所を言わない (本文とボタンで案内が二重にならないように)
+    401: 'Claude の API キーが受け付けられませんでした。キーの有効期限が'
+         '切れたか、削除された可能性があります。Claude Console で新しい'
+         'キーを作り、登録し直してください。',
     403: 'Claude の呼び出しが拒否されました。API キーの残高・権限の'
          '不足が考えられます。Claude Console (API キーの発行元) で'
          '確認してください。',
@@ -55,7 +60,8 @@ def _status_error(status_code):
         else:
             hint = ('Claude の呼び出しが拒否されました。'
                     '管理者に連絡してください。')
-    return ClaudeError(hint, 'HTTP %s' % status_code)
+    return ClaudeError(hint, 'HTTP %s' % status_code,
+                       needs_key=(status_code == 401))
 
 
 def _model():
@@ -67,8 +73,10 @@ def _client(strict=False):
     key = settings.api_key()
     if not key:
         if strict:
+            # 行き先は失敗ダイアログのボタンが示す (401 と同じ理由)
             raise ClaudeError('Claude の API キーが登録されていません。'
-                              '設定タブで登録してください。')
+                              'Claude Console でキーを作り、登録して'
+                              'ください。', needs_key=True)
         return None
     try:
         import anthropic

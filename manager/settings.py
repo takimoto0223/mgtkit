@@ -60,6 +60,20 @@ def api_key(config=None):
     return os.environ.get('ANTHROPIC_API_KEY') or None
 
 
+def masked_key(key):
+    """画面に出すときのキーの表記 (Claude Console の一覧と同じ形).
+
+    例: sk-ant-api03-Nxu...UwAA。どのキーが入っているかを Console の
+    一覧と見比べられるようにするためで、これだけでは使えない。
+    """
+    key = str(key or '').strip()
+    if not key:
+        return ''
+    if len(key) < 24:
+        return key[:7] + '...'
+    return key[:16] + '...' + key[-4:]
+
+
 def user_name(config=None):
     data = load_settings(config)
     return (data or {}).get('name')
