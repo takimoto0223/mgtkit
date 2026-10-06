@@ -1,4 +1,5 @@
 """manager/reviews.py・conflicts.py のテスト (gh はモック、git は実操作)。"""
+import json
 import os
 import subprocess
 
@@ -797,8 +798,7 @@ class TestWithdraw:
             if args[:2] == ['api', 'user']:
                 return 'fujitaka\n'
             if args[:2] == ['pr', 'view']:
-                import json as _json
-                return _json.dumps({'author': {'login': 'fujitaka'},
+                return json.dumps({'author': {'login': 'fujitaka'},
                                     'comments': []})
             if args[:2] == ['release', 'delete']:
                 raise reviews.ghcli.GhError('通信エラー')
@@ -1092,3 +1092,156 @@ class TestConflictAfterKilledCheckout:
         assert analysis['conflicted'] == ['app.py']   # 本来の衝突が見える
         conflicts.abort(analysis)
 
+
+
+class TestMergeMethod:
+    """作者を残す印 (<!-- mgtkit-merge rebase -->) のある提出だけ rebase で取り込む."""
+
+    CFG = {'repo': 'o/r', 'branch_protection': {'required_approvals': 2},
+           'manager': {'admins': ['boss']}}
+    BASE = '<!-- mgtkit-base version=v1.9 commit=abc -->\n'
+
+    def test_marker_selects_rebase(self):
+        assert reviews.merge_method(
+            self.BASE + reviews.MERGE_REBASE_MARKER + '\n## 更新内容\n') \
+            == 'rebase'
+        assert reviews.merge_method('<!--mgtkit-merge   rebase-->') == 'rebase'
+
+    def test_without_marker_is_squash(self):
+        assert reviews.merge_method(self.BASE + '## 更新内容\n- x') == 'squash'
+        assert reviews.merge_method('') == 'squash'
+        assert reviews.merge_method(None) == 'squash'
+        # 文中で印の名前に触れただけ・別の値は印と見なさない
+        assert reviews.merge_method('mgtkit-merge rebase') == 'squash'
+        assert reviews.merge_method('<!-- mgtkit-merge squash -->') == 'squash'
+
+    # ---- release() ----------------------------------------------------
+    @pytest.fixture
+    def gh(self, monkeypatch):
+        calls = []
+        state = {'merge_commits': '', 'merge_fails': False}
+
+        def run_gh(args, timeout=60):
+            calls.append(list(args))
+            if args[:2] == ['pr', 'merge'] and state['merge_fails']:
+                raise reviews.ghcli.GhError('取り込めませんでした')
+            if args[:2] == ['api', '--paginate']:
+                return state['merge_commits']
+            return ''
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', run_gh)
+        monkeypatch.setattr(reviews, 'collaborators', lambda config=None: None)
+        monkeypatch.setattr(reviews, 'current_user', lambda: 'boss')
+        monkeypatch.setattr(reviews, 'ensure_branch_current',
+                            lambda *a, **k: None)
+        monkeypatch.setattr(reviews, 'next_stable_version',
+                            lambda config=None: 'v2.0')
+        monkeypatch.setattr(reviews, 'delete_betas_for',
+                            lambda *a, **k: None)
+        return calls, state
+
+    def _detail(self, monkeypatch, body):
+        monkeypatch.setattr(reviews, '_pr_detail', lambda n, config=None: {
+            'reviews': [{'author': {'login': 'a'}, 'state': 'APPROVED'},
+                        {'author': {'login': 'b'}, 'state': 'APPROVED'}],
+            'body': body, 'title': '新しいタブ: RCスラブの検討書'})
+
+    @staticmethod
+    def _merges(calls):
+        return [c for c in calls if c[:2] == ['pr', 'merge']]
+
+    @staticmethod
+    def _workflow_runs(calls):
+        return [c for c in calls if c[:2] == ['workflow', 'run']]
+
+    def test_release_without_marker_squashes(self, monkeypatch, gh):
+        calls, _ = gh
+        self._detail(monkeypatch, self.BASE + '## 更新内容\n\n- x\n')
+        reviews.release(7, self.CFG)
+        assert self._merges(calls) == [
+            ['pr', 'merge', '7', '--repo', 'o/r', '--squash']]
+        assert len(self._workflow_runs(calls)) == 1
+
+    def test_release_with_marker_rebases(self, monkeypatch, gh):
+        calls, _ = gh
+        self._detail(monkeypatch, self.BASE + reviews.MERGE_REBASE_MARKER
+                     + '\n## 更新内容\n\n- x\n')
+        msgs = []
+        result = reviews.release(7, self.CFG, on_progress=msgs.append)
+        assert self._merges(calls) == [
+            ['pr', 'merge', '7', '--repo', 'o/r', '--rebase']]
+        # 合流の記録が無いかを先に確かめている
+        assert any(c[:2] == ['api', '--paginate']
+                   and c[2] == 'repos/o/r/pulls/7/commits?per_page=100'
+                   for c in calls)
+        assert len(self._workflow_runs(calls)) == 1
+        assert result['version'] == 'v2.0'
+        assert any('作者を残したまま' in m for m in msgs)
+
+    def test_marker_with_merge_commit_stops_without_squash(
+            self, monkeypatch, gh):
+        calls, state = gh
+        state['merge_commits'] = 'deadbeef\n'
+        self._detail(monkeypatch, reviews.MERGE_REBASE_MARKER)
+        with pytest.raises(reviews.ReviewError) as e:
+            reviews.release(7, self.CFG)
+        assert '1 つにまとめる取り込み方には切り替えず' in str(e.value)
+        assert self._merges(calls) == []          # squash にも落ちない
+        assert self._workflow_runs(calls) == []   # 版も出さない
+
+    def test_marker_rebase_refused_stops_without_squash(
+            self, monkeypatch, gh):
+        calls, state = gh
+        state['merge_fails'] = True
+        self._detail(monkeypatch, reviews.MERGE_REBASE_MARKER)
+        with pytest.raises(reviews.ReviewError) as e:
+            reviews.release(7, self.CFG)
+        assert '切り替えず' in str(e.value)
+        assert self._merges(calls) == [
+            ['pr', 'merge', '7', '--repo', 'o/r', '--rebase']]
+        assert self._workflow_runs(calls) == []
+
+    # ---- ensure_branch_current (古い提出を最新版に追いつかせる) ----------
+    @pytest.fixture
+    def behind(self, monkeypatch):
+        calls = []
+        state = {'body': '', 'fail_graphql': False}
+
+        def run_gh(args, timeout=60):
+            calls.append(list(args))
+            if args[:2] == ['pr', 'view']:
+                return json.dumps({'mergeStateStatus': 'BEHIND',
+                                    'body': state['body'],
+                                    'id': 'PR_node7', 'headRefOid': 'h7'})
+            if args[:2] == ['api', 'graphql'] and state['fail_graphql']:
+                raise reviews.ghcli.GhError('ぶつかりました')
+            return ''
+        monkeypatch.setattr(reviews.ghcli, 'run_gh', run_gh)
+        monkeypatch.setattr(reviews.time, 'sleep', lambda s: None)
+        monkeypatch.setattr(reviews, '_pr_detail', lambda n, config=None: {
+            'statusCheckRollup': [{'conclusion': 'SUCCESS'}]})
+        return calls, state
+
+    def test_behind_without_marker_uses_update_branch(self, behind):
+        calls, _ = behind
+        reviews.ensure_branch_current(7, self.CFG)
+        assert ['api', '-X', 'PUT', 'repos/o/r/pulls/7/update-branch'] in calls
+        assert not any(c[:2] == ['api', 'graphql'] for c in calls)
+
+    def test_behind_with_marker_is_rebased_not_merged(self, behind):
+        calls, state = behind
+        state['body'] = reviews.MERGE_REBASE_MARKER
+        reviews.ensure_branch_current(7, self.CFG)
+        gql = [c for c in calls if c[:2] == ['api', 'graphql']]
+        assert len(gql) == 1
+        assert 'updateMethod: REBASE' in gql[0][3]
+        assert 'id=PR_node7' in gql[0] and 'oid=h7' in gql[0]
+        assert not any('update-branch' in ' '.join(c) for c in calls)
+
+    def test_behind_with_marker_rebase_failure_stops(self, behind):
+        calls, state = behind
+        state['body'] = reviews.MERGE_REBASE_MARKER
+        state['fail_graphql'] = True
+        with pytest.raises(reviews.ReviewError) as e:
+            reviews.ensure_branch_current(7, self.CFG)
+        assert '載せ直せませんでした' in str(e.value)
+        assert not any('update-branch' in ' '.join(c) for c in calls)

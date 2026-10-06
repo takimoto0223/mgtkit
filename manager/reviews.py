@@ -4,7 +4,8 @@
 - 承認待ち一覧 (open PR) と 承認 n/必要数 の集計
 - 承認 / 却下 (コメント必須) / 提出者本人の自己承認禁止
 - 提出者の変更と [auto-fix] 修正の色分け用コミット分類
-- 必要数の承認が揃ったらリリース (squash merge → 正式版タグ → Releases)
+- 必要数の承認が揃ったらリリース (squash merge → 正式版タグ → Releases。
+  PR 本文に「作者を残す」印がある提出だけは rebase merge。merge_method 参照)
 
 状態はすべて GitHub (PR / Reviews / Releases) を真実とし、
 マネージャーは表示と操作の窓口に徹する。
@@ -30,6 +31,21 @@ FORK_KIND = 'first-parent'
 
 class ReviewError(Exception):
     """承認処理の中断。str() はユーザー向けの平易な日本語メッセージ."""
+
+
+# 「作者を残して取り込む」提出の印。PR 本文に書く (GitHub の画面には出ない
+# HTML コメント。基点の印 <!-- mgtkit-base ... --> と同じ作法)。
+# 取り込みは通常、提出を 1 つにまとめる (squash)。まとめると作者が PR を
+# 出した人に置き換わるため、管理者がメンバーの提出を分けて出し直すときなど
+# 作者を残したい提出にだけこの印を付け、コミットを 1 つずつ載せる (rebase)。
+# 印の無い提出は今までどおり squash (manager/docs/decisions.md)。
+MERGE_REBASE_MARKER = '<!-- mgtkit-merge rebase -->'
+_MERGE_REBASE_RE = re.compile(r'<!--\s*mgtkit-merge\s+rebase\s*-->')
+
+
+def merge_method(pr_body):
+    """提出の取り込み方: 印があれば 'rebase'、無ければ 'squash'."""
+    return 'rebase' if _MERGE_REBASE_RE.search(pr_body or '') else 'squash'
 
 
 # gh 呼び出し (プロセス起動 + GitHub への往復) は 1 回 0.3〜1 秒かかる。
@@ -804,17 +820,24 @@ def ensure_branch_current(pr_number, config=None, on_progress=None):
 
     repo = paths.repo_slug(config)
     out = ghcli.run_gh(['pr', 'view', str(pr_number), '--repo', repo,
-                        '--json', 'mergeStateStatus'])
+                        '--json', 'mergeStateStatus,body,id,headRefOid'])
     try:
-        state = (json.loads(out).get('mergeStateStatus') or '').upper()
+        info = json.loads(out)
     except ValueError:
-        state = ''
+        info = {}
+    state = (info.get('mergeStateStatus') or '').upper()
     if state != 'BEHIND':
         return
     progress('提出内容に最新の正式版を取り込み直しています...')
-    ghcli.run_gh(['api', '-X', 'PUT',
-                  'repos/%s/pulls/%d/update-branch' % (repo, pr_number)],
-                 timeout=120)
+    if merge_method(info.get('body')) == 'rebase':
+        # 作者を残す提出は、合流の記録 (マージコミット) を作らずに最新版の
+        # 上へ載せ直す。合流の記録が入るとコミットを 1 つずつ載せる取り込み
+        # (rebase) ができなくなるため
+        _update_branch_by_rebase(pr_number, info, config)
+    else:
+        ghcli.run_gh(['api', '-X', 'PUT',
+                      'repos/%s/pulls/%d/update-branch' % (repo, pr_number)],
+                     timeout=120)
     progress('取り込み直し後の検証を待っています (数分かかります)...')
     deadline = time.time() + 8 * 60
     while time.time() < deadline:
@@ -829,6 +852,81 @@ def ensure_branch_current(pr_number, config=None, on_progress=None):
             return
     raise ReviewError('検証の完了を待ちきれませんでした。しばらくして'
                       'から、もう一度承認タブを開いてください。')
+
+
+_UPDATE_BY_REBASE_QUERY = '''
+mutation($id: ID!, $oid: GitObjectID) {
+  updatePullRequestBranch(input: {pullRequestId: $id, expectedHeadOid: $oid,
+                                  updateMethod: REBASE}) {
+    pullRequest { number }
+  }
+}'''
+
+
+def _update_branch_by_rebase(pr_number, info, config=None):
+    """作者を残す提出のブランチを、最新の正式版の上へ載せ直す.
+
+    載せ直せない (ぶつかる等) ときは止める。合流の記録を作る従来の
+    取り込み直しには切り替えない (切り替えると作者を残す取り込みが
+    できなくなり、後で黙って 1 つにまとめることになるため)。
+    """
+    args = ['api', 'graphql', '-f', 'query=%s' % _UPDATE_BY_REBASE_QUERY,
+            '-f', 'id=%s' % (info.get('id') or '')]
+    if info.get('headRefOid'):
+        args += ['-f', 'oid=%s' % info['headRefOid']]
+    try:
+        ghcli.run_gh(args, timeout=120)
+    except ghcli.GhError:
+        log.exception('作者を残す提出 #%s を最新版の上へ載せ直せませんでした',
+                      pr_number)
+        raise ReviewError(
+            'この提出は「作者を残して取り込む」指定ですが、最新の正式版の上へ'
+            '載せ直せませんでした (最新版とぶつかっている可能性があります)。'
+            '取り込みは止めています。管理者が提出を作り直してください。')
+
+
+def _merge_commits_in(pr_number, config=None):
+    """提出に含まれる合流の記録 (親が 2 つ以上のコミット) の一覧."""
+    out = ghcli.run_gh(['api', '--paginate',
+                        'repos/%s/pulls/%d/commits?per_page=100'
+                        % (paths.repo_slug(config), pr_number),
+                        '--jq', '.[] | select((.parents | length) > 1) | .sha'],
+                       timeout=120)
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def _merge_pr(pr_number, method, config=None, progress=None):
+    """提出を main に取り込む (method = 'squash' / 'rebase').
+
+    rebase (作者を残す印のある提出) は、取り込めない状態なら止める。
+    黙って squash に落とすと、作者が PR を出した人に置き換わってしまう。
+    """
+    repo = paths.repo_slug(config)
+    if method != 'rebase':
+        progress('正式版として取り込んでいます...')
+        ghcli.run_gh(['pr', 'merge', str(pr_number), '--repo', repo,
+                      '--squash'], timeout=120)
+        return
+    progress('作者を残したまま正式版として取り込んでいます...')
+    merges = _merge_commits_in(pr_number, config)
+    if merges:
+        log.error('作者を残す提出 #%s に合流の記録があるため取り込みません: %s',
+                  pr_number, ', '.join(merges))
+        raise ReviewError(
+            'この提出は「作者を残して取り込む」指定ですが、途中に「最新版の'
+            '取り込み」の記録が入っているため、この方法では取り込めません。'
+            '1 つにまとめる取り込み方には切り替えず、取り込みを止めています。'
+            '管理者が提出を作り直してください。')
+    try:
+        ghcli.run_gh(['pr', 'merge', str(pr_number), '--repo', repo,
+                      '--rebase'], timeout=120)
+    except ghcli.GhError:
+        log.exception('作者を残す提出 #%s を取り込めませんでした', pr_number)
+        raise ReviewError(
+            'この提出は「作者を残して取り込む」指定ですが、GitHub がこの方法での'
+            '取り込みを受け付けませんでした。1 つにまとめる取り込み方には'
+            '切り替えず、取り込みを止めています。管理者に知らせてください '
+            '(原因はログ manager.log に残っています)。')
 
 
 def next_stable_version(config=None):
@@ -875,6 +973,9 @@ def release_notes_from_pr(pr_body, version, title=''):
 def release(pr_number, config=None, on_progress=None):
     """squash merge → 正式版タグ + Releases 登録 (release ワークフローを起動).
 
+    PR 本文に作者を残す印 (MERGE_REBASE_MARKER) がある提出だけは rebase
+    merge。rebase できないときは止める (squash に落とさない)。
+
     戻り値: dict(version, message)
     """
     def progress(msg):
@@ -898,9 +999,8 @@ def release(pr_number, config=None, on_progress=None):
 
     # ブランチが古いと保護設定 (strict) でマージが拒否されるため先に最新化
     ensure_branch_current(pr_number, config, on_progress=on_progress)
-    progress('正式版として取り込んでいます...')
-    ghcli.run_gh(['pr', 'merge', str(pr_number), '--repo',
-                  paths.repo_slug(config), '--squash'], timeout=120)
+    _merge_pr(pr_number, merge_method(detail.get('body', '')), config,
+              progress)
 
     version = next_stable_version(config)
     progress('リリースノートを作成しています...')
