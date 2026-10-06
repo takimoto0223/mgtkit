@@ -184,6 +184,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write   # β版発行のお知らせ (提出へのコメント)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -253,3 +254,25 @@ jobs:
           gh release create "$VERSION" "../mgtkit-${VERSION}.zip" \
             --prerelease --title "$VERSION" --target "$HEAD_SHA" \
             --notes "提出 #${PR_NUMBER} (${PR_TITLE}) の検証通過版です。マネージャーのβ版タブから試用できます。"
+
+      # お知らせの部品は提出側ではなく main の manager/ を使う
+      # (提出は古い版を基に作られていて、この部品を持たないことがある)
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: base
+          sparse-checkout: |
+            manager
+            config.json
+          sparse-checkout-cone-mode: false
+
+      # 参加者全員を @メンションして GitHub の通知メールで知らせる
+      # (manager/betanotice.py)。失敗してもβ版の発行は取り消さない
+      - name: β版発行のお知らせ
+        continue-on-error: true
+        working-directory: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 -m manager.betanotice --pr "$PR_NUMBER" --version "$VERSION"
