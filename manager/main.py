@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 
 NAVY = '#2b4a6f'
 AMBER = '#b45309'
+# Claude Console の API キー一覧 (利用額の画面とキーの登録し直しで共用)
+CONSOLE_KEYS_URL = ('https://platform.claude.com/settings/'
+                    'workspaces/default/keys')
 RED = '#b3261e'      # 入力の誤り (Material のエラー色。白地に 6.5:1)
 
 # ---- 「β版の確認と承認」一覧の寸法 -----------------------------------------
@@ -256,8 +259,7 @@ def main(page: ft.Page):
         updated = usage.rates_updated_text(config)
         model = usage.model_name(config)
         price_url = usage.pricing_url(config)
-        console_url = ('https://platform.claude.com/settings/'
-                       'workspaces/default/keys')
+        console_url = CONSOLE_KEYS_URL
 
         def usd(v):
             return '$%.2f' % v if (v >= 0.005 or v == 0) else '$%.3f' % v
@@ -1324,6 +1326,11 @@ def main(page: ft.Page):
     t4_commit_msg.on_change = _t4_clear_error
     t4_submit_btn = ft.FilledButton('ZIP を選んで提出', icon=ft.Icons.UPLOAD,
                                     bgcolor=NAVY, color='#ffffff')
+    # キーの期限切れ・作り直しのときに settings.json を手で直さずに済むよう、
+    # 提出タブから登録し直せるようにする (管理者の指示 2026-10。キーで
+    # つまずくのは提出のときなので、提出ボタンの隣に置く)
+    t4_key_btn = ft.TextButton('API キーを登録し直す', icon=ft.Icons.KEY,
+                               style=ft.ButtonStyle(color=NAVY))
 
     def _submit_progress(msg):
         t4_status.value = msg
@@ -1450,6 +1457,13 @@ def main(page: ft.Page):
             page.pop_dialog()
             page.update()
             page.run_task(on_submit, None)
+
+        def rekey(_=None):
+            # キーが原因の失敗は、その場で登録し直せるようにする。
+            # 登録できたら「もう一度 ZIP を選ぶ」と同じ流れに戻す
+            page.pop_dialog()
+            show_rekey_dialog(retry=True)
+        needs_key = getattr(err, 'needs_key', False)
         items = [
             ft.Text(str(err), size=13.5, color='#374151', selectable=True),
             ft.Text('提出は行われていません (まだ何も送られていません)。',
@@ -1472,9 +1486,17 @@ def main(page: ft.Page):
                 content=ft.Column(items, tight=True, width=460, spacing=8),
                 actions=[
                     ft.TextButton('閉じる', on_click=close_err),
+                ] + ([
+                    # キーが原因なら、選び直すより先に登録し直してもらう
+                    ft.FilledButton(
+                        'API キーを登録し直す' if settings.api_key(config)
+                        else 'API キーを登録する',
+                        icon=ft.Icons.KEY, bgcolor=NAVY,
+                        color='#ffffff', on_click=rekey),
+                ] if needs_key else [
                     ft.FilledButton('もう一度 ZIP を選ぶ', bgcolor=NAVY,
                                     color='#ffffff', on_click=retry),
-                ]))
+                ])))
             page.update()
         except Exception:
             log.exception('自動作成の失敗ダイアログを表示できませんでした')
@@ -1579,9 +1601,10 @@ def main(page: ft.Page):
                          label='Claude で自動作成する (推奨)　'
                                'ご自身の API キーで 1 回数十円'),
             ] + ([] if has_key else [
-                ft.Text('この PC では使えません '
-                        '(設定タブで Claude の API キーを登録すると'
-                        '選べます)。', size=12, color='#6b7280'),
+                ft.Text('この PC では使えません。Claude の API キーを'
+                        '登録すると選べます (いったん「キャンセル」で閉じ、'
+                        '提出タブの「API キーを登録し直す」から登録)。',
+                        size=12, color='#6b7280'),
             ]) + [
                 ft.Radio(value='manual', label='自分で入力する　無料'),
                 manual_box,
@@ -1699,6 +1722,107 @@ def main(page: ft.Page):
 
     t4_submit_btn.on_click = on_submit
 
+    def show_rekey_dialog(_=None, retry=False):
+        """API キーを登録し直す (名前はそのまま、キーだけ入れ替える).
+
+        retry=True (自動作成の失敗から来たとき) は、登録できたらそのまま
+        ZIP の選び直しに進める (同じ提出をやり直すため)。
+        """
+        current = settings.masked_key(settings.api_key(config))
+        key_field = ft.TextField(
+            label='新しい Claude API キー (sk-ant- で始まる文字列)',
+            password=True, can_reveal_password=True, autofocus=True,
+            width=480, border_color='#6b7280', focused_border_color=NAVY)
+        err_text = ft.Text('', size=12, color='#b91c1c')
+
+        def cancel(_):
+            page.pop_dialog()
+            if retry:
+                # 失敗ダイアログは閉じてあるので、提出の結末をここで言う
+                t4_status.value = '提出は行われていません。'
+            page.update()
+
+        def clear_error(_=None):
+            # 文字が入った瞬間に赤枠と理由を消す (その場で・通信なし)
+            if key_field.border_color == RED:
+                key_field.border_color = '#6b7280'
+                key_field.focused_border_color = NAVY
+                err_text.value = ''
+                page.update()
+        key_field.on_change = clear_error
+
+        def on_save(_):
+            # ボタンと Enter の共通の入口。保存中の二度押しはここで止める
+            if save_btn.disabled:
+                return
+            # 押した瞬間にボタンを止めて進行中を出し、保存は裏で行う
+            dialog_busy(save_btn, err_text, '登録しています...')
+
+            def work():
+                try:
+                    settings.save_settings(settings.user_name(config) or '',
+                                           key_field.value, config)
+                except ValueError as e:
+                    key_field.border_color = RED
+                    key_field.focused_border_color = RED
+                    dialog_error(save_btn, err_text, str(e))
+                    return
+                except OSError:
+                    log.exception('API キーを保存できませんでした')
+                    dialog_error(save_btn, err_text,
+                                 '保存できませんでした。パソコンの空き容量と、'
+                                 '保存先を使う権限があるかを確認して、'
+                                 'もう一度お試しください。')
+                    return
+                log.info('API キーを登録し直しました')
+                page.pop_dialog()
+                if retry:
+                    t4_status.value = ('API キーを登録し直しました。'
+                                       'もう一度 ZIP を選んでください。')
+                    page.update()
+                    page.run_task(on_submit, None)
+                    return
+                t4_status.value = ('API キーを登録し直しました。次の提出から'
+                                   '新しいキーを使います。')
+                page.update()
+            run_bg(work)
+
+        # 失敗からのやり直しでは、押したあとファイル選択が開くことを予告する
+        save_btn = ft.FilledButton(
+            '登録して ZIP を選ぶ' if retry else '登録する',
+            on_click=on_save, bgcolor=NAVY, color='#ffffff')
+        key_field.on_submit = on_save
+        page.show_dialog(ft.AlertDialog(
+            modal=True,
+            title=ft.Text('API キーを登録し直す' if current
+                          else 'API キーを登録する'),
+            content=ft.Column([
+                ft.Text('キーの有効期限が切れたときや、キーを作り直した'
+                        'ときに使います。', size=13),
+                ft.Text(spans=[
+                    ft.TextSpan('新しいキーは '),
+                    ft.TextSpan(
+                        'Claude Console の「API キー」',
+                        ft.TextStyle(
+                            color=NAVY,
+                            decoration=ft.TextDecoration.UNDERLINE),
+                        url=CONSOLE_KEYS_URL,
+                        tooltip='ブラウザで Claude Console を開きます'),
+                    ft.TextSpan(' で作れます。キーはこの PC の中にだけ'
+                                '保存され、登録した名前はそのままです。'),
+                ], size=12, color='#4b5563'),
+                ft.Text('いま登録されているキー: %s'
+                        % (current or 'まだ登録されていません'),
+                        size=12, color='#4b5563', selectable=True),
+                # 浮きラベルが枠の上にはみ出す分だけ下げて行間をそろえる
+                ft.Container(key_field, margin=ft.Margin(0, 6, 0, 0)),
+                err_text,
+            ], tight=True, width=480, spacing=10),
+            actions=[ft.TextButton('取り消す', on_click=cancel), save_btn]))
+        page.update()
+
+    t4_key_btn.on_click = show_rekey_dialog
+
     # --- 検証状況と自動修正 ---
 
     t4_pr_list = ft.Column([], spacing=8)
@@ -1790,7 +1914,10 @@ def main(page: ft.Page):
                 size=12, color='#555555'),
         ft.Text('更新内容の書き方は、ZIP を選んだあとに選べます。',
                 size=12, color='#555555'),
-        ft.Container(t4_submit_btn, margin=ft.Margin(0, 16, 0, 0)),
+        ft.Container(
+            ft.Row([t4_submit_btn, t4_key_btn], spacing=16,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            margin=ft.Margin(0, 16, 0, 0)),
         t4_status,
         t4_result,
         ft.Divider(),

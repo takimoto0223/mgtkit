@@ -827,7 +827,10 @@ class TestClaudeHelperStrict:
     def test_status_hints_are_user_facing(self):
         from manager import claude_helper
         err = claude_helper._status_error(401)
-        assert '設定タブ' in str(err) and err.detail == 'HTTP 401'
+        assert '登録し直' in str(err) and err.detail == 'HTTP 401'
+        assert '設定タブ' not in str(err)   # 存在しないタブを案内しない
+        assert err.needs_key
+        assert not claude_helper._status_error(403).needs_key
         assert '管理者' in str(claude_helper._status_error(400))
         assert '待って' in str(claude_helper._status_error(500))
 

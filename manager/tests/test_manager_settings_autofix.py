@@ -19,6 +19,12 @@ class TestSettings:
         assert settings.api_key(cfg) == 'sk-ant-test-key-123'
         assert settings.user_name(cfg) == '山田太郎'
 
+    def test_masked_key_matches_the_console_listing(self):
+        key = 'sk-ant-api03-Nxu' + 'x' * 80 + 'UwAA'
+        assert settings.masked_key(key) == 'sk-ant-api03-Nxu...UwAA'
+        assert settings.masked_key('sk-ant-short') == 'sk-ant-...'
+        assert settings.masked_key(None) == ''
+
     def test_unregistered_returns_none(self, tmp_path):
         cfg = self._cfg(tmp_path)
         assert settings.load_settings(cfg) is None

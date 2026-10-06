@@ -4,6 +4,8 @@ flet の API 変更 (属性名・シグネチャ) による構築時エラーを
 flet は CI の依存に含めないため、未導入環境では自動スキップされる
 (ローカルの開発 venv では manager/requirements.txt 導入後に実行される)。
 """
+import threading
+
 import pytest
 
 flet = pytest.importorskip('flet')
@@ -849,3 +851,160 @@ def test_registering_a_name_sends_the_request_right_away(monkeypatch):
     assert saved['name'] == '山田太郎'
     assert sent == ['山田太郎']           # 登録直後に送られた
 
+
+
+# 差し替える前の本物 (読み込み時に取っておく。テスト中は差し替わっている)
+_REAL_THREAD = threading.Thread
+
+
+class _NowThread:
+    """裏の処理をその場で最後まで走らせる (結果をすぐ確かめるため)."""
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+def _submit_panel_with_key(monkeypatch, key):
+    """API キーが登録済みの PC の提出タブ (起動時の裏の処理は止める)."""
+    from manager import main as manager_main
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NoThread)
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+    monkeypatch.setattr(manager_main.settings, 'user_name',
+                        lambda config=None: '山田太郎')
+    monkeypatch.setattr(manager_main.settings, 'api_key',
+                        lambda config=None: key)
+    page = _FakePage()
+    manager_main.main(page)
+    submit_panel = page.added[1].content.controls[1].controls[2]
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    return manager_main, page, submit_panel
+
+
+def test_the_api_key_can_be_registered_again_from_the_submit_tab(monkeypatch):
+    """期限の切れたキーを、settings.json を手で直さずに入れ替えられること.
+
+    名前はそのまま残し、キーだけを差し替える。いま入っているキーは
+    Claude Console の一覧と同じ表記で見せる (どのキーか見比べられる)。
+    """
+    old = 'sk-ant-api03-Nxu' + 'x' * 80 + 'UwAA'
+    manager_main, page, panel = _submit_panel_with_key(monkeypatch, old)
+    saved = []
+    monkeypatch.setattr(manager_main.settings, 'save_settings',
+                        lambda name, key, config=None: saved.append(
+                            (name, key)))
+
+    buttons = [c for c in _walk_controls(panel, [])
+               if getattr(c, 'content', None) == 'API キーを登録し直す']
+    assert buttons, '提出タブに「API キーを登録し直す」がありません'
+    buttons[0].on_click(None)
+    dialog = page.dialogs[-1]
+    assert any('sk-ant-api03-Nxu...UwAA' in t
+               for t in _walk_texts(dialog, []))
+    field = [c for c in _walk_controls(dialog, [])
+             if type(c).__name__ == 'TextField'][0]
+    field.value = 'sk-ant-api03-new-key'
+    _dialog_button(dialog, '登録する').on_click(None)
+    assert saved == [('山田太郎', 'sk-ant-api03-new-key')]
+    assert dialog not in page.dialogs                 # 閉じた
+    assert any('登録し直しました' in t for t in _walk_texts(panel, []))
+
+
+def test_a_wrong_key_keeps_the_dialog_open_with_the_reason(monkeypatch):
+    """形式の誤りはその場で理由を出し、ボタンを押せる状態に戻すこと."""
+    manager_main, page, panel = _submit_panel_with_key(monkeypatch, None)
+    buttons = [c for c in _walk_controls(panel, [])
+               if getattr(c, 'content', None) == 'API キーを登録し直す']
+    buttons[0].on_click(None)
+    dialog = page.dialogs[-1]
+    assert any('まだ登録されていません' in t for t in _walk_texts(dialog, []))
+    field = [c for c in _walk_controls(dialog, [])
+             if type(c).__name__ == 'TextField'][0]
+    field.value = 'not-a-key'
+    save = _dialog_button(dialog, '登録する')
+    save.on_click(None)
+    assert page.dialogs[-1] is dialog                 # 開いたまま
+    assert save.disabled is False                     # 押し直せる
+    assert any('形式' in t for t in _walk_texts(dialog, []))
+    assert field.border_color == manager_main.RED     # 欄を赤枠に
+    field.value = 'sk-ant-'
+    field.on_change(None)                             # 打ち直したら戻す
+    assert field.border_color != manager_main.RED
+
+
+def test_pressing_enter_twice_saves_only_once(monkeypatch):
+    """Enter の連打で保存が二重に走らないこと (ボタンと同じ入口で止める)."""
+    manager_main, page, panel = _submit_panel_with_key(monkeypatch, None)
+    started = []
+
+    class _CountThread:
+        def __init__(self, target=None, daemon=None):
+            pass
+
+        def start(self):
+            started.append(True)       # 走らせずに数えるだけ (保存中のまま)
+    monkeypatch.setattr(manager_main.threading, 'Thread', _CountThread)
+    buttons = [c for c in _walk_controls(panel, [])
+               if getattr(c, 'content', None) == 'API キーを登録し直す']
+    buttons[0].on_click(None)
+    dialog = page.dialogs[-1]
+    field = [c for c in _walk_controls(dialog, [])
+             if type(c).__name__ == 'TextField'][0]
+    field.value = 'sk-ant-api03-new-key'
+    field.on_submit(None)
+    field.on_submit(None)
+    _dialog_button(dialog, '登録する').on_click(None)
+    assert started == [True]
+    assert dialog.title.value == 'API キーを登録する'   # 未登録の PC
+    assert any('登録しています' in t for t in _walk_texts(dialog, []))
+
+
+def test_a_rejected_key_offers_to_register_it_again(monkeypatch):
+    """キーが原因で自動作成できなかったら、その場で登録し直せること.
+
+    ZIP を選び直しても同じキーでは通らないので、失敗の画面の主ボタンを
+    「API キーを登録し直す」にする。登録できたら、そのまま ZIP の
+    選び直し (同じ提出のやり直し) に進む。
+    """
+    page, dialog, texts = _submit_confirm_dialog(monkeypatch)
+    from manager import claude_helper
+    from manager import main as manager_main
+
+    def _reject(*a, **k):
+        raise claude_helper._status_error(401)
+    monkeypatch.setattr(manager_main.submit, 'finalize_submission', _reject)
+
+    def _now_or_real(target=None, daemon=None, **kw):
+        # run_bg の裏の処理はその場で走らせる。ZIP の選び直しが使う
+        # asyncio.to_thread の作業スレッド (name 付き) は本物のまま
+        if kw:
+            return _REAL_THREAD(target=target, daemon=daemon, **kw)
+        return _NowThread(target=target)
+    monkeypatch.setattr(manager_main.threading, 'Thread', _now_or_real)
+    saved = []
+    monkeypatch.setattr(manager_main.settings, 'save_settings',
+                        lambda name, key, config=None: saved.append(key))
+    monkeypatch.setattr(manager_main.settings, 'user_name',
+                        lambda config=None: '山田太郎')
+    _dialog_button(dialog, '提出する').on_click(None)   # 既定 = 自動作成
+    err = page.dialogs[-1]
+    shown = _walk_texts(err, [])
+    assert any('有効期限' in t for t in shown)
+    # 行き先はボタンが示す (本文で別の場所へ誘導しない)
+    assert not any('提出タブ' in t for t in shown)
+    _dialog_button(err, 'API キーを登録し直す').on_click(None)
+    rekey = page.dialogs[-1]
+    assert any('いま登録されているキー' in t for t in _walk_texts(rekey, []))
+    field = [c for c in _walk_controls(rekey, [])
+             if type(c).__name__ == 'TextField'][0]
+    field.value = 'sk-ant-api03-new-key'
+    _dialog_button(rekey, '登録して ZIP を選ぶ').on_click(None)
+    assert saved == ['sk-ant-api03-new-key']
+    # ZIP を選び直した結果、提出内容の確認ダイアログがもう一度出る
+    again = page.dialogs[-1]
+    assert again is not rekey
+    _dialog_button(again, '提出する')
