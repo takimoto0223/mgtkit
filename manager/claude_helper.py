@@ -100,6 +100,9 @@ def _record_usage(response):
         log.debug('利用量の記録に失敗しました', exc_info=True)
 
 
+PR_BODY_MAX_TOKENS = 16000
+
+
 def _generate(prompt, max_tokens=1500, strict=False):
     """本文を 1 つ作る。strict=True なら失敗を ClaudeError で知らせる."""
     client = _client(strict=strict)
@@ -118,6 +121,16 @@ def _generate(prompt, max_tokens=1500, strict=False):
             return _failed(strict, 'Claude が文章の作成を辞退しました。'
                                    '手入力に切り替えて提出してください。',
                            'stop_reason=refusal')
+        if response.stop_reason == 'max_tokens':
+            # 長さの上限で打ち切られた文章は成功扱いにしない。尻切れの本文が
+            # PR 本文 → β版の確認 → 正式版のリリースノートまで黙って進むため
+            # (提出 #176 で実際に起きた)
+            log.warning('Claude の文章が長さの上限 (%d) で切れました',
+                        max_tokens)
+            return _failed(strict, 'Claude の文章が長すぎて途中で切れました。'
+                                   'もう一度試すか、手入力に切り替えて'
+                                   'ください。',
+                           'stop_reason=max_tokens')
         text = next((b.text for b in response.content if b.type == 'text'),
                     None)
         if not text or not text.strip():
@@ -419,4 +432,8 @@ def generate_pr_body(diff_summary, diff_text, base_version, notes='',
         'Markdown 本文のみを出力してください。\n\n'
         '%s\n\n# 変更ファイル一覧\n%s\n\n# 変更差分(抜粋)\n%s'
         % (base_version, notes, diff_summary, diff_text[:_MAX_DIFF_CHARS]))
-    return _generate(prompt, max_tokens=2000, strict=strict)
+    # 上限は 16000。4 節のうち変更ファイルの説明は 1 ファイル 1 行なので、
+    # 30 ファイル規模の提出では 2000 では書き切れなかった (提出 #176)。
+    # 使われなかった分は課金されない。非 streaming の呼び出しで受けられる
+    # 範囲 (SDK の 10 分の目安で約 21,000 まで) に収めてある
+    return _generate(prompt, max_tokens=PR_BODY_MAX_TOKENS, strict=strict)

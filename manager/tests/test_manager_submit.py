@@ -824,6 +824,51 @@ class TestClaudeHelperStrict:
         with pytest.raises(claude_helper.ClaudeError, match='辞退'):
             claude_helper._generate('x', strict=True)
 
+    def _truncated(self, monkeypatch):
+        from manager import claude_helper
+
+        class _Text:
+            type = 'text'
+            text = '## 更新内容\n\n- 書き出し書式は Vectorworks 10J 向けで、DXF のバージョ'
+
+        class _Resp:
+            stop_reason = 'max_tokens'
+            content = [_Text()]
+            usage = None
+
+        class _Messages:
+            def create(self, **k):
+                return _Resp()
+
+        class _Client:
+            messages = _Messages()
+
+        monkeypatch.setattr(claude_helper, '_client',
+                            lambda strict=False: _Client())
+        return claude_helper
+
+    def test_cut_off_text_stops_the_submission(self, monkeypatch):
+        # 長さの上限で切れた文章を成功扱いにしない (提出 #176 の尻切れ)
+        claude_helper = self._truncated(monkeypatch)
+        with pytest.raises(claude_helper.ClaudeError, match='途中で切れ') as e:
+            claude_helper._generate('x', strict=True)
+        assert e.value.detail == 'stop_reason=max_tokens'
+
+    def test_cut_off_text_is_not_used_outside_the_submission(self, monkeypatch):
+        claude_helper = self._truncated(monkeypatch)
+        assert claude_helper._generate('x') is None
+
+    def test_pr_body_has_room_for_large_submissions(self, monkeypatch):
+        from manager import claude_helper
+        seen = {}
+
+        def fake_generate(prompt, max_tokens=0, strict=False):
+            seen['max_tokens'] = max_tokens
+            return '# t'
+        monkeypatch.setattr(claude_helper, '_generate', fake_generate)
+        claude_helper.generate_pr_body('a', 'b', 'v2.0')
+        assert seen['max_tokens'] >= 16000
+
     def test_status_hints_are_user_facing(self):
         from manager import claude_helper
         err = claude_helper._status_error(401)
