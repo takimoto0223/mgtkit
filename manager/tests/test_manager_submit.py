@@ -843,6 +843,30 @@ class TestClaudeHelperFallback:
         assert claude_helper.generate_pr_body('a', 'b', 'v1.0') is None
 
 
+class TestPrBodyPromptStyle:
+    """更新内容・制限事項の書き方の指示 (管理者指示 2026-10).
+
+    項目ごとに見出し + 字下げした子項目、常体 (です・ます調にしない)。
+    リリースノートは画面にそのまま文字で出るので太字などの装飾は使わない。
+    """
+
+    def test_prompt_asks_for_nested_plain_form(self, monkeypatch):
+        seen = {}
+
+        def fake_generate(prompt, max_tokens=0, strict=False):
+            seen['prompt'] = prompt
+            return '# t'
+        monkeypatch.setattr(claude_helper, '_generate', fake_generate)
+        claude_helper.generate_pr_body('a.py | 1 +', 'diff', 'v2.0')
+        p = seen['prompt']
+        assert '常体' in p and 'です・ます調にしない' in p
+        assert '\n  - ' in p                      # 字下げした子項目の例
+        assert '【計算結果が変わる修正を含む】' in p
+        assert '太字' in p
+        # 変更ファイルの説明は差分ビューワが 1 行ずつ読むので形式を変えない
+        assert '「- パス — 説明」を 1 ファイル 1 行' in p
+
+
 class TestFallbackPrBody:
     """手書き・空欄提出 (Claude なし) の PR 本文が様式を満たすこと."""
 
