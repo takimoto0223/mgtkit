@@ -286,22 +286,23 @@ tr.gap td { background: #eef2f7; color: #6b7280; text-align: center;
        text-decoration: none; padding: 8px 16px; border-radius: 6px; }
 .mgo:hover { background: #2b4a6f; }
 .usum { margin-bottom: 18px; padding: 12px 16px; }
-.usum h3 { margin: 14px 0 4px; font-size: 13.5px; color: #374151; }
+.usum h3 { margin: 18px 0 4px; font-size: 14px; color: #1f2937; }
 .usum pre { margin: 0; padding: 0; background: none; border: none;
             font-family: inherit; font-size: 13px; color: #1f2937;
             white-space: pre-wrap; }
 .usum .nt { font-size: 13px; color: #1f2937; line-height: 1.6; }
-.usum .nt .i0 { font-weight: 600; color: #111827; margin-top: 6px;
-                padding-left: 16px; text-indent: -16px; }
-.usum .nt .i0:first-child { margin-top: 0; }
+.usum .nt .i0 { font-weight: 600; color: #1f2937; margin-top: 6px;
+                padding-left: 18px; text-indent: -18px; }
+.usum .nt .i0:first-child, .usum .nt .hd + .i0 { margin-top: 0; }
 .usum .nt .i0::before { content: "■"; color: #2b4a6f; font-size: 9px;
-                        display: inline-block; width: 16px; text-indent: 0;
+                        display: inline-block; width: 18px; text-indent: 0;
                         vertical-align: 2px; }
-.usum .nt .in { padding-left: calc(var(--lv) * 22px + 16px);
-                text-indent: -16px; }
-.usum .nt .in::before { content: "・"; color: #6b7280; display: inline-block;
-                        width: 16px; text-indent: 0; }
-.usum .nt .hd { font-weight: 700; color: #374151; margin-top: 6px; }
+.usum .nt .in { padding-left: calc(var(--lv) * 22px + 18px);
+                text-indent: -18px; }
+.usum .nt .in::before { content: "•"; color: #6b7280; display: inline-block;
+                        width: 18px; text-indent: 0; }
+.usum .nt .hd { font-weight: 700; font-size: 14px; color: #1f2937;
+                margin-top: 14px; }
 """
 
 _STATUS_JP = {'M': ('変更', 'tagM'), 'A': ('追加', 'tagA'),

@@ -1024,7 +1024,7 @@ def test_notes_are_drawn_with_headings_and_indented_sub_items():
     assert head.content.controls[1].weight == flet.FontWeight.W_600
     # 子項目: 1 段ぶん字下げ + 灰色の「・」
     assert sub.padding.left == notesview._INDENT
-    assert sub.content.controls[0].content.value == '・'
+    assert sub.content.controls[0].content.value == '•'
     assert sub.content.controls[1].value == '8列はそのまま読む'
     # 次の見出しの上は子項目どうしより広く空ける
     assert head2.margin is not None and head2.margin.top > 0
