@@ -100,6 +100,31 @@ class TestBuildTimeline:
                for s in tl['stables']}
         assert got == {'v1.1': None, 'v1.2': 83}
 
+    def test_relabeled_version_does_not_draw_the_submission_twice(self):
+        # v1.13 と同じコミットに v2.0 を付け直したとき、#190 の帯は v1.13 に
+        # 1 本だけ。v2.0 は提出を伴わない版 (日時の埋め合わせもしない)
+        rel = [dict(_rel('v2.0', '2026-10-07T02:06:30Z'), pr_number=190,
+                    tag_sha='sha-e3a'),
+               dict(_rel('v1.13', '2026-10-07T01:50:50Z'), pr_number=190,
+                    tag_sha='sha-e3a'),
+               dict(_rel('v1.12', '2026-09-22'), pr_number=176,
+                    tag_sha='sha-eef')]
+        mg = [_merged(190, 'takimoto0223', '2026-10-07', '2026-10-07'),
+              _merged(176, 'kanazawa', '2026-09-19', '2026-09-22'),
+              _merged(170, 'tomiriri', '2026-09-01', '2026-09-02')]
+        pend = [{'number': 192, 'title': 'c', 'author': 'takimoto0223',
+                 'created_at': '2026-10-07', 'base_version': 'v2.0',
+                 'base_commit': 'sha-e3a'}]
+        tl = history.build_timeline(rel, mg, pend, today=D(2026, 10, 7))
+        got = {s['tag']: ((s['pr'] or {}).get('number'), s['relabel'])
+               for s in tl['stables']}
+        assert got == {'v1.12': (176, False), 'v1.13': (190, False),
+                       'v2.0': (None, True)}
+        assert [c['number'] for c in tl['chips']].count(190) == 1
+        # 付け直した版を基に出した提出は、記録どおり v2.0 から出る
+        assert [c['base_tag'] for c in tl['chips']
+                if c['number'] == 192] == ['v2.0']
+
     def test_chip_base_and_target(self):
         tl = history.build_timeline(RELEASES, MERGED, PENDING, today=TODAY)
         by_num = {c['number']: c for c in tl['chips']}
