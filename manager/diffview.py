@@ -991,8 +991,26 @@ def build_model_cached(pr, config=None, beta_tag=None):
                     diffcache.save(key, hit[0], config)
             _remember(key, hit)
     model, workrepo = hit
+    # 説明文 (PR 本文) は鍵に入っていない (本文だけ直してもコミットが
+    # 増えず鍵が変わらない)。保存済みの古い説明を出し続けないよう、
+    # 手元にある最新の本文から冒頭の箱とファイル別の説明を作り直す
+    if pr.get('body') is not None:
+        model = with_current_body(model, pr['body'])
     # β版タグだけは呼び出しごとに違い得るので差し替えて返す
     return dict(model, beta=beta_tag), workrepo
+
+
+def with_current_body(model, body):
+    """モデルの説明文由来の部分 (冒頭の箱・ファイル別の説明) を本文で作り直す.
+
+    差分そのもの (行の比較) は本文に関係しないので組み直さない。
+    """
+    update_text, limits_text = user_sections(body or '')
+    notes = parse_file_notes(body)
+    files = [dict(f, note=notes.get(f.get('path'))) for f in
+             model.get('files') or []]
+    return dict(model, update_text=update_text, limits_text=limits_text,
+                has_notes=bool(notes), files=files)
 
 
 def write_html_from_model(model, workrepo):

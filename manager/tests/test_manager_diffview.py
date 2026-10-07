@@ -654,6 +654,37 @@ class TestBuildModelCached:
         assert built == [7]                      # 2 回目はキャッシュ
         assert m2['beta'] == 'v1.7-beta.1'       # β版タグは呼び出し側の値
 
+    def test_edited_body_is_shown_without_rebuilding(self, monkeypatch):
+        """本文だけ直した提出は、保存済みの差分でも新しい説明を出すこと.
+
+        鍵 (番号-先端-分岐点) に本文は入っていないので、本文を直しても
+        保存済みのモデルが使われる。冒頭の箱 (更新内容・制限事項) と
+        ファイル別の説明だけは、手元の最新の本文から作り直す。
+        """
+        monkeypatch.setattr(diffview, '_model_cache', {})
+        built = []
+
+        def fake_build(pr, config=None, workrepo=None, beta_tag=None):
+            built.append(pr['number'])
+            return {'number': 7, 'update_text': '- 古い書き方でした',
+                    'limits_text': '', 'has_notes': False,
+                    'files': [{'path': 'util.py', 'note': None}]}, 'wr'
+        monkeypatch.setattr(diffview, 'build_model', fake_build)
+        monkeypatch.setattr(diffview.diffcache, 'load',
+                            lambda key, config=None: None)
+        monkeypatch.setattr(diffview.diffcache, 'save',
+                            lambda key, model, config=None: None)
+        pr = {'number': 7, 'head_sha': 'abc', 'fork_sha': 'def'}
+        diffview.build_model_cached(pr)
+        new_body = ('## 更新内容\n\n- 梁応力の読み込み\n  - 8列はそのまま読む\n\n'
+                    '## ご利用にあたっての制限事項\n\n- なし\n\n'
+                    '## 変更ファイルの説明\n\n- util.py — 読み込みの追加\n')
+        model, _ = diffview.build_model_cached(dict(pr, body=new_body))
+        assert built == [7]                      # 差分は組み直さない
+        assert '8列はそのまま読む' in model['update_text']
+        assert model['files'][0]['note'] == '読み込みの追加'
+        assert model['has_notes'] is True
+
     def test_no_clone_when_nothing_saved(self, monkeypatch):
         """保存済みが無いときに作業クローンを触らないこと.
 

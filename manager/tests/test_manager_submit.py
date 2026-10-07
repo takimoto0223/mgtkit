@@ -824,6 +824,51 @@ class TestClaudeHelperStrict:
         with pytest.raises(claude_helper.ClaudeError, match='辞退'):
             claude_helper._generate('x', strict=True)
 
+    def _truncated(self, monkeypatch):
+        from manager import claude_helper
+
+        class _Text:
+            type = 'text'
+            text = '## 更新内容\n\n- 書き出し書式は Vectorworks 10J 向けで、DXF のバージョ'
+
+        class _Resp:
+            stop_reason = 'max_tokens'
+            content = [_Text()]
+            usage = None
+
+        class _Messages:
+            def create(self, **k):
+                return _Resp()
+
+        class _Client:
+            messages = _Messages()
+
+        monkeypatch.setattr(claude_helper, '_client',
+                            lambda strict=False: _Client())
+        return claude_helper
+
+    def test_cut_off_text_stops_the_submission(self, monkeypatch):
+        # 長さの上限で切れた文章を成功扱いにしない (提出 #176 の尻切れ)
+        claude_helper = self._truncated(monkeypatch)
+        with pytest.raises(claude_helper.ClaudeError, match='途中で切れ') as e:
+            claude_helper._generate('x', strict=True)
+        assert e.value.detail == 'stop_reason=max_tokens'
+
+    def test_cut_off_text_is_not_used_outside_the_submission(self, monkeypatch):
+        claude_helper = self._truncated(monkeypatch)
+        assert claude_helper._generate('x') is None
+
+    def test_pr_body_has_room_for_large_submissions(self, monkeypatch):
+        from manager import claude_helper
+        seen = {}
+
+        def fake_generate(prompt, max_tokens=0, strict=False):
+            seen['max_tokens'] = max_tokens
+            return '# t'
+        monkeypatch.setattr(claude_helper, '_generate', fake_generate)
+        claude_helper.generate_pr_body('a', 'b', 'v2.0')
+        assert seen['max_tokens'] >= 16000
+
     def test_status_hints_are_user_facing(self):
         from manager import claude_helper
         err = claude_helper._status_error(401)
@@ -841,6 +886,31 @@ class TestClaudeHelperFallback:
         assert claude_helper._client() is None
         assert claude_helper.generate_commit_message('a', 'b') is None
         assert claude_helper.generate_pr_body('a', 'b', 'v1.0') is None
+
+
+class TestPrBodyPromptStyle:
+    """更新内容・制限事項の書き方の指示 (管理者指示 2026-10).
+
+    項目ごとに見出し + 字下げした子項目、常体 (です・ます調にしない)。
+    リリースノートは画面にそのまま文字で出るので太字などの装飾は使わない。
+    """
+
+    def test_prompt_asks_for_nested_plain_form(self, monkeypatch):
+        seen = {}
+
+        def fake_generate(prompt, max_tokens=0, strict=False):
+            seen['prompt'] = prompt
+            return '# t'
+        monkeypatch.setattr(claude_helper, '_generate', fake_generate)
+        claude_helper.generate_pr_body('a.py | 1 +', 'diff', 'v2.0')
+        p = seen['prompt']
+        assert '常体' in p and 'です・ます調にしない' in p
+        assert '\n  - ' in p                      # 字下げした子項目の例
+        assert '【計算結果が変わる修正を含む】' in p
+        assert '- 見出し (どのファイルの何か)' in p   # 見出しにファイル名を添える
+        assert '太字' in p
+        # 変更ファイルの説明は差分ビューワが 1 行ずつ読むので形式を変えない
+        assert '「- パス — 説明」を 1 ファイル 1 行' in p
 
 
 class TestFallbackPrBody:

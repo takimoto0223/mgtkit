@@ -100,6 +100,9 @@ def _record_usage(response):
         log.debug('利用量の記録に失敗しました', exc_info=True)
 
 
+PR_BODY_MAX_TOKENS = 16000
+
+
 def _generate(prompt, max_tokens=1500, strict=False):
     """本文を 1 つ作る。strict=True なら失敗を ClaudeError で知らせる."""
     client = _client(strict=strict)
@@ -118,6 +121,16 @@ def _generate(prompt, max_tokens=1500, strict=False):
             return _failed(strict, 'Claude が文章の作成を辞退しました。'
                                    '手入力に切り替えて提出してください。',
                            'stop_reason=refusal')
+        if response.stop_reason == 'max_tokens':
+            # 長さの上限で打ち切られた文章は成功扱いにしない。尻切れの本文が
+            # PR 本文 → β版の確認 → 正式版のリリースノートまで黙って進むため
+            # (提出 #176 で実際に起きた)
+            log.warning('Claude の文章が長さの上限 (%d) で切れました',
+                        max_tokens)
+            return _failed(strict, 'Claude の文章が長すぎて途中で切れました。'
+                                   'もう一度試すか、手入力に切り替えて'
+                                   'ください。',
+                           'stop_reason=max_tokens')
         text = next((b.text for b in response.content if b.type == 'text'),
                     None)
         if not text or not text.strip():
@@ -387,13 +400,27 @@ def generate_pr_body(diff_summary, diff_text, base_version, notes='',
         '節の見出しや箇条書きをタイトルと同じ文言にしないでください。\n'
         '「## 更新内容」と「## ご利用にあたっての制限事項」は、そのまま'
         '正式版のリリースノートに転載されます。利用者 (構造設計者) 向けの'
-        '平易な言葉で書き、ファイル名・関数名などの実装詳細は'
-        '「## 影響範囲」以降に書いてください。\n'
-        '「## 更新内容」は機能単位の箇条書き。\n'
+        '平易な言葉で書いてください。\n'
+        '「## 更新内容」は、項目ごとに「- 見出し (どのファイルの何か)」を 1 行'
+        '置いてください。ファイル名・関数名は主にこの括弧に添えます。\n'
+        '「## ご利用にあたっての制限事項」は、項目ごとに「- 見出し」を 1 行'
+        '置いてください (括弧のファイル名は不要)。\n'
+        'どちらも見出しの下に、半角スペース 2 つで字下げした「  - 」で'
+        '具体的な内容を 1〜6 行書いてください。\n'
+        'この 2 節の文体は常体 (です・ます調にしない)。「〜する」「〜になる」'
+        '「〜は同じ」「〜が要る」のように短く言い切ってください。\n'
+        '太字などの装飾は使わないでください (画面ではそのまま文字で出ます)。\n'
+        '例:\n'
+        '- 梁要素応力ファイルの読み込みを強くする (util.py に '
+        'load_beam_stress_table を追加)\n'
+        '  - 3列目に位置の列が入った書き出しも読める\n'
+        '  - 従来の8列の数値は、そのまま読む\n'
+        '「## 更新内容」は機能単位。既存の計算結果・図の中身が変わる項目は、'
+        '見出しの先頭に【計算結果が変わる修正を含む】を付け、何がどう変わるかを'
+        '子項目に書いてください。\n'
         '「## ご利用にあたっての制限事項」には、対応していない条件・'
         'エラーで停止するケース・未対応の機能や出力など、利用時の注意を'
-        '箇条書きで書いてください。該当が無ければ「- なし」とだけ'
-        '書いてください。\n'
+        '書いてください。該当が無ければ「- なし」とだけ書いてください。\n'
         '「## 影響範囲」は変更されたファイルと役割、'
         '「## 変更ファイルの説明」は下記の形式。\n'
         '「## 変更ファイルの説明」は、変更ファイル一覧の各ファイルについて\n'
@@ -408,4 +435,8 @@ def generate_pr_body(diff_summary, diff_text, base_version, notes='',
         'Markdown 本文のみを出力してください。\n\n'
         '%s\n\n# 変更ファイル一覧\n%s\n\n# 変更差分(抜粋)\n%s'
         % (base_version, notes, diff_summary, diff_text[:_MAX_DIFF_CHARS]))
-    return _generate(prompt, max_tokens=2000, strict=strict)
+    # 上限は 16000。4 節のうち変更ファイルの説明は 1 ファイル 1 行なので、
+    # 30 ファイル規模の提出では 2000 では書き切れなかった (提出 #176)。
+    # 使われなかった分は課金されない。非 streaming の呼び出しで受けられる
+    # 範囲 (SDK の 10 分の目安で約 21,000 まで) に収めてある
+    return _generate(prompt, max_tokens=PR_BODY_MAX_TOKENS, strict=strict)
