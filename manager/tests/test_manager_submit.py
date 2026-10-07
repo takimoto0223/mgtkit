@@ -907,6 +907,7 @@ class TestPrBodyPromptStyle:
         assert '常体' in p and 'です・ます調にしない' in p
         assert '\n  - ' in p                      # 字下げした子項目の例
         assert '【計算結果が変わる修正を含む】' in p
+        assert '- 見出し (どのファイルの何か)' in p   # 見出しにファイル名を添える
         assert '太字' in p
         # 変更ファイルの説明は差分ビューワが 1 行ずつ読むので形式を変えない
         assert '「- パス — 説明」を 1 ファイル 1 行' in p
