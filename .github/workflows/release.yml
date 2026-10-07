@@ -54,7 +54,8 @@ jobs:
           # 配布物はアプリ実行に必要なもののみ (開発用ファイルは除外)。
           # 直下の CLAUDE.md はメンバー向けの規約なので入れる (各メンバーの
           # Claude が読む)。管理者向けの .claude/ (CLAUDE.md・スキル) は入れない。
-          # 除外を変えたら manager/submit.py の DIST_EXCLUDE_* も合わせる
+          # 除外を変えたら manager/submit.py の DIST_EXCLUDE_* と
+          # test.yml の beta-release も合わせる
           zip -r "../mgtkit-${VERSION}.zip" . \
             -x '.git/*' -x '.github/*' -x 'tests/*' -x 'docs/*' \
             -x 'scripts/*' -x 'manager/*' -x '.pytest_cache/*' \

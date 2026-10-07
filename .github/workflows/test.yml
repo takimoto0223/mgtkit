@@ -204,12 +204,25 @@ jobs:
           fetch-depth: 0
           path: mgtkit
 
-      - name: 次のβ版バージョンを決定
+      # 番号の決定・ZIP 作成・登録を 1 つの手順にまとめ、登録が
+      # 「同じ番号がもうある」で失敗したらタグを取り直してやり直す。
+      # 提出がいくつも同時に来ると同じ番号を取り合うため
+      # (2026-10-07 #196〜#205 を一度に出して 4 本が失敗)。
+      # concurrency で 1 本ずつにすると、待てるのは 1 本だけで残りは
+      # 取り消されるので使わない
+      - name: β版の番号を決めて登録
         id: ver
         working-directory: mgtkit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
-          # 最新安定版 vX.Y の次 (vX.Y+1) に対する -beta.N を採番する
+          for attempt in 1 2 3 4 5 6 7 8; do
+            git fetch -q --tags --force origin
+            # 最新安定版 vX.Y の次 (vX.Y+1) に対する -beta.N を採番する
+            VERSION=$(python3 - <<'EOF'
           import re
           import subprocess
           tags = subprocess.check_output(['git', 'tag', '-l'],
@@ -229,15 +242,12 @@ jobs:
               m = re.match(re.escape(base) + r'-beta\.(\d+)$', t)
               if m:
                   n = max(n, int(m.group(1)))
-          print('version=%s-beta.%d' % (base, n + 1))
+          print('%s-beta.%d' % (base, n + 1))
           EOF
-
-      - name: version.json 生成と配布 ZIP 作成
-        working-directory: mgtkit
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          python3 - <<'EOF'
+            )
+            export VERSION
+            echo "β版の番号: $VERSION ($attempt 回目)"
+            python3 - <<'EOF'
           import datetime, json, os, subprocess
           sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
                                         text=True).strip()
@@ -248,24 +258,30 @@ jobs:
                              datetime.date.today().isoformat()},
                         f, ensure_ascii=False, indent=2)
           EOF
-          zip -r "../mgtkit-${VERSION}.zip" . \
-            -x '.git/*' -x '.github/*' -x 'tests/*' -x 'docs/*' \
-            -x 'scripts/*' -x 'manager/*' -x '.pytest_cache/*' \
-            -x 'pytest.ini' -x 'requirements-dev.txt' -x '.gitignore' \
-            -x 'CLAUDE.md' -x '.gitattributes'
-
-      - name: プレリリースとして登録
-        working-directory: mgtkit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.ver.outputs.version }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          gh release create "$VERSION" "../mgtkit-${VERSION}.zip" \
-            --prerelease --title "$VERSION" --target "$HEAD_SHA" \
-            --notes "提出 #${PR_NUMBER} (${PR_TITLE}) の検証通過版です。マネージャーのβ版タブから試用できます。"
+            # 除外は release.yml の正式版と同じ (規約の CLAUDE.md は入れ、
+            # 管理者向けの .claude/ は入れない)
+            rm -f ../mgtkit-*.zip
+            zip -q -r "../mgtkit-${VERSION}.zip" . \
+              -x '.git/*' -x '.github/*' -x 'tests/*' -x 'docs/*' \
+              -x 'scripts/*' -x 'manager/*' -x '.pytest_cache/*' \
+              -x 'pytest.ini' -x 'requirements-dev.txt' -x '.gitignore' \
+              -x '.claude/*' -x '.gitattributes'
+            if out=$(gh release create "$VERSION" "../mgtkit-${VERSION}.zip" \
+                --prerelease --title "$VERSION" --target "$HEAD_SHA" \
+                --notes "提出 #${PR_NUMBER} (${PR_TITLE}) の検証通過版です。マネージャーのβ版タブから試用できます。" 2>&1); then
+              echo "$out"
+              echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "$out"
+            case "$out" in
+              *"already exists"*|*already_exists*)
+                sleep $((RANDOM % 10 + 3)) ;;
+              *) exit 1 ;;
+            esac
+          done
+          echo "::error::β版の番号の取り合いが 8 回続いたため登録できませんでした"
+          exit 1
 
       # お知らせの部品は提出側ではなく main の manager/ を使う
       # (提出は古い版を基に作られていて、この部品を持たないことがある)
