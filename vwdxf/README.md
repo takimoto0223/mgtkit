@@ -20,13 +20,13 @@ Vectorworks 10J で読める書式（R2000・Shift-JIS・文字スタイル MS U
 
 書式・レイヤ名・紙面寸法の定数は `style.py` にまとめてある。作図の決まりは struct_cad_py と同じ（2026-09-19 に構造図β由来の規則を置き換え、6 モデルの全部の図で struct_cad の出力と一致を確認）。レイヤは VW10J のクラス（事務所のペン）。出力は図の種類ごとに 1 ファイル（`<元名>_伏図 / _軸組図 / _リスト.dxf`）。
 
-## 組み込み（既存ファイルへの追加はこれだけ）
+## 組み込み（既存ファイルへの追加は無し）
 
-- `app.py`: `from mgtkit.vwdxf.routes import make_blueprint as _vwdxf_bp` と
-  `app.register_blueprint(_vwdxf_bp(sys.modules[__name__]))`
-- `templates/index.html`: nav に `<button data-tab="vwdxf">DXF(VW10J)</button>`、
-  本体に `{% include '_tab_vwdxf.html' %}`
+- `routes.py` の `make_blueprint` は起動時に自動で登録される (`tabreg.py`)
+- nav のボタンと本体の include は `_tab_vwdxf.html` 先頭行の見出し
+  `{# tab: id="vwdxf" label="DXF(VW10J)" order="80" #}` から作られる
+  (order=80 で「DXF」と「数量集計」の間に並ぶ)
 
-外すときはこの 4 行と、`vwdxf/`・`_tab_vwdxf.html`・`vwdxf.js` を消せば stable と同じに戻る。
+外すときは `vwdxf/`・`_tab_vwdxf.html`・`vwdxf.js` を消せば stable と同じに戻る。
 
 作図の仕様（改良の一覧）は `works/mgtkit-dxf-kaizen/IMPROVEMENTS.md`。

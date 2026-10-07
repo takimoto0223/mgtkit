@@ -27,7 +27,7 @@ import math
 
 import numpy as np
 
-from flask import (Flask, request, jsonify, send_file, render_template)
+from flask import (request, jsonify, send_file, render_template)
 
 # mgtkit パッケージ (app.py は mgtkit/ 内にあるため親ディレクトリを追加)
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -53,11 +53,10 @@ from mgtkit.ratio_pipeline import (run_steel_check,
 from mgtkit.w_check import w_al_match, w_al_names
 from mgtkit.export_tex import export_model_tex, export_ratio_detail_tex
 from mgtkit.export_dxf import export_dxf
-from mgtkit.loadmap.routes import make_blueprint as _loadmap_bp
-from mgtkit.wallqty.routes import make_blueprint as _wallqty_bp
-from mgtkit.vwdxf.routes import make_blueprint as _vwdxf_bp
+from mgtkit import tabreg as _tabreg
 
-app = Flask(__name__)
+# 同じタブの二重登録を飛ばす Flask (古い書き方の登録行が残っても落ちない)
+app = _tabreg.TabFlask(__name__)
 
 # 生成ファイルのホワイトリスト (これ以外は /api/file で配信しない)
 _ALLOWED_FILES = set()
@@ -398,12 +397,34 @@ def _parse_heights(p):
 # エンドポイント: ページ・ファイル配信・アップロード
 # ---------------------------------------------------------------------------
 
-# 荷重分布図タブ (mgtkit/loadmap/)。共通ヘルパを渡して登録する
-app.register_blueprint(_loadmap_bp(sys.modules[__name__]))
+# タブの自動登録 (mgtkit/tabreg.py)。本体直下の <x>/routes.py に
+# make_blueprint(host) を持つタブ (loadmap / wallqty / vwdxf など) を名前順に
+# 登録する。共通ヘルパは app.py 自身 (このモジュール) を host として渡す。
+# 新しいタブは app.py を編集せず、パッケージを置くだけで有効になる。
+# 読み込みに失敗したタブは他を巻き込まず、ログと _TAB_ERRORS に残る
+_TAB_PACKAGES, _TAB_ERRORS = _tabreg.discover_blueprints(
+    app, sys.modules[__name__], _HERE)
 
-# 木造壁量計算タブ (mgtkit/wallqty/)。同じく共通ヘルパを渡して登録する
-app.register_blueprint(_wallqty_bp(sys.modules[__name__]))
-app.register_blueprint(_vwdxf_bp(sys.modules[__name__]))  # DXF(VW10J) タブ (mgtkit/vwdxf/)
+# nav のタブ一覧。本体が index.html に直書きの組み込みタブと、
+# templates/_tab_<x>.html の先頭行の見出し ({# tab: id=... order=... #}) から作る。
+# 見出しのタブは order で組み込みタブの間に入る (vwdxf=80 は DXF と数量集計の間、
+# loadmap=100 / wallqty=200 / nvalue=210 は数量集計の後)
+BUILTIN_TABS = [
+    {'id': 'model', 'label': 'モデル', 'order': 10, 'active': True},
+    {'id': 'stress', 'label': '応力図', 'order': 20},
+    {'id': 'qr', 'label': 'QR図 (反力・分担・偏心)', 'order': 30},
+    {'id': 'check', 'label': '断面検定 (S/木/RC/SRC)', 'order': 40},
+    {'id': 'ratio', 'label': '検定比図', 'order': 50},
+    {'id': 'tex', 'label': 'TeX表', 'order': 60},
+    {'id': 'dxf', 'label': 'DXF', 'order': 70},
+    {'id': 'quantity', 'label': '数量集計', 'order': 90},
+]
+_TABS, _TAB_TAG_ERRORS = _tabreg.collect_tabs(
+    os.path.join(_HERE, 'templates'), BUILTIN_TABS,
+    skip={e['name'] for e in _TAB_ERRORS},
+    handwritten=_tabreg.find_handwritten(
+        os.path.join(_HERE, 'templates', 'index.html')))
+_TAB_ERRORS += _TAB_TAG_ERRORS
 
 
 @app.route('/')
@@ -413,7 +434,8 @@ def index():
         ver = int(os.path.getmtime(os.path.join(_HERE, 'static', 'app.js')))
     except OSError:
         ver = 0
-    return render_template('index.html', app_ver=ver, channel=_CHANNEL)
+    return render_template('index.html', app_ver=ver, channel=_CHANNEL,
+                           tabs=_TABS, tab_errors=_TAB_ERRORS)
 
 
 @app.route('/api/file')

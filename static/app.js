@@ -1,6 +1,13 @@
 'use strict';
 
 // ---------------- 共通 ----------------
+// タブを足すときは app.js を編集しない。次の約束でつなぐ:
+//  - 応力ファイル等のパス欄を既存の欄と同期する: 入力欄に data-sync="<グループ名>"
+//    (グループ名は SYNC_GROUPS のキー: beam / truss / plate / wall)
+//  - パス欄を記憶 (localStorage)・出力先推定 (path_hints) の対象にする: data-persist
+//  - 共通欄の出来事を受け取る: document の CustomEvent を addEventListener で聞く
+//      mgtkit:mgt-loaded     共通の mgt 読み込みが終わった (detail = /api/mgt_info の結果)
+//      mgtkit:stress-changed パス欄 (応力ファイル等) が変わった (古いケース表を消す合図)
 const $ = id => document.getElementById(id);
 
 document.querySelectorAll('nav button').forEach(b => {
@@ -13,14 +20,24 @@ document.querySelectorAll('nav button').forEach(b => {
 });
 
 // 同種の応力ファイル欄はタブ間で同期する (どこで読み込んでも全タブに反映)
-const SYNC_GROUPS = [
-  ['beam_stress_path', 'c_beam_stress_path', 'q_beam_stress_path'],
-  ['truss_stress_path', 'c_truss_stress_path', 'q_truss_stress_path'],
-  ['plate_stress_path', 'c_plate_stress_path', 'q_plate_stress_path'],
-  ['c_wall_stress_path', 'q_wall_stress_path'],
-];
+const SYNC_GROUPS = {
+  beam: ['beam_stress_path', 'c_beam_stress_path', 'q_beam_stress_path'],
+  truss: ['truss_stress_path', 'c_truss_stress_path', 'q_truss_stress_path'],
+  plate: ['plate_stress_path', 'c_plate_stress_path', 'q_plate_stress_path'],
+  wall: ['c_wall_stress_path', 'q_wall_stress_path'],
+};
+// タブ側の欄は data-sync="<グループ名>" で加わる (並びはページ内の順)
+document.querySelectorAll('[data-sync]').forEach(el => {
+  const g = SYNC_GROUPS[el.dataset.sync];
+  if (!g) {
+    console.error('data-sync のグループ名が違います: ' + el.dataset.sync +
+                  ' (#' + el.id + ')');
+  } else if (el.id && !g.includes(el.id)) {
+    g.push(el.id);
+  }
+});
 function syncPathGroup(srcId, val) {
-  for (const g of SYNC_GROUPS) {
+  for (const g of Object.values(SYNC_GROUPS)) {
     if (!g.includes(srcId)) continue;
     for (const id of g) {
       if (id === srcId) continue;
@@ -33,13 +50,20 @@ function syncPathGroup(srcId, val) {
   }
 }
 
-['mgt_path', 'mgt_out_base', 'beam_stress_path', 'truss_stress_path',
- 'plate_stress_path',
+// 記憶 (localStorage) する入力欄。mgt_path / mgt_out_base 以外は
+// 出力先推定用の path_hints にも載る (api() 参照)
+const PATH_IDS = ['mgt_path', 'mgt_out_base', 'beam_stress_path',
+ 'truss_stress_path', 'plate_stress_path',
  'c_beam_stress_path', 'c_truss_stress_path', 'c_plate_stress_path',
  'c_wall_stress_path', 'c_pc_stress_path', 'c_pc_cable_path',
  'c_pc_slab_path', 'q_beam_stress_path', 'q_truss_stress_path',
  'q_wall_stress_path', 'q_plate_stress_path', 'q_reaction_path',
- 'q_deformation_path'].forEach(id => {
+ 'q_deformation_path'];
+// タブ側の欄は data-persist で加わる (並びはページ内の順)
+document.querySelectorAll('[data-persist]').forEach(el => {
+  if (el.id && !PATH_IDS.includes(el.id)) PATH_IDS.push(el.id);
+});
+PATH_IDS.forEach(id => {
   const el = $(id);
   el.value = localStorage.getItem('mgtkit_' + id) || '';
   el.addEventListener('change', () => {
@@ -57,6 +81,8 @@ function clearCaseTable() {
       '「ケース読込 (種別指定)」を押し直してください。' +
       '(未読込のまま検定するとケース数からの自動判定になります)</span>';
   }
+  // 各タブのケース表は、このイベントを受けて自分で読み直しを促す
+  document.dispatchEvent(new CustomEvent('mgtkit:stress-changed'));
 }
 
 function overlay(on) { $('overlay').classList.toggle('show', on); }
@@ -71,13 +97,8 @@ async function api(url, body) {
     }
     // アップロードmgt使用時の出力先自動推定用に、UIの全パス欄の値を添付
     if (body && typeof body === 'object' && !('path_hints' in body)) {
-      body.path_hints = ['beam_stress_path', 'truss_stress_path',
-        'plate_stress_path',
-        'c_beam_stress_path', 'c_truss_stress_path', 'c_plate_stress_path',
-        'c_wall_stress_path', 'c_pc_stress_path', 'c_pc_cable_path',
-        'c_pc_slab_path', 'q_beam_stress_path', 'q_truss_stress_path',
-        'q_wall_stress_path', 'q_plate_stress_path', 'q_reaction_path',
-        'q_deformation_path']
+      body.path_hints = PATH_IDS
+        .filter(id => id !== 'mgt_path' && id !== 'mgt_out_base')
         .map(id => $(id) ? $(id).value.trim() : '').filter(v => v);
     }
     const r = await fetch(url, {method: 'POST',
@@ -412,6 +433,9 @@ async function loadMgt() {
     groupChecks(j.groups, 'vertical', 'qgroup', 'qaxes_box', true);
     groupChecks(j.groups, 'vertical', 'qcalcgroup', 'qcalc_box', false);
     refreshStructPrevSel();
+    // タブ側はこのイベントでグループ一覧などを受け取る (受け手の失敗は
+    // ここへ伝わらず、ほかのタブと共通欄の表示は続く)
+    document.dispatchEvent(new CustomEvent('mgtkit:mgt-loaded', {detail: j}));
     let hmsg = '';
     if (j.heights && j.heights.length) {
       hmsg = ' 高さ候補: 全節点 ' + j.n_z_all + ' レベル / 柱端点 ' +
