@@ -67,8 +67,9 @@ def build_timeline(releases, merged, pending, today=None):
     merged: reviews.list_merged 形 (取り込み済みの提出)
     pending: reviews.list_pending 形 (承認待ち。created_at 付き)
     戻り値: dict(stables, chips, authors)
-      stables: 昇順の正式版 [{tag, date, release, pr}] (pr は対応する
-               済み提出 dict か None。None の最古の版 = 初回配布)
+      stables: 昇順の正式版 [{tag, date, release, pr, relabel}] (pr は
+               対応する済み提出 dict か None。None の最古の版 = 初回配布。
+               relabel = 前の版と同じ中身に番号だけ付け直した版)
       chips:   昇順の帯 [{author, number, title, start, end, base_tag,
                target_tag, pending, lane}] (end/target_tag は確認中なら
                None。lane: -1 = 本線のすぐ下、+1 = 上、
@@ -99,19 +100,34 @@ def build_timeline(releases, merged, pending, today=None):
         """
         return item.get(key + '_full') or item.get(key) or ''
 
+    # 0) 前の正式版と同じコミットに番号だけ付け直した版 (例: v1.13 と同じ
+    #    中身の v2.0) は、提出を伴わない版として扱う。帯は最初の版にだけ
+    #    描く (同じ提出の帯が 2 本に見え、一覧にも 2 回出ていた)
+    seen_sha = set()
+    for s in stables:
+        sha = s['release'].get('tag_sha')
+        s['relabel'] = bool(sha) and sha in seen_sha
+        if sha:
+            seen_sha.add(sha)
     # 1) タグのコミットに紐づく提出 (事実)。引けた版はここで確定する
     by_number = {m['number']: m for m in feats}
+    seen_pr = set()
     for s in stables:
+        if s['relabel']:
+            continue
         pr = by_number.get(s['release'].get('pr_number'))
-        if pr is not None:
+        if pr is not None and pr['number'] not in seen_pr:
             s['pr'] = pr
+            seen_pr.add(pr['number'])
+        elif pr is not None:
+            s['relabel'] = True
     # 2) 残り (提出を伴わない版・古い取得経路) だけ日時で貪欲に対応付ける。
     #    確定済みの提出は候補から外す (使い回して 1 つずつずれるのを防ぐ)
     taken = {s['pr']['number'] for s in stables if s['pr']}
     rest = [m for m in feats if m['number'] not in taken]
     i = len(rest) - 1
     for s in reversed(stables):
-        if s['pr'] is not None:
+        if s['pr'] is not None or s['relabel']:
             continue
         pub = _when(s['release'], 'published_at')
         while i >= 0 and _when(rest[i], 'merged_at')[:len(pub)] > pub:
@@ -165,8 +181,12 @@ def build_timeline(releases, merged, pending, today=None):
     #    取り違えるため、あくまで最後の手段
     dates = {s['tag']: s['date'] for s in stables}
     order = {s['tag']: i for i, s in enumerate(stables)}
-    sha_to_tag = {s['release'].get('tag_sha'): s['tag'] for s in stables
-                  if s['release'].get('tag_sha')}
+    # 同じコミットの版が複数あれば最初の版を基点の名前にする (付け直した
+    # 番号ではなく、提出が取り込まれた版)
+    sha_to_tag = {}
+    for s in stables:
+        sha_to_tag.setdefault(s['release'].get('tag_sha'), s['tag'])
+    sha_to_tag.pop(None, None)
 
     def _usable(tag, limit):
         # 自分が公開された版より後の版は基点にできない (同じ日に複数の版が
