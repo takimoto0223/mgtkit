@@ -22,7 +22,7 @@ import unicodedata
 import flet as ft
 import flet.canvas as cv
 
-from . import diffview
+from . import diffview, notesview
 
 log = logging.getLogger(__name__)
 
@@ -251,13 +251,14 @@ def _user_summary_box(model):
         if not text:
             continue
         # 項目の切れ目が行間と同じにならないよう、見出しの上を広げる
+        # 節の見出しは項目の見出しより強く (大きく・広く空ける)
         rows.append(ft.Container(
-            ft.Text(label, size=13, weight=ft.FontWeight.BOLD,
-                    color='#374151'),
-            margin=ft.Margin(0, 8, 0, 0)))
-        rows.append(ft.Text(text, size=13, color='#1f2937',
-                            selectable=True))
-        n_lines += 1 + text.count('\n') + 1
+            ft.Text(label, size=14, weight=ft.FontWeight.BOLD,
+                    color='#1f2937'),
+            margin=ft.Margin(0, notesview.HEAD_GAP, 0, 0)))
+        # 見出し行と子項目を描き分ける (字下げだけでは階層が読みにくい)
+        rows.append(notesview.notes_column(text, size=13))
+        n_lines += 1 + text.count('\n') + 1 + text.count('\n- ') // 3
     box = ft.Container(
         bgcolor='#ffffff', border_radius=8,
         border=ft.Border.all(1, '#e5e7eb'),

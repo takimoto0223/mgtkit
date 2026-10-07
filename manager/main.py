@@ -19,7 +19,8 @@ import webbrowser
 from . import (autofix, claude_helper, conflicts, diffdialog, diffview,
                feedback, ghcli,
                history, historyview, installer, launcher, localstate,
-               logsetup, migrate, paths, reviewcache, reviews, rocketfx,
+               logsetup, migrate, notesview, paths, reviewcache, reviews,
+               rocketfx,
                safeio, selfupdate, settings, submit, uiguard, updater, usage)
 from .gitcli import GitError
 
@@ -406,7 +407,8 @@ def main(page: ft.Page):
     # 太字で 1 行だけ出す。無い版 (v1.4 以前) では欄ごと隠す
     t1_notes_title = ft.Text('', size=16.5, weight=ft.FontWeight.BOLD,
                              color='#1f2937', selectable=True, visible=False)
-    t1_notes_body = ft.Text('', size=13, selectable=True, color='#374151')
+    # 見出し行と子項目を描き分けて出す (notesview)。中身は版ごとに作り直す
+    t1_notes_body = ft.Container()
     # AI が自動で調整した箇所は琥珀色の枠で色分けして見せる
     t1_notes_ai_body = ft.Text('', size=12.5, selectable=True,
                                color='#78350f')
@@ -518,12 +520,14 @@ def main(page: ft.Page):
             normal, ai = history.split_ai_note(rest)
             t1_notes_title.value = headline or ''
             t1_notes_title.visible = bool(headline)
-            t1_notes_body.value = normal or '(更新内容の記載はありません)'
+            body_text = normal or '(更新内容の記載はありません)'
+            t1_notes_body.content = notesview.notes_column(
+                body_text, size=13, color='#374151')
             t1_notes_ai_body.value = ai or ''
             t1_notes_ai_box.visible = bool(ai)
             t1_notes_box.visible = True
             _fit_window_to_notes('\n'.join(
-                x for x in (headline, t1_notes_body.value) if x))
+                x for x in (headline, body_text) if x))
         page.update()
 
     def _show_updated(release):
@@ -912,8 +916,9 @@ def main(page: ft.Page):
                 ft.Row([_person_dot(color),
                         ft.Text(meta, size=12, color='#475569',
                                 expand=True)], spacing=8),
-                ft.Text(normal or '(更新内容の記載はありません)',
-                        size=13, color='#374151', selectable=True),
+                notesview.notes_column(
+                    normal or '(更新内容の記載はありません)',
+                    size=13, color='#374151'),
             ]
             if ai:
                 # AI が自動で調整した箇所は琥珀色の枠で色分けして残す

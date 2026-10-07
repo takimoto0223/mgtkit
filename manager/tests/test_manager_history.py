@@ -415,3 +415,22 @@ class TestSplitAiNote:
         assert history.fmt_date(D(2026, 8, 2)) == '8/2'
         assert history.fmt_date(D(2026, 8, 2), with_year=True) == '2026/8/2'
         assert history.fmt_date(None) == ''
+
+
+class TestBulletLines:
+    """更新内容の行の読み分け (画面で見出し行と子項目を描き分けるため)."""
+
+    def test_levels_headings_and_plain_lines(self):
+        got = history.bullet_lines(
+            '## 更新内容\n\n- 梁応力の読み込み (util.py)\n'
+            '  - 8列はそのまま読む\n    - さらに下\n'
+            '・手書きの箇条書き\n\u3000・全角空白で字下げ\nただの文')
+        assert got == [
+            ('head', 0, '更新内容'), ('blank', 0, ''),
+            ('item', 0, '梁応力の読み込み (util.py)'),
+            ('item', 1, '8列はそのまま読む'), ('item', 2, 'さらに下'),
+            ('item', 0, '手書きの箇条書き'), ('item', 1, '全角空白で字下げ'),
+            ('text', 0, 'ただの文')]
+
+    def test_lone_dash_is_plain_text(self):
+        assert history.bullet_lines('-') == [('text', 0, '-')]
