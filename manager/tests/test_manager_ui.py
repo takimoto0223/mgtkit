@@ -1008,3 +1008,23 @@ def test_a_rejected_key_offers_to_register_it_again(monkeypatch):
     again = page.dialogs[-1]
     assert again is not rekey
     _dialog_button(again, '提出する')
+
+
+def test_notes_are_drawn_with_headings_and_indented_sub_items():
+    """更新内容の見出し行と子項目を描き分けること (字下げだけに頼らない)."""
+    from manager import notesview
+    col = notesview.notes_column(
+        '- 梁応力の読み込み (util.py)\n  - 8列はそのまま読む\n- 応力図タブ')
+    rows = col.controls
+    assert len(rows) == 3
+    head, sub, head2 = rows
+    # 見出し行: 紺の印 + やや太い字、字下げなし
+    assert head.padding.left == 0
+    assert head.content.controls[0].content.value == '■'
+    assert head.content.controls[1].weight == flet.FontWeight.W_600
+    # 子項目: 1 段ぶん字下げ + 灰色の「・」
+    assert sub.padding.left == notesview._INDENT
+    assert sub.content.controls[0].content.value == '・'
+    assert sub.content.controls[1].value == '8列はそのまま読む'
+    # 次の見出しの上は子項目どうしより広く空ける
+    assert head2.margin is not None and head2.margin.top > 0

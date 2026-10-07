@@ -326,6 +326,39 @@ def split_title(notes):
     return None, (notes or '').strip()
 
 
+_BULLET = re.compile(r'^([ \t\u3000]*)(?:[-*・]|\u2022)\s*(.*)$')
+_HEADING = re.compile(r'^#{2,6}\s*(.+?)\s*$')
+
+
+def bullet_lines(text):
+    """更新内容などの文章を表示用に行ごとに読み分ける.
+
+    戻り値: [(種類, 段, 文)]。種類は 'head' (## 見出し) / 'item' (箇条書き) /
+    'text' (それ以外) / 'blank'。段は箇条書きの字下げ (半角 2 つ = 1 段、
+    全角空白・タブは 1 つで 1 段)。提出の本文は Markdown のまま保存し、
+    画面ではこの読み分けで見出し行と子項目を描き分ける (管理者指示 2026-10
+    「階層が分かりにくい」)。
+    """
+    out = []
+    for line in (text or '').splitlines():
+        if not line.strip():
+            out.append(('blank', 0, ''))
+            continue
+        m = _HEADING.match(line.strip())
+        if m:
+            out.append(('head', 0, m.group(1)))
+            continue
+        m = _BULLET.match(line)
+        if m and m.group(2):
+            pad = m.group(1)
+            level = (pad.count(' ') // 2 + pad.count('\t')
+                     + pad.count('\u3000'))
+            out.append(('item', level, m.group(2).strip()))
+            continue
+        out.append(('text', 0, line.strip()))
+    return out
+
+
 _AI_HEAD = re.compile(r'^#{0,6}\s*AI が自動で調整した箇所\s*$')
 
 

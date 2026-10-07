@@ -290,6 +290,18 @@ tr.gap td { background: #eef2f7; color: #6b7280; text-align: center;
 .usum pre { margin: 0; padding: 0; background: none; border: none;
             font-family: inherit; font-size: 13px; color: #1f2937;
             white-space: pre-wrap; }
+.usum .nt { font-size: 13px; color: #1f2937; line-height: 1.6; }
+.usum .nt .i0 { font-weight: 600; color: #111827; margin-top: 6px;
+                padding-left: 16px; text-indent: -16px; }
+.usum .nt .i0:first-child { margin-top: 0; }
+.usum .nt .i0::before { content: "■"; color: #2b4a6f; font-size: 9px;
+                        display: inline-block; width: 16px; text-indent: 0;
+                        vertical-align: 2px; }
+.usum .nt .in { padding-left: calc(var(--lv) * 22px + 16px);
+                text-indent: -16px; }
+.usum .nt .in::before { content: "・"; color: #6b7280; display: inline-block;
+                        width: 16px; text-indent: 0; }
+.usum .nt .hd { font-weight: 700; color: #374151; margin-top: 6px; }
 """
 
 _STATUS_JP = {'M': ('変更', 'tagM'), 'A': ('追加', 'tagA'),
@@ -772,6 +784,30 @@ def render_html(model, workrepo):
            ''.join(sections), dl_modal))
 
 
+def _notes_html(text):
+    """更新内容などを、見出し行と子項目を描き分けた HTML にする.
+
+    アプリ内の差分の画面 (notesview) と同じ描き分け。行の読み分けは
+    history.bullet_lines を共用する。
+    """
+    from . import history
+    rows = []
+    for kind, level, body in history.bullet_lines(text):
+        b = html.escape(body)
+        if kind == 'blank':
+            continue
+        if kind == 'head':
+            rows.append('<div class="hd">%s</div>' % b)
+        elif kind == 'item' and level == 0:
+            rows.append('<div class="i0">%s</div>' % b)
+        elif kind == 'item':
+            rows.append('<div class="in" style="--lv:%d">%s</div>'
+                        % (level, b))
+        else:
+            rows.append('<div>%s</div>' % b)
+    return '<div class="nt">%s</div>' % ''.join(rows)
+
+
 def _user_summary_html(model):
     """冒頭に出す「更新内容」「制限事項」の箱 (提出時の記載の転載).
 
@@ -788,10 +824,10 @@ def _user_summary_html(model):
              'ときに「更新内容」「ご利用にあたっての制限事項」として'
              'そのまま表示されます。</p>']
     if update:
-        parts.append('<h3>更新内容</h3><pre>%s</pre>' % html.escape(update))
+        parts.append('<h3>更新内容</h3>%s' % _notes_html(update))
     if limits:
-        parts.append('<h3>ご利用にあたっての制限事項</h3><pre>%s</pre>'
-                     % html.escape(limits))
+        parts.append('<h3>ご利用にあたっての制限事項</h3>%s'
+                     % _notes_html(limits))
     parts.append('</div>')
     return ''.join(parts)
 

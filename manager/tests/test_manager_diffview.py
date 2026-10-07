@@ -123,9 +123,20 @@ class TestBuildHtml:
                     update_text='- 荷重分布図を出せるようにした',
                     limits_text='- 床荷重のみ対応です')
         page = diffview.build_html(meta, 'main', 'feature', diff_repo)
-        assert '- 荷重分布図を出せるようにした' in page
-        assert '- 床荷重のみ対応です' in page
+        # 箇条書きは印つきの行として描く (「- 」の記号は文字では出さない)
+        assert '<div class="i0">荷重分布図を出せるようにした</div>' in page
+        assert '<div class="i0">床荷重のみ対応です</div>' in page
         assert page.index('荷重分布図を出せる') < page.index('フォルダ比較')
+
+    def test_sub_items_are_indented_under_their_heading(self):
+        # 子項目は段ごとに字下げした行 (管理者指示「階層が分かりにくい」)
+        got = diffview._notes_html(
+            '- 梁応力の読み込み (util.py)\n  - 8列はそのまま読む\n'
+            '    - さらに下の段\n- 応力図タブ')
+        assert got.count('class="i0"') == 2
+        assert '<div class="in" style="--lv:1">8列はそのまま読む</div>' in got
+        assert '--lv:2">さらに下の段' in got
+        assert '<script' not in diffview._notes_html('- <script>x</script>')
 
     def test_no_user_sections_no_lead_box(self, diff_repo):
         page = diffview.build_html(self.META, 'main', 'feature', diff_repo)
