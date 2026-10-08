@@ -29,12 +29,14 @@ AXIS = '#475569'
 PX_PER_DAY = 42
 X0 = 120                # 初回配布ノードの x (左端でラベルが切れない余白)
 AXIS_Y = 40
-RAIL_Y = 180
+RAIL_Y = 180            # 上の段が 1 段のときの本線の y
+UPPER_TOP = 72          # いちばん上の段の帯の上端 y
+LOWER_TOP = 235         # 上の段が 1 段のときの、下 1 段目の帯の上端 y
 CHIP_H = 30
 # 2 段目以降の下レーンの間隔。帯の下に置く「確認中」のピル・外へ出した
 # ラベルが、下の段の帯よりも自分の帯に近く見える高さを取る
 LANE_STEP = 70
-FIG_H = 330             # 下レーンが 1 段のときの図の高さ
+FIG_H = 330             # 上下とも 1 段のときの図の高さ
 RIGHT_PAD = 114
 CHIP_PAD = 24           # 帯の中で「名前 #番号」の左右に取る余白の合計
 DERIV_RUN = 55          # 枝の出発点 → 帯の左端 (1/4 円弧 46 + 矢先 9)
@@ -48,17 +50,28 @@ BADGE_W, BADGE_H = 96, 24   # 現行版バッジの大きさ
 TODAY_GAP = 16          # 帯・バッジ と きょう線の間に必ず取る間隔
 
 
-def _lane_geom(lane):
-    """レーン番号 → (帯の上端 y, 線の y)。-1=下 1 段目, 1=上, -2=下 2 段目.
+def _lane_geom(lane, rail_y=RAIL_Y):
+    """レーン番号 → (帯の上端 y, 線の y)。-1=下 1 段目, 1=上 1 段目,
+    -2=下 2 段目, 2=上 2 段目 ...
 
-    上レーンはモックより少し下げてある。「確認中」のピルを帯の外側 (上) に
-    置くため、日付の軸線との間にピル 1 個分の余地が要るため。
+    rail_y = 本線の y。上の段が増えると本線を下げる (_rail_y)。上の
+    1 段目はモックより少し本線から離してある。「確認中」のピルを帯の
+    外側 (上) に置くため、日付の軸線との間にピル 1 個分の余地が要るため。
     """
     if lane >= 1:
-        top = 72
+        top = rail_y - (RAIL_Y - UPPER_TOP) - (lane - 1) * LANE_STEP
     else:
-        top = 235 + (-lane - 1) * LANE_STEP
+        top = rail_y + (LOWER_TOP - RAIL_Y) + (-lane - 1) * LANE_STEP
     return top, top + CHIP_H / 2
+
+
+def _rail_y(chips):
+    """本線の y。上の段が 2 段以上なら、その分だけ本線を下げる.
+
+    いちばん上の段の帯は常に UPPER_TOP に来る (日付の軸との間は一定)。
+    """
+    up = max([c['lane'] for c in chips if c.get('lane', 0) >= 1] or [1])
+    return RAIL_Y + (up - 1) * LANE_STEP
 
 
 # 半角文字 1 字ぶんの幅の見積もり (太字の実測より少し広めに取る。
@@ -134,31 +147,31 @@ def _arrow_head(tipx, tipy, ang, color):
 HOP_R = 4               # 線どうしの交差で横の線に入れる山の半径 (= 高さ)
 
 
-def _deriv_geom(base_x, arrow_back, lane):
+def _deriv_geom(base_x, arrow_back, lane, rail_y=RAIL_Y):
     """派生線の形: (1/4 円弧の 3 次曲線の 4 点, 横の区間 (x0, x1, y) か None)."""
-    _, line_y = _lane_geom(lane)
-    dy = line_y - RAIL_Y
+    _, line_y = _lane_geom(lane, rail_y)
+    dy = line_y - rail_y
     # 横に取れる幅より広い円弧は描かない。描くと線が矢先を追い越して
     # 「線と矢先がつながっていない」見え方になる (帯の左端は
     # _deriv_lead ぶん空けてあるので、通常は 46 = 一定の形になる)
     dx = min(46, max(0, arrow_back - base_x))
-    curve = ((base_x, RAIL_Y), (base_x, RAIL_Y + dy * 0.55),
+    curve = ((base_x, rail_y), (base_x, rail_y + dy * 0.55),
              (base_x + dx * 0.45, line_y), (base_x + dx, line_y))
     run = ((base_x + dx, arrow_back, line_y)
            if arrow_back > base_x + dx else None)
     return curve, run
 
 
-def _merge_geom(chip_right, node_x, lane, big_node):
+def _merge_geom(chip_right, node_x, lane, big_node, rail_y=RAIL_Y):
     """合流線の形: (横の区間 (x0, x1, y) か None, 3 次曲線の 4 点,
     矢先の先端 (x, y), 矢先の向き)."""
-    _, line_y = _lane_geom(lane)
+    _, line_y = _lane_geom(lane, rail_y)
     sign = 1 if lane < 0 else -1    # +1 = 本線より下
     r = 14 if big_node else 9
     ax = node_x - ARRIVE_DX                 # 刺さる x
     edge = math.sqrt(max(r * r - ARRIVE_DX ** 2, 0.0))  # その x での縁
-    tip_y = RAIL_Y + sign * (edge + 1)      # 矢先の先端 = ノードの縁
-    back_y = RAIL_Y + sign * (edge + 10)    # 矢先の根元 = 曲線の終点
+    tip_y = rail_y + sign * (edge + 1)      # 矢先の先端 = ノードの縁
+    back_y = rail_y + sign * (edge + 10)    # 矢先の根元 = 曲線の終点
     dy = line_y - back_y
     dx = min(46, max(0, ax - chip_right))
     run = (chip_right, ax - dx, line_y) if ax - dx > chip_right else None
@@ -232,25 +245,27 @@ def _run_elements(run, hops):
     return elements
 
 
-def _derivation(base_x, arrow_back, lane, color, hops=()):
+def _derivation(base_x, arrow_back, lane, color, hops=(),
+                rail_y=RAIL_Y):
     """基点ノード → 帯へ降りる (上がる) 滑らかな 1/4 円弧 + 矢先.
 
     ノードを縦に出て、水平になってから帯に刺さる (路線図の分岐と
     同じ形)。基点と帯が近くても遠くても同じ形になり、急角度の
     直線に見えない。hops = 横の区間に入れる山 (_hops_on)。
     """
-    curve, run = _deriv_geom(base_x, arrow_back, lane)
+    curve, run = _deriv_geom(base_x, arrow_back, lane, rail_y)
     (sx, sy), p1, p2, p3 = curve
     elements = [cv.Path.MoveTo(sx, sy), cv.Path.CubicTo(*p1, *p2, *p3)]
     if run:
         elements += _run_elements(run, hops)
-    _, line_y = _lane_geom(lane)
+    _, line_y = _lane_geom(lane, rail_y)
     shapes = [cv.Path(elements, paint=_stroke(color, 2.4))]
     shapes.append(_arrow_head(arrow_back + 9, line_y, 0, color))
     return shapes
 
 
-def _merge_arrow(chip_right, node_x, lane, color, big_node, hops=()):
+def _merge_arrow(chip_right, node_x, lane, color, big_node, hops=(),
+                 rail_y=RAIL_Y):
     """帯の右端 → 水平に出て 1/4 円弧でノードに縦に刺さる矢印.
 
     派生 (_derivation) の鏡映で、左右のカーブの滑らかさをそろえる
@@ -259,8 +274,8 @@ def _merge_arrow(chip_right, node_x, lane, color, big_node, hops=()):
     線が重ならない)。hops = 横の区間に入れる山 (_hops_on)。
     """
     run, curve, (tx, ty), ang = _merge_geom(chip_right, node_x, lane,
-                                            big_node)
-    _, line_y = _lane_geom(lane)
+                                            big_node, rail_y)
+    _, line_y = _lane_geom(lane, rail_y)
     elements = [cv.Path.MoveTo(chip_right, line_y)]
     if run:
         elements += _run_elements(run, hops)
@@ -283,7 +298,7 @@ def _wait_pill(cx, top):
                   weight=ft.FontWeight.BOLD, center=True)]
 
 
-def _chip(c, chip_left, chip_right, color, today_x):
+def _chip(c, chip_left, chip_right, color, today_x, rail_y=RAIL_Y):
     """更新の帯 + 文字。戻り値: (shapes, overlay の当たり判定範囲).
 
     帯には「名前 #番号」だけを入れる (内容の説明は帯に書かない =
@@ -291,7 +306,7 @@ def _chip(c, chip_left, chip_right, color, today_x):
     ラベルが入らない幅ならラベルを帯の外へ。
     """
     lane = c['lane']
-    top, line_y = _lane_geom(lane)
+    top, line_y = _lane_geom(lane, rail_y)
     w = chip_right - chip_left
     dash = [5, 4] if c['pending'] else None
     label = _chip_label(c)
@@ -311,8 +326,9 @@ def _chip(c, chip_left, chip_right, color, today_x):
         shapes.append(_text((chip_left + chip_right) / 2, ty, label,
                             11.5, color, weight=ft.FontWeight.BOLD,
                             center=True, max_w=w - 10))
-    elif lane in (-1, 1):
-        # 幅が狭い帯: ラベルを外に出す (1 段目は帯の上、深いレーンは下)
+    elif lane >= -1:
+        # 幅が狭い帯: ラベルを外に出す (上の段と下 1 段目は帯の上、
+        # 下の深いレーンは下)
         shapes.append(_text(chip_right, top - 18, label, 11.5, color,
                             weight=ft.FontWeight.BOLD, end=True))
         hit = [chip_left - 60, top - 18, w + 62, CHIP_H + 18]
@@ -459,8 +475,10 @@ def _assign_lanes(chips, node_x, spans):
     提出どうしは日付の幅が 0 で、重なりを見落として同じレーンに載って
     いた (提出 #167/#168 の重なり)。
 
-    先に来た帯 (提出が古い順) ほど本線に近いレーンに置く。同時に何本
-    出ても重ねないぶん、図は縦に伸びる (許容 = 管理者指示)。
+    公開が早い帯ほど本線に近いレーンに置き、本線の下と上を交互に使う
+    (history.pack_lanes)。合流の線がほかの帯を横切らず、本線が図の
+    なるべく中央に来る。同時に何本出ても重ねないぶん、図は縦に伸びる
+    (許容 = 管理者指示)。
     """
     drawn = [c for c in chips if c['number'] in spans]
     lanes = history.pack_lanes(
@@ -515,18 +533,19 @@ def _depart_slots(chips):
     return slots
 
 
-def _badge_rect(side, cur_x, depart_off=0):
+def _badge_rect(side, cur_x, depart_off=0, rail_y=RAIL_Y):
     """現行版バッジの矩形 (x, y, w, h).
 
     右に置くときは、その版から出る枝のいちばん外側の出発位置
     (depart_off) より右へ寄せる。枝が本線を離れるところにバッジを
-    重ねない。
+    重ねない。帯との重なりは本線からの相対位置で決まるので、置き場所の
+    判定 (_badge_side) は rail_y の既定値のままでよい。
     """
     if side == 'top':
-        return (cur_x - BADGE_W / 2, RAIL_Y - 72, BADGE_W, BADGE_H)
+        return (cur_x - BADGE_W / 2, rail_y - 72, BADGE_W, BADGE_H)
     if side == 'bottom':
-        return (cur_x - BADGE_W / 2, RAIL_Y + 48, BADGE_W, BADGE_H)
-    return (cur_x + 22 + depart_off, RAIL_Y - BADGE_H / 2,
+        return (cur_x - BADGE_W / 2, rail_y + 48, BADGE_W, BADGE_H)
+    return (cur_x + 22 + depart_off, rail_y - BADGE_H / 2,
             BADGE_W, BADGE_H)
 
 
@@ -627,9 +646,11 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     upper_bases = {t for c in chips if c['lane'] >= 1
                    for t in (c['base_tag'], c['target_tag']) if t}
     depth = max([-c['lane'] for c in chips if c['lane'] < 0] or [1])
-    # 下の段が増えたぶんだけ図を下へ広げる (いちばん下の帯とその下に
-    # 置くピル・ラベルの余地は FIG_H が 1 段目のぶんとして持っている)
-    fig_h = FIG_H + (depth - 1) * LANE_STEP
+    # 上の段が増えたぶんだけ本線を下げ、下の段が増えたぶんだけ図を
+    # 下へ広げる (いちばん下の帯とその下に置くピル・ラベルの余地は
+    # FIG_H が 1 段目のぶんとして持っている)
+    rail_y = _rail_y(chips)
+    fig_h = FIG_H + (depth - 1) * LANE_STEP + (rail_y - RAIL_Y)
     grid_bottom = fig_h - 22
 
     shapes = []
@@ -669,7 +690,7 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
                         11, AXIS, weight=ft.FontWeight.BOLD, center=True))
 
     # 本線 (正式版の列)。枝より太くして主従を付ける
-    shapes.append(cv.Line(X0, RAIL_Y, today_x, RAIL_Y,
+    shapes.append(cv.Line(X0, rail_y, today_x, rail_y,
                           paint=_stroke(RAIL, 5.5)))
 
     # 帯と線 (ノードより先に描く)。先に全部の線の形を集めて、横の線を
@@ -684,13 +705,14 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         # 同じノードから出る枝は出発位置を少しずつ右へずらす
         depart = base_x + DEPART_DX + DEPART_STEP * depart_slots.get(
             c['number'], 0)
-        d_curve, d_run = _deriv_geom(depart, chip_left - 9, c['lane'])
+        d_curve, d_run = _deriv_geom(depart, chip_left - 9, c['lane'],
+                                       rail_y)
         m = None
         if not c['pending']:
             big = c['target_tag'] == current_tag
             m = (node_x[c['target_tag']], big)
             m_run, m_curve, _tip, _ang = _merge_geom(
-                chip_right, m[0], c['lane'], big)
+                chip_right, m[0], c['lane'], big, rail_y)
         else:
             m_run = m_curve = None
         geoms.append((c, depart, chip_left, chip_right, m,
@@ -700,11 +722,12 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         d_hops, m_hops = [_hops_on(r, others) if r else [] for r in runs]
         color = history.person_color(c['author'], authors)
         shapes += _derivation(depart, chip_left - 9, c['lane'], color,
-                              d_hops)
+                              d_hops, rail_y)
         if m:
             shapes += _merge_arrow(chip_right, m[0], c['lane'], color, m[1],
-                                   m_hops)
-        chip_shapes, hit = _chip(c, chip_left, chip_right, color, today_x)
+                                   m_hops, rail_y)
+        chip_shapes, hit = _chip(c, chip_left, chip_right, color,
+                                  today_x, rail_y)
         shapes += chip_shapes
         overlays.append((hit, 'chip', c))
 
@@ -712,12 +735,13 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     for s in stables:
         x = node_x[s['tag']]
         if s['tag'] == current_tag:
-            shapes.append(cv.Circle(x, RAIL_Y, 14, paint=_fill(NAVY)))
-            shapes.append(cv.Circle(x, RAIL_Y, 14,
+            shapes.append(cv.Circle(x, rail_y, 14, paint=_fill(NAVY)))
+            shapes.append(cv.Circle(x, rail_y, 14,
                                     paint=_stroke('#f59e0b', 6)))
             # バッジは枝と重ならない側に置く: 上が空いていれば上、
             # 次に下、両方ふさがっていればノードの右 (本線の上)
-            bx0, by0, bw, bh = _badge_rect(badge_side, x, badge_off)
+            bx0, by0, bw, bh = _badge_rect(badge_side, x, badge_off,
+                                           rail_y)
             shapes.append(cv.Rect(bx0, by0, bw, bh, border_radius=7,
                                   paint=_fill('#fef08a')))
             shapes.append(cv.Rect(bx0, by0, bw, bh, border_radius=7,
@@ -726,16 +750,16 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
                                 '%s 現行版' % s['tag'], 12.5,
                                 '#713f12', weight=ft.FontWeight.BOLD,
                                 center=True))
-            overlays.append(([min(bx0, x - 16), min(by0, RAIL_Y - 16),
+            overlays.append(([min(bx0, x - 16), min(by0, rail_y - 16),
                               max(bx0 + bw, x + 16) - min(bx0, x - 16),
-                              max(by0 + bh, RAIL_Y + 16)
-                              - min(by0, RAIL_Y - 16)], 'stable', s))
+                              max(by0 + bh, rail_y + 16)
+                              - min(by0, rail_y - 16)], 'stable', s))
         else:
-            shapes.append(cv.Circle(x, RAIL_Y, 9, paint=_fill('#ffffff')))
-            shapes.append(cv.Circle(x, RAIL_Y, 9, paint=_stroke(NAVY, 3)))
+            shapes.append(cv.Circle(x, rail_y, 9, paint=_fill('#ffffff')))
+            shapes.append(cv.Circle(x, rail_y, 9, paint=_stroke(NAVY, 3)))
             label = s['tag'] + (' 初回配布' if s is stables[0] and
                                 not s['pr'] else '')
-            ly = RAIL_Y - 31
+            ly = rail_y - 31
             lw = _est_w(label, 12.5)
             # 上へ枝が出るノードはラベルを左へ逃がす。ただし図の左端で
             # 切れるとき (初回配布など) は右側に置く。中央配置も左端で
@@ -817,8 +841,8 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     viewwrap = ft.Stack([
         ft.Container(scroll_row, left=0, top=0, right=0, bottom=0),
         fade(True), fade(False),
-        ft.Container(left_btn, left=4, top=RAIL_Y - 26),
-        ft.Container(right_btn, right=4, top=RAIL_Y - 26),
+        ft.Container(left_btn, left=4, top=rail_y - 26),
+        ft.Container(right_btn, right=4, top=rail_y - 26),
     ], expand=True, height=fig_h + 12)
 
     control = ft.Container(
@@ -826,7 +850,8 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         bgcolor='#ffffff', clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
         content=viewwrap)
     return {'control': control, 'scroll_row': scroll_row,
-            'initial_offset': initial_offset, 'height': fig_h + 12}
+            'initial_offset': initial_offset, 'height': fig_h + 12,
+            'rail_y': rail_y}
 
 
 def _nav_btn(icon):

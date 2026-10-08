@@ -353,8 +353,26 @@ class TestPackLanes:
         assert history.pack_lanes([(0, 10), (10, 20), (20, 30)]) == [-1] * 3
 
     def test_overlapping_spans_go_outward_in_order(self):
-        # 内側 (本線に近い) から順に埋める: -1 → +1 → -2 → -3
-        assert history.pack_lanes([(0, 10)] * 4) == [-1, 1, -2, -3]
+        # 内側 (本線に近い) から、下と上を交互に埋める: -1 → +1 → -2 → +2
+        # (本線が図のなるべく中央に来る)
+        assert history.pack_lanes([(0, 10)] * 5) == [-1, 1, -2, 2, -3]
+
+    def test_earlier_end_goes_closer_to_the_rail(self):
+        # 同じ所から出て終わりが早い帯ほど本線寄り。合流の線が本線へ
+        # 向かうとき、より本線寄りの帯はもう終わっていて横切らない。
+        # 戻り値は渡した順のまま
+        assert history.pack_lanes([(0, 40), (0, 10), (0, 30), (0, 20)]) \
+            == [2, -1, -2, 1]
+
+    def test_nested_span_goes_inside(self):
+        # 終わりが同じなら始まりが遅い (= 内側に収まる) 帯が本線寄り
+        assert history.pack_lanes([(0, 10), (5, 10)]) == [1, -1]
+
+    def test_dates_work_as_bounds(self):
+        d = datetime.date
+        spans = [(d(2026, 8, 1), d(2026, 8, 20)),
+                 (d(2026, 8, 5), d(2026, 8, 10))]
+        assert history.pack_lanes(spans) == [1, -1]
 
     def test_freed_lane_is_reused(self):
         assert history.pack_lanes([(0, 10), (5, 15), (10, 20)]) == [-1, 1, -1]

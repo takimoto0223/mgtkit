@@ -252,37 +252,55 @@ def base_label(chip):
 
 
 def lane_order():
-    """レーン番号を内側から順に返す (-1 → +1 → -2 → -3 → ...).
+    """レーン番号を内側から順に返す (-1 → +1 → -2 → +2 → -3 → ...).
 
-    上は 1 段だけ (日付の軸との間に段を増やす余地が無い)。下は必要な
-    だけ深くする。同時に何本の枝が出ても重ねない = 図が縦に伸びるのは
-    許容する (管理者指示 2026-08)。
+    本線の下と上を交互に使い、本線が図のなるべく中央に来るようにする
+    (管理者指示 2026-10。以前は上を 1 段だけにして下へ伸ばしていたため、
+    同時に何本も出ると本線が図の上端に寄り、下へ長い線が並んでいた)。
+    同時に何本の枝が出ても重ねない = 図が縦に伸びるのは許容する
+    (管理者指示 2026-08)。
     """
-    yield -1
-    yield 1
-    n = 2
+    n = 1
     while True:
         yield -n
+        yield n
         n += 1
 
 
 def pack_lanes(spans):
-    """区間の列 → レーン番号の列 (先に来たものほど本線に近いレーン).
+    """区間の列 → レーン番号の列 (終わりが早いものほど本線に近いレーン).
 
     区間は半開区間 [lo, hi) として扱う。端が同じだけ (前の帯の公開位置
     = 次の帯の基点) は重なりとしない。そうしないと連続する提出が交互に
     レーンを変えてしまう。lo/hi は日付でも x 座標でも比較さえできれば
     よい (モデルは日付、描画は px で同じ規則を使う)。
+
+    置く順は「終わり (公開) が早い順、同じなら始まりが遅い順」。先に
+    公開された帯ほど本線に近いと、合流の線が本線へ上がる (下がる) とき、
+    それより本線寄りの帯はもう終わっていて横切らない。短い帯が長い帯の
+    内側に収まる形になり、線の交差が減る (管理者指示 2026-10)。終わりも
+    始まりも同じ (確認中どうしなど) は渡された順 = 提出順。戻り値は
+    渡された区間の順に並べて返す。
     """
+    order = sorted(range(len(spans)),
+                   key=lambda i: (spans[i][1], _neg(spans[i][0]), i))
     placed = {}
-    lanes = []
-    for lo, hi in spans:
+    lanes = [None] * len(spans)
+    for i in order:
+        lo, hi = spans[i]
         for lane in lane_order():
             if all(hi <= b0 or b1 <= lo for b0, b1 in placed.get(lane, ())):
                 break       # 空のレーンには必ず置けるので必ず抜ける
-        lanes.append(lane)
+        lanes[i] = lane
         placed.setdefault(lane, []).append((lo, hi))
     return lanes
+
+
+def _neg(v):
+    """並べ替えの「降順」用。数値はそのまま負に、日付は序数を負にする."""
+    if isinstance(v, (datetime.date, datetime.datetime)):
+        return -v.toordinal()
+    return -v
 
 
 def _assign_lanes(chips, today, base_dates):
