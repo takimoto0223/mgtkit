@@ -375,6 +375,8 @@ def prepare_submission(zip_path, config=None, workrepo=None,
                     'ください。' % '、'.join(prep['skipped'][:5]))
             raise SubmitError('基点の版から変更されたファイルがありません。')
 
+        prep['split'] = _plan_split(prep, progress)
+
         progress('安全チェックを実行しています...')
         prep['safety'] = safety_check(ch, prep['extract_dir'], config)
         # 古い書き方を直せなかった・一部を外したときは、確認画面の警告と
@@ -389,6 +391,23 @@ def prepare_submission(zip_path, config=None, workrepo=None,
     except Exception:
         cleanup(prep)
         raise
+
+
+def _plan_split(prep, progress):
+    """タブごとに分けて出す案 (manager/splitplan.py)。分けられなければ None.
+
+    案づくりの不具合で提出そのものを止めないよう、想定外の例外はログに
+    残して「分けずに 1 本で出す」に倒す。
+    """
+    from . import splitplan
+    progress('タブごとに分けられるかを調べています...')
+    try:
+        result = splitplan.plan(prep['workrepo'], prep['base_commit'],
+                                prep['extract_dir'], prep['changes'])
+    except Exception:
+        log.exception('分け方の案を作れませんでした (1 本で提出します)')
+        return None
+    return result if result['splittable'] else None
 
 
 def _convert_old_style(prep, config, progress):
@@ -614,6 +633,79 @@ def fallback_pr_body(update_text, limitations, base_version, summary):
     return '\n'.join(parts) + '\n'
 
 
+def _base_notes(prep):
+    """PR 本文の末尾に付ける注記 (古い書き方を直した箇所・提出時の警告)."""
+    notes = ''
+    conv = prep.get('tabconv') or {}
+    if conv.get('report'):
+        # 古い書き方を直した箇所 (承認する人が差分と見比べるため)
+        notes = '\n'.join(conv['report'])
+    if prep['safety']['warnings']:
+        notes += ('\n\n' if notes else '') + (
+            '# 提出時の警告 (承認時に確認)\n- '
+            + '\n- '.join(prep['safety']['warnings']))
+    return notes
+
+
+def _compose(prep, summary, diff_text, notes, commit_message, limitations,
+             use_ai, on_review, title, progress, part=None, marker=''):
+    """タイトル・PR 本文・コミットメッセージを作る.
+
+    part (分けた提出の何本目か) があれば、自動作成の確認画面に渡す。
+    marker は基点の印のすぐ後ろに置く印 (分けた提出の束の印など)。
+    戻り値: (タイトル, 本文, コミットメッセージ, 更新内容)
+    """
+    # タイトルも本文も送信の前に用意する。自動作成のときは提出者に
+    # 見せて直させるので、ここで取り消されても push 済みのブランチが
+    # 残らない
+    update_text = (commit_message or '').strip()
+    title_text = title_line(title) or title_line(update_text)
+    body = None
+    if use_ai:
+        # API 呼び出しは提出 1 本につきこの 1 回だけ。タイトルも
+        # 本文の 1 行目 (# 行) としてまとめて書かせて取り出す
+        # 一番長く待たされる区間 (API 呼び出し)。提出者が選んだ
+        # 「Claude で自動作成する」の実行中だと分かる言葉にする
+        progress('Claude が更新内容を作成しています... '
+                 '(数十秒かかることがあります)' if part is None else
+                 'Claude が更新内容を作成しています (%d/%d 本目)... '
+                 '(数十秒かかることがあります)' % (part['k'], part['n']))
+        body = claude_helper.generate_pr_body(
+            summary, diff_text, prep['base_version'], notes, strict=True)
+        drafted, body = split_body_title(body)
+        title_text = title_line(drafted) or title_text
+        update_text, limits_text = user_sections(body)
+        if on_review:
+            if part is None:
+                reviewed = on_review(title_text, update_text, limits_text)
+            else:
+                reviewed = on_review(title_text, update_text, limits_text,
+                                     part)
+            if reviewed is None:
+                raise SubmitCancelled('提出を取り消しました。')
+            title_text = title_line(reviewed[0]) or title_text
+            update_text, limits_text = reviewed[1], reviewed[2]
+            body = body_with_user_sections(body, update_text, limits_text)
+    if not body:
+        body = fallback_pr_body(update_text, limitations,
+                                prep['base_version'], summary)
+    # 提出の基点 (提出者が取得した版) を機械可読で残す。過去の更新ログの
+    # 図はこれを読む。自動生成した本文には版名が入る保証がないため、
+    # 本文の作り方によらず必ず先頭に付ける
+    head = versions.base_marker(prep['base_version'], prep['base_commit'])
+    if marker:
+        head += '\n' + marker
+    body = '%s\n%s' % (head, body)
+    if notes:
+        body += '\n\n' + notes
+    # タイトルは PR の見出し (承認タブ) と正式版のリリースノートの
+    # 1 行目になる。コミットメッセージは「タイトル + 空行 + 更新内容」
+    title = title_text or ('%s を基点とした機能追加の提出'
+                           % prep['base_version'])
+    message = '%s\n\n%s' % (title, update_text) if update_text else title
+    return title, body, message, update_text
+
+
 def finalize_submission(prep, intentional_deletions, commit_message='',
                         config=None, on_progress=None, existing_branch=None,
                         limitations='', use_ai=False, on_review=None,
@@ -685,55 +777,10 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
         summary = _diff_summary(changes, intentional)
         diff_text = run_git(['diff', '--cached'], cwd=workrepo)
 
-        notes = ''
         conv = prep.get('tabconv') or {}
-        if conv.get('report'):
-            # 古い書き方を直した箇所 (承認する人が差分と見比べるため)
-            notes = '\n'.join(conv['report'])
-        if prep['safety']['warnings']:
-            notes += ('\n\n' if notes else '') + (
-                '# 提出時の警告 (承認時に確認)\n- '
-                + '\n- '.join(prep['safety']['warnings']))
-        # タイトルも本文も送信の前に用意する。自動作成のときは提出者に
-        # 見せて直させるので、ここで取り消されても push 済みのブランチが
-        # 残らない
-        update_text = (commit_message or '').strip()
-        title_text = title_line(title) or title_line(update_text)
-        body = None
-        if use_ai:
-            # API 呼び出しは提出 1 回につきこの 1 回だけ。タイトルも
-            # 本文の 1 行目 (# 行) としてまとめて書かせて取り出す
-            # 一番長く待たされる区間 (API 呼び出し)。提出者が選んだ
-            # 「Claude で自動作成する」の実行中だと分かる言葉にする
-            progress('Claude が更新内容を作成しています... '
-                     '(数十秒かかることがあります)')
-            body = claude_helper.generate_pr_body(
-                summary, diff_text, prep['base_version'], notes, strict=True)
-            drafted, body = split_body_title(body)
-            title_text = title_line(drafted) or title_text
-            update_text, limits_text = user_sections(body)
-            if on_review:
-                reviewed = on_review(title_text, update_text, limits_text)
-                if reviewed is None:
-                    raise SubmitCancelled('提出を取り消しました。')
-                title_text = title_line(reviewed[0]) or title_text
-                update_text, limits_text = reviewed[1], reviewed[2]
-                body = body_with_user_sections(body, update_text, limits_text)
-        if not body:
-            body = fallback_pr_body(update_text, limitations,
-                                    prep['base_version'], summary)
-        # 提出の基点 (提出者が取得した版) を機械可読で残す。過去の更新ログの
-        # 図はこれを読む。自動生成した本文には版名が入る保証がないため、
-        # 本文の作り方によらず必ず先頭に付ける
-        body = '%s\n%s' % (versions.base_marker(prep['base_version'],
-                                                prep['base_commit']), body)
-        if notes:
-            body += '\n\n' + notes
-        # タイトルは PR の見出し (承認タブ) と正式版のリリースノートの
-        # 1 行目になる。コミットメッセージは「タイトル + 空行 + 更新内容」
-        title = title_text or ('%s を基点とした機能追加の提出'
-                               % prep['base_version'])
-        message = '%s\n\n%s' % (title, update_text) if update_text else title
+        title, body, message, update_text = _compose(
+            prep, summary, diff_text, _base_notes(prep), commit_message,
+            limitations, use_ai, on_review, title, progress)
 
         progress('変更を記録しています...')
         run_git(['-c', 'user.name=%s' % user,
@@ -769,5 +816,208 @@ def finalize_submission(prep, intentional_deletions, commit_message='',
             ]).strip().splitlines()[-1]
         return {'pr_url': pr_url, 'branch': branch,
                 'commit_message': message}
+    finally:
+        cleanup(prep)
+
+
+# ---------------------------------------------------------------------------
+# 6. タブごとに分けて出す (manager/splitplan.py の案に沿って)
+# ---------------------------------------------------------------------------
+
+SPLIT_MARKER = '<!-- mgtkit-split %s %d/%d -->'
+_SPLIT_MARKER_RE = re.compile(r'<!-- mgtkit-split (\S+) (\d+)/(\d+) -->')
+_SPLIT_LIST = '<!-- mgtkit-split-list -->'
+
+
+def split_from_body(body):
+    """本文の束の印 → dict(bundle, k, n) / 無ければ None."""
+    m = _SPLIT_MARKER_RE.search(body or '')
+    if not m:
+        return None
+    return {'bundle': m.group(1), 'k': int(m.group(2)), 'n': int(m.group(3))}
+
+
+def _split_notes(units, k, shared, numbers=None):
+    """分けた提出の本文に付ける説明 (承認する人向け)."""
+    n = len(units)
+    lines = ['# 分けて出した提出',
+             '- この更新版は %d 本に分けて出したうちの %d 本目です '
+             '(タブごとに分けています)。どの順に承認しても構いません。'
+             % (n, k),
+             _SPLIT_LIST]
+    for j, u in enumerate(units, 1):
+        num = (numbers or {}).get(j)
+        lines.append('  - %d/%d: %s%s%s' % (
+            j, n, u['label'], (' (#%s)' % num) if num else '',
+            ' ← この提出' if j == k else ''))
+    lines.append(_SPLIT_LIST)
+    if shared:
+        lines.append('- この提出だけでも動くように、ほかの提出と同じ変更を'
+                     '入れたファイル (同じ変更どうしなので、取り込みで'
+                     'ぶつかりません): %s' % '、'.join(shared))
+    return '\n'.join(lines)
+
+
+def _with_split_list(body, units, k, numbers):
+    """本文の分けた提出の一覧を、提出番号つきに差し替える."""
+    parts = body.split(_SPLIT_LIST)
+    if len(parts) != 3:
+        return body
+    lines = []
+    n = len(units)
+    for j, u in enumerate(units, 1):
+        num = numbers.get(j)
+        lines.append('  - %d/%d: %s%s%s' % (
+            j, n, u['label'], (' (#%s)' % num) if num else '',
+            ' ← この提出' if j == k else ''))
+    return (parts[0] + _SPLIT_LIST + '\n' + '\n'.join(lines) + '\n'
+            + _SPLIT_LIST + parts[2])
+
+
+def finalize_split(prep, units, intentional_deletions, commit_message='',
+                   config=None, on_progress=None, limitations='',
+                   use_ai=False, on_review=None, title=''):
+    """準備済みの提出を、units (splitplan.plan の案) ごとに分けて確定する.
+
+    1 本ずつ基点から作業し、全部の本文がそろって (自動作成なら提出者が
+    1 本ずつ確かめて) から送る。途中で取り消したり自動作成に失敗したり
+    しても、まだ何も送られていない。
+    手書きの更新内容は分けた全部に同じものが付く (確認画面でその旨を出す)。
+    戻り値: dict(pr_url (1 本目), branch (1 本目), prs=[dict(url, branch,
+    title, label)])
+    """
+    from . import splitplan
+
+    def progress(msg):
+        log.info('%s', msg)
+        if on_progress:
+            on_progress(msg)
+
+    workrepo = prep['workrepo']
+    changes = prep['changes']
+    intentional = set(d for d in intentional_deletions
+                      if d in changes['deleted'])
+    units = [u for u in units
+             if splitplan.unit_files(u)
+             or intentional & set(u.get('deleted') or [])]
+    if len(units) < 2:
+        raise SubmitError('分けて出せる単位が 1 つしかありません。'
+                          'まとめて 1 本で提出してください。')
+    n = len(units)
+    built = []
+    try:
+        progress('提出用の作業場所を準備しています...')
+        reset_work_tree(workrepo)
+        user = ghcli.run_gh(['api', 'user', '--jq', '.login']).strip()
+        first = _next_branch_name(workrepo, user)
+        prefix, seq = re.match(r'^(.*-)(\d+)$', first).groups()
+        seq = int(seq)
+        conv = prep.get('tabconv') or {}
+        base_notes = _base_notes(prep)
+        for k, unit in enumerate(units, 1):
+            branch = '%s%d' % (prefix, seq + k - 1)
+            progress('%d/%d 本目 (%s) を用意しています...'
+                     % (k, n, unit['label']))
+            run_git(['checkout', '-B', branch, prep['base_commit']],
+                    cwd=workrepo)
+            files = splitplan.unit_files(unit)
+            for rel in files:
+                src = os.path.join(prep['extract_dir'],
+                                   rel.replace('/', os.sep))
+                dst = os.path.join(workrepo, rel.replace('/', os.sep))
+                os.makedirs(os.path.dirname(dst) or workrepo, exist_ok=True)
+                shutil.copyfile(src, dst)
+            dels = sorted(intentional & set(unit.get('deleted') or []))
+            for rel in dels:
+                target = os.path.join(workrepo, rel.replace('/', os.sep))
+                if os.path.isfile(target):
+                    os.remove(target)
+            run_git(['add', '-A'], cwd=workrepo)
+            staged = run_git(['diff', '--cached', '--name-only'],
+                             cwd=workrepo)
+            if not staged.strip():
+                continue
+            part_changes = {
+                'added': [r for r in files if r in changes['added']],
+                'modified': [r for r in files if r in changes['modified']]}
+            summary = _diff_summary(part_changes, dels)
+            diff_text = run_git(['diff', '--cached'], cwd=workrepo)
+            shared = list(unit.get('shared') or [])
+            notes = _split_notes(units, k, shared)
+            if base_notes:
+                notes += '\n\n' + base_notes
+            ttl, body, message, _upd = _compose(
+                prep, summary, diff_text, notes, commit_message,
+                limitations, use_ai, on_review,
+                title or unit['label'], progress,
+                part={'k': k, 'n': n, 'label': unit['label']},
+                marker=SPLIT_MARKER % (first, k, n))
+            if not use_ai and not title_line(title):
+                # 手書きのときは、どのタブの提出か分かるタイトルにする
+                ttl = ('%s: %s' % (unit['label'],
+                                   title_line(commit_message))
+                       )[:TITLE_MAX] if title_line(commit_message) else \
+                    unit['label'][:TITLE_MAX]
+                message = ('%s\n\n%s' % (ttl, (commit_message or '').strip())
+                           if (commit_message or '').strip() else ttl)
+            run_git(['-c', 'user.name=%s' % user,
+                     '-c', 'user.email=%s@users.noreply.github.com' % user,
+                     'commit', '-m', message], cwd=workrepo)
+            if (conv.get('status') == 'converted' and conv.get('needs_merge')
+                    and not tabconv.has_auto_registration(workrepo, 'HEAD')):
+                _merge_latest_for_converted_tabs(workrepo, user, config,
+                                                 progress)
+            built.append({'k': k, 'branch': branch, 'title': ttl,
+                          'body': body, 'label': unit['label']})
+        if not built:
+            raise SubmitError('基点の版から変更されたファイルがありません。')
+
+        prs = []
+        for b in built:
+            progress('GitHub へ送信しています (%d/%d 本目)...' % (b['k'], n))
+            try:
+                run_git(['push', '-u', 'origin', b['branch']], cwd=workrepo,
+                        timeout=300)
+                url = ghcli.run_gh([
+                    'pr', 'create', '--repo', paths.repo_slug(config),
+                    '--base', (config or {}).get('base_branch', 'main'),
+                    '--head', b['branch'], '--title', b['title'],
+                    '--body', b['body'],
+                ]).strip().splitlines()[-1]
+            except (GitError, ghcli.GhError) as e:
+                log.exception('分けた提出の %d 本目の送信に失敗しました',
+                              b['k'])
+                done = ''.join('\n- %s' % p['url'] for p in prs)
+                raise SubmitError(
+                    '%d 本目 (%s) を送れませんでした: %s%s' % (
+                        b['k'], b['label'], e,
+                        ('\nここまでに提出できたもの:' + done) if done
+                        else '\nまだ何も提出されていません。')) from e
+            prs.append({'url': url, 'branch': b['branch'],
+                        'title': b['title'], 'label': b['label'],
+                        'k': b['k'], 'body': b['body']})
+
+        # 本文の一覧に提出番号を書き足す (失敗しても提出自体は済んでいる)
+        numbers = {}
+        for p in prs:
+            m = re.search(r'/pull/(\d+)', p['url'])
+            if m:
+                numbers[p['k']] = m.group(1)
+        if numbers:
+            progress('提出どうしの番号を書き添えています...')
+            for p in prs:
+                body = _with_split_list(p['body'], units, p['k'], numbers)
+                if body == p['body']:
+                    continue
+                try:
+                    ghcli.run_gh(['pr', 'edit', p['branch'],
+                                  '--repo', paths.repo_slug(config),
+                                  '--body', body])
+                except ghcli.GhError:
+                    log.warning('分けた提出の本文に番号を書き足せませんでした'
+                                ' (提出自体は完了): %s', p['url'])
+        return {'pr_url': prs[0]['url'], 'branch': prs[0]['branch'],
+                'prs': [{k: p[k] for k in ('url', 'branch', 'title',
+                                           'label')} for p in prs]}
     finally:
         cleanup(prep)

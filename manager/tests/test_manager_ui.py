@@ -1028,3 +1028,123 @@ def test_notes_are_drawn_with_headings_and_indented_sub_items():
     assert sub.content.controls[1].value == '8列はそのまま読む'
     # 次の見出しの上は子項目どうしより広く空ける
     assert head2.margin is not None and head2.margin.top > 0
+
+
+_SPLIT_PREP = {
+    'changes': {'added': ['rcslab/routes.py', 'colbase/routes.py'],
+                'modified': ['mgt.py'], 'deleted': []},
+    'skipped': [],
+    'safety': {'warnings': [], 'blockers': []},
+    'split': {'splittable': True, 'units': [
+        {'key': 'common', 'kind': 'common',
+         'label': '既存の機能の修正・共通部分', 'tabs': [],
+         'files': ['mgt.py'], 'deleted': [], 'shared': []},
+        {'key': 'tab:rcslab', 'kind': 'tab', 'label': '新しいタブ「RCスラブ」',
+         'tabs': ['rcslab'], 'files': ['rcslab/routes.py'], 'deleted': [],
+         'shared': ['util.py']},
+        {'key': 'tab:colbase', 'kind': 'tab',
+         'label': '新しいタブ「S露出柱脚」', 'tabs': ['colbase'],
+         'files': ['colbase/routes.py'], 'deleted': [], 'shared': []},
+    ]},
+}
+
+
+def _split_confirm_dialog(monkeypatch, my_prs=()):
+    """タブごとに分けられる提出の確認ダイアログ (送信は記録だけ)."""
+    import flet as ft
+
+    from manager import main as manager_main
+    monkeypatch.setattr(manager_main.selfupdate, 'auto_update',
+                        lambda *a, **k: {'stashed': []})
+    monkeypatch.setattr(manager_main.threading, 'Timer', _NoTimer)
+    monkeypatch.setattr(manager_main.submit, 'prepare_submission',
+                        lambda *a, **k: dict(_SPLIT_PREP))
+    monkeypatch.setattr(manager_main.autofix, 'list_my_submissions',
+                        lambda *a, **k: list(my_prs))
+    monkeypatch.setattr(manager_main.settings, 'api_key',
+                        lambda config=None: 'dummy-not-a-real-key')
+    calls = []
+    monkeypatch.setattr(
+        manager_main.submit, 'finalize_split',
+        lambda prep, units, *a, **k: calls.append(('split', units, k))
+        or {'pr_url': 'u1', 'branch': 'b1',
+            'prs': [{'label': u['label'], 'url': 'u%d' % i}
+                    for i, u in enumerate(units, 1)]})
+    monkeypatch.setattr(
+        manager_main.submit, 'finalize_submission',
+        lambda prep, *a, **k: calls.append(('one', None, k))
+        or {'pr_url': 'u1', 'branch': 'b1'})
+
+    class _PickedZip:
+        path = 'C:/Users/yamada/Desktop/mgtkit.zip'
+        name = 'mgtkit.zip'
+
+    async def _pick(self, *a, **k):
+        return [_PickedZip()]
+    monkeypatch.setattr(ft.FilePicker, 'pick_files', _pick)
+
+    page = _FakePage()
+    manager_main.main(page)
+    column = page.added[1].content
+    submit_panel = column.controls[1].controls[2]
+    button = next(c for c in _walk_controls(submit_panel, [])
+                  if getattr(c, 'content', None) == 'ZIP を選んで提出')
+    page.run_task(button.on_click, None)
+    monkeypatch.setattr(manager_main.threading, 'Thread', _NowThread)
+    return page, page.dialogs[-1], calls, \
+        lambda: _walk_texts(submit_panel, [])
+
+
+def _radio_groups(dialog):
+    return [c for c in _walk_controls(dialog, [])
+            if type(c).__name__ == 'RadioGroup']
+
+
+def test_split_choice_is_offered_and_chosen_by_default(monkeypatch):
+    """2 本以上に分けられる提出では、分けて出すのを既定で勧めること."""
+    page, dialog, calls, texts = _split_confirm_dialog(monkeypatch)
+    shown = _walk_texts(dialog, [])
+    assert 'タブごとに分けて出しますか?' in shown
+    assert '3 本に分けて出す (おすすめ)' in shown
+    assert '新しいタブ「RCスラブ」' in shown
+    assert any('util.py' in t for t in shown)       # 複製する共通部分
+    # 自動作成なら 1 本ずつ作ることと料金が少し増えることを先に言う
+    assert any('数十円 × 3 本' in t for t in shown)
+    _dialog_button(dialog, '提出する').on_click(None)
+    assert calls and calls[0][0] == 'split'
+    assert [u['key'] for u in calls[0][1]] == ['common', 'tab:rcslab',
+                                               'tab:colbase']
+    assert calls[0][2]['use_ai'] is True
+    assert any('3 本に分けて提出しました' in t for t in texts())
+
+
+def test_choosing_one_submission_keeps_the_old_flow(monkeypatch):
+    page, dialog, calls, _texts = _split_confirm_dialog(monkeypatch)
+    split_rg = _radio_groups(dialog)[0]
+    split_rg.value = 'one'
+    split_rg.on_change(None)
+    _dialog_button(dialog, '提出する').on_click(None)
+    assert calls and calls[0][0] == 'one'
+
+
+def test_manual_text_warns_it_goes_to_every_part(monkeypatch):
+    page, dialog, calls, _texts = _split_confirm_dialog(monkeypatch)
+    gen_rg = _radio_groups(dialog)[1]
+    gen_rg.value = 'manual'
+    gen_rg.on_change(None)
+    assert any('同じ文章が 3 本すべてに付きます' in t
+               for t in _walk_texts(dialog, []))
+
+
+def test_resubmission_is_not_split(monkeypatch):
+    """修正版として前の提出に積むときは分けない."""
+    page, dialog, calls, _texts = _split_confirm_dialog(
+        monkeypatch, my_prs=[{'branch': 'feature/x-1', 'number': 7,
+                              'title': '前の提出'}])
+    dd = next(c for c in _walk_controls(dialog, [])
+              if type(c).__name__ == 'Dropdown')
+    dd.value = 'feature/x-1'
+    dd.on_select(None)
+    _dialog_button(dialog, '提出する').on_click(None)
+    assert calls and calls[0][0] == 'one'
+    assert calls[0][2]['existing_branch'] == 'feature/x-1'

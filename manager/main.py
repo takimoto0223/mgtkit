@@ -1341,7 +1341,7 @@ def main(page: ft.Page):
         t4_status.value = msg
         page.update()
 
-    def _review_ai_text(title, update, limits):
+    def _review_ai_text(title, update, limits, part=None):
         """自動作成の結果を提出者に見せて直させる (裏の処理から呼ばれる).
 
         この 3 項目はそのまま正式版のリリースノートになるため、本人が
@@ -1349,6 +1349,8 @@ def main(page: ft.Page):
         2026-08)。タイトルは承認タブの見出しにもなる。
         戻り値: (タイトル, 更新内容, 制限事項) / 取り消しなら None。
         呼び出し元は run_bg の中なので、答えが出るまでここで待つ。
+        part (タブごとに分けて出すとき): dict(k, n, label)。何本目の
+        どのタブの下書きかを見出しに出す (1 本ずつ確かめてもらう)。
         """
         done = threading.Event()
         answer = {}
@@ -1381,8 +1383,11 @@ def main(page: ft.Page):
         def finish(value):
             answer['v'] = value
             page.pop_dialog()
-            t4_status.value = ('提出しています...' if value else
-                               '提出を取り消しています...')
+            if value and part and part['k'] < part['n']:
+                t4_status.value = '次の下書きを作っています...'
+            else:
+                t4_status.value = ('提出しています...' if value else
+                                   '提出を取り消しています...')
             page.update()
             done.set()
 
@@ -1397,9 +1402,30 @@ def main(page: ft.Page):
                 ttl.focus()
                 return
             finish((ttl.value, upd.value, lim.value))
+        part_note = []
+        if part:
+            # 分けて出すときは、何本目のどのタブの分かを先頭に出す
+            part_note = [ft.Container(
+                bgcolor='#eef2f7', border_radius=6,
+                padding=ft.Padding(10, 6, 10, 6),
+                content=ft.Text('%d / %d 本目: %s' % (
+                    part['k'], part['n'], part['label']),
+                    size=13, weight=ft.FontWeight.BOLD, color=NAVY))]
+        last = (not part) or part['k'] == part['n']
+        if part and not last:
+            # まだ送らないことを、ボタンのすぐ上で言う (1 本目で送られたと
+            # 思わせない)
+            part_note_tail = [ft.Container(
+                margin=ft.Margin(0, 4, 0, 0),
+                content=ft.Text('%d 本すべてを確かめてから、まとめて送ります。'
+                                % part['n'], size=12, color='#6b7280'))]
+        else:
+            part_note_tail = []
         dlg = ft.AlertDialog(
-            modal=True, title=ft.Text('この内容で提出します'),
-            content=ft.Column([
+            modal=True,
+            title=ft.Text('この内容で提出します' if last
+                          else '下書きを確かめてください'),
+            content=ft.Column(part_note + [
                 ft.Text('Claude が下書きしました。おかしなところがあれば'
                         '直してください。ここに書かれた内容は、正式版に'
                         'なったときの「更新内容」としてそのまま'
@@ -1426,10 +1452,15 @@ def main(page: ft.Page):
                             weight=ft.FontWeight.BOLD, color='#374151'),
                     margin=ft.Margin(0, 6, 0, 0)),
                 lim,
-            ], tight=True, width=520, spacing=5),
+            ] + part_note_tail, tight=True, width=520, spacing=5),
             actions=[
-                ft.TextButton('取り消す', on_click=lambda _: finish(None)),
-                ft.FilledButton('この内容で提出する', bgcolor=NAVY,
+                ft.TextButton('取り消す' if not part else
+                              '取り消す (%d 本とも送りません)' % part['n'],
+                              on_click=lambda _: finish(None)),
+                ft.FilledButton('この内容で提出する' if not part
+                                else ('%d 本すべてを提出する' % part['n']
+                                      if last else 'この内容で次へ'),
+                                bgcolor=NAVY,
                                 color='#ffffff',
                                 on_click=submit_reviewed)])
         try:
@@ -1507,7 +1538,8 @@ def main(page: ft.Page):
             log.exception('自動作成の失敗ダイアログを表示できませんでした')
             t4_status.value = '自動作成できませんでした: %s' % err
 
-    def _do_finalize(prep, deletions, existing_branch=None, use_ai=False):
+    def _do_finalize(prep, deletions, existing_branch=None, use_ai=False,
+                     split_units=None):
         # ダイアログを閉じた直後に反応を見せる (裏の処理は数十秒かかる)。
         # 下書きコースはまだ何も送らない段階 (確認画面で取り消せば送信
         # されない) なので「提出しています...」とは言わない
@@ -1517,17 +1549,33 @@ def main(page: ft.Page):
 
         def work():
             try:
-                result = submit.finalize_submission(
-                    prep, deletions, t4_commit_msg.value or '',
-                    config, on_progress=_submit_progress,
-                    existing_branch=existing_branch,
-                    limitations=t4_limits.value or '', use_ai=use_ai,
-                    on_review=_review_ai_text if use_ai else None)
+                if split_units:
+                    result = submit.finalize_split(
+                        prep, split_units, deletions,
+                        t4_commit_msg.value or '', config,
+                        on_progress=_submit_progress,
+                        limitations=t4_limits.value or '', use_ai=use_ai,
+                        on_review=_review_ai_text if use_ai else None)
+                else:
+                    result = submit.finalize_submission(
+                        prep, deletions, t4_commit_msg.value or '',
+                        config, on_progress=_submit_progress,
+                        existing_branch=existing_branch,
+                        limitations=t4_limits.value or '', use_ai=use_ai,
+                        on_review=_review_ai_text if use_ai else None)
                 t4_status.value = ''
-                t4_result.value = (
-                    '提出しました。検証を通過するとβ版として発行され、'
-                    '「β版の確認と承認」タブに表示されます。\n'
-                    '提出内容: %s' % result['pr_url'])
+                if result.get('prs'):
+                    t4_result.value = (
+                        '%d 本に分けて提出しました。検証を通過したものから'
+                        'β版として発行され、「β版の確認と承認」タブに'
+                        '表示されます。\n' % len(result['prs'])
+                        + '\n'.join('%s: %s' % (p['label'], p['url'])
+                                    for p in result['prs']))
+                else:
+                    t4_result.value = (
+                        '提出しました。検証を通過するとβ版として発行され、'
+                        '「β版の確認と承認」タブに表示されます。\n'
+                        '提出内容: %s' % result['pr_url'])
                 t4_commit_msg.value = ''
                 t4_limits.value = ''
             except claude_helper.ClaudeError as e:
@@ -1570,6 +1618,90 @@ def main(page: ft.Page):
                 % (p['number'], p['title'][:30])) for p in my_prs]
             dest_dd = ft.Dropdown(label='提出先', options=options, value='')
             items.append(dest_dd)
+        # タブごとに分けて出す案 (manager/splitplan.py)。2 本以上に分けられる
+        # ときだけ出す。修正版として積むときは分けない
+        split = prep.get('split') or None
+        split_rg = None
+        split_box = None
+        split_cost = ft.Text('', size=12, color='#6b7280', visible=False)
+        if split:
+            units = split['units']
+            n_units = len(units)
+            unit_rows = []
+            for k, u in enumerate(units, 1):
+                n_files = len(u['files']) + len(u.get('deleted') or [])
+                unit_rows.append(ft.Row([
+                    ft.Text('%d.' % k, size=12.5, color='#6b7280', width=18),
+                    ft.Text(u['label'], size=12.5, color='#1f2937',
+                            expand=True),
+                    ft.Text('ファイル %d 件' % n_files, size=12,
+                            color='#6b7280'),
+                ], spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.START))
+                if u.get('shared'):
+                    unit_rows.append(ft.Container(
+                        margin=ft.Margin(24, 0, 0, 2),
+                        content=ft.Text(
+                            '※ %s の変更も同じ内容で入ります (このタブだけ'
+                            '先に承認されても動くように)'
+                            % '、'.join(u['shared']),
+                            size=11.5, color='#6b7280')))
+            unit_list = ft.Container(
+                margin=ft.Margin(28, 2, 0, 4),
+                content=ft.Column(unit_rows, spacing=3))
+
+            def on_split_change(_=None):
+                # 手元だけで完結する切り替え。押した場所のすぐ下が変わる
+                unit_list.visible = (split_rg.value == 'split')
+                _refresh_split_cost()
+                page.update()
+            split_rg = ft.RadioGroup(
+                value='split', on_change=on_split_change,
+                content=ft.Column([
+                    ft.Radio(value='split',
+                             label='%d 本に分けて出す (おすすめ)' % n_units),
+                    unit_list,
+                    ft.Radio(value='one', label='まとめて 1 本で出す'),
+                ], spacing=0))
+            split_box = ft.Container(
+                bgcolor='#ffffff', border_radius=8, padding=12,
+                border=ft.Border.all(1, '#e5e7eb'),
+                content=ft.Column([
+                    ft.Text('タブごとに分けて出しますか?', size=13,
+                            weight=ft.FontWeight.BOLD),
+                    ft.Text('分けると、承認する人が 1 つずつ確かめられます。'
+                            'どの順に承認されても大丈夫です。',
+                            size=12, color='#4b5563'),
+                    split_rg,
+                ], spacing=4))
+            items.append(split_box)
+
+        def _splitting():
+            return bool(split_rg and split_rg.value == 'split'
+                        and (split_box is None or split_box.visible))
+
+        def _refresh_split_cost():
+            if not split:
+                return
+            if not _splitting():
+                split_cost.value = ''
+            elif gen_rg.value == 'ai':
+                split_cost.value = (
+                    'Claude で作る場合: 1 本ずつ下書きを作って確かめます '
+                    '(数十円 × %d 本)。' % len(split['units']))
+            else:
+                split_cost.value = ('自分で入力する場合: 同じ文章が %d 本'
+                                    'すべてに付きます。'
+                                    % len(split['units']))
+            split_cost.visible = bool(split_cost.value)
+
+        if dest_dd is not None and split_box is not None:
+            def on_dest_change(_=None):
+                # 修正版として積むときは分けない (その提出に積むだけ)
+                split_box.visible = not dest_dd.value
+                _refresh_split_cost()
+                page.update()
+            dest_dd.on_select = on_dest_change
         # 更新内容の書き方をここで選ばせる (管理者指示 2026-08。提出タブに
         # 入力欄は置かない)。キー未登録の PC では自動作成を選べないので
         # 灰色にして理由を出し、手入力だけにする。
@@ -1598,6 +1730,7 @@ def main(page: ft.Page):
         def on_gen_change(_):
             # 手元だけで完結する切り替え。押した場所のすぐ下が変わる
             manual_box.visible = (gen_rg.value == 'manual')
+            _refresh_split_cost()
             page.update()
         gen_rg = ft.RadioGroup(
             value='ai' if has_key else 'manual', on_change=on_gen_change,
@@ -1624,6 +1757,10 @@ def main(page: ft.Page):
                         '「更新内容」としてそのまま表示されます。',
                         size=12, color='#4b5563'),
                 gen_rg,
+                # 分けて出すときの料金・手書きの扱い (選んだ書き方の説明
+                # なので、このカードに置く。どちらの選択肢の説明か分かるよう
+                # 頭に書き方の名前を付け、選択肢の字下げにはそろえない)
+                split_cost,
             ], spacing=4)))
         if del_checks:
             items.append(ft.Text(
@@ -1668,12 +1805,16 @@ def main(page: ft.Page):
             page.pop_dialog()
             deletions = [c.label for c in del_checks if c.value]
             existing = (dest_dd.value or None) if dest_dd else None
-            _do_finalize(prep, deletions, existing, use_ai)
+            units = (split['units'] if split and not existing
+                     and _splitting() else None)
+            _do_finalize(prep, deletions, existing, use_ai,
+                         split_units=units)
 
         # 確認事項が増える提出 (提出先の選択・削除ファイル・警告) だけ
         # スクロールにする。常にスクロールにすると、短い既定の状態でも
         # ダイアログが画面いっぱいに伸びて中身が空白だらけに見えるため
-        long_form = bool(my_prs or del_checks or warnings)
+        _refresh_split_cost()
+        long_form = bool(my_prs or del_checks or warnings or split)
         page.show_dialog(ft.AlertDialog(
             modal=True, title=ft.Text('提出内容の確認'),
             content=ft.Column(
