@@ -21,7 +21,8 @@ from . import (autofix, claude_helper, conflicts, diffdialog, diffview,
                history, historyview, installer, launcher, localstate,
                logsetup, migrate, notesview, paths, reviewcache, reviews,
                rocketfx,
-               safeio, selfupdate, settings, submit, uiguard, updater, usage)
+               safeio, selfupdate, settings, standalone, submit, uiguard,
+               updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -2156,6 +2157,138 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
+    def _standalone_files(pr):
+        """提出に含まれる単独で開くファイル (正式版のタブのフォルダは除く)."""
+        return standalone.find(pr.get('files') or [],
+                               paths.app_dir(paths.stable_dir(config)))
+
+    def open_standalone(pr, release):
+        """「単独の〇〇を開く」: β版を取り込んで、ファイルを直接開く.
+
+        単独で動く HTML やスクリプトは、β版を起動しても mgtkit の画面
+        (タブ) からはたどり着けず、置き場所 (.manager/beta/<版>/) も普段は
+        見えない (提出 #204 のフィードバック)。β版がまだ手元に無ければ
+        取り込んでから、1 本ならそのまま開き、複数なら選ぶ画面を出す。
+        """
+        def handler(_):
+            restore = _freeze_card(pr['number'])
+            t5_status.value = '%s の単独のファイルを準備しています...' % (
+                release['tag'])
+            page.update()
+
+            def work():
+                tag = release['tag']
+                beta = paths.beta_dir(tag, config)
+
+                def progress(msg):
+                    t5_status.value = '%s: %s' % (tag, msg)
+                    page.update()
+
+                def _stop_same_beta():
+                    # このβ版が動いたまま壊れていたときだけ止める (別の
+                    # 版が動いていても、置き場所が別なので止めない)
+                    if launcher.running_beta(config) == str(tag):
+                        launcher.stop_app(paths.beta_port(config))
+                        launcher.remember_beta(None, config)
+                try:
+                    if updater.local_version_info(beta) is None:
+                        if updater.installing():
+                            progress('先に始まった取り込みの完了を'
+                                     '待っています...')
+                        updater.install_if_needed(
+                            repo, release, beta, on_progress=progress,
+                            config=config, prepare=_stop_same_beta)
+                    app = paths.app_dir(beta)
+                    files = [dict(f, local=standalone.local_path(
+                                 app, f['path']))
+                             for f in standalone.find(pr.get('files') or [],
+                                                      app)]
+                    files = [f for f in files if os.path.exists(f['local'])]
+                    if not files:
+                        t5_status.value = ('β版 %s には単独で開くファイルが'
+                                           '見つかりませんでした。' % tag)
+                    elif len(files) == 1:
+                        standalone.open_file(files[0]['local'],
+                                             files[0]['how'])
+                        t5_status.value = '%s を開きました (β版 %s)。' % (
+                            files[0]['path'], tag)
+                    else:
+                        t5_status.value = ''
+                        _standalone_dialog(pr, tag, files)
+                except (ghcli.GhError, Exception) as e:
+                    log.exception('単独のファイルを開けませんでした')
+                    t5_status.value = ('単独のファイルを開けませんでした: %s'
+                                       % (str(e) or type(e).__name__))
+                finally:
+                    restore()
+                    page.update()
+            run_bg(work)
+        return handler
+
+    def _standalone_dialog(pr, tag, files):
+        """単独のファイルが複数あるときに、どれを開くか選ぶ画面."""
+        note = ft.Text('', size=12, color='#555555')
+        how_label = {'browser': 'ブラウザで開く', 'folder': 'フォルダで表示',
+                     'app': '開く'}
+        how_icon = {'browser': ft.Icons.OPEN_IN_NEW,
+                    'folder': ft.Icons.FOLDER_OPEN,
+                    'app': ft.Icons.DESCRIPTION}
+
+        def opener(f):
+            def click(_):
+                # この PC の中だけで済む操作なので、その場で開いて結果を出す
+                try:
+                    standalone.open_file(f['local'], f['how'])
+                    note.value = '%s を開きました。' % f['path']
+                    note.color = '#15803d'
+                except Exception as e:
+                    log.exception('単独のファイルを開けませんでした')
+                    note.value = '%s を開けませんでした: %s' % (
+                        f['path'], str(e) or type(e).__name__)
+                    note.color = '#b91c1c'
+                page.update()
+            return click
+
+        rows = []
+        kind = None
+        for f in files:
+            if f['kind'] != kind:
+                kind = f['kind']
+                n = sum(1 for g in files if g['kind'] == kind)
+                rows.append(ft.Text('%s (%d)' % (kind, n), size=13,
+                                    weight=ft.FontWeight.BOLD,
+                                    color='#374151'))
+            folder, name = f['path'].rsplit('/', 1)   # 単独は必ずフォルダの中
+            rows.append(ft.Row([
+                ft.Column([
+                    ft.Text(name, size=13, weight=ft.FontWeight.BOLD,
+                            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ft.Text(folder + '/', size=11, color='#6b7280'),
+                ], spacing=0, expand=True),
+                ft.OutlinedButton(how_label[f['how']],
+                                  icon=how_icon[f['how']],
+                                  on_click=opener(f)),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        # 一覧の高さ = 見出し (約 20px) + ファイルの行 (2 行 + ボタンで約
+        # 41px) + 行間。足りないと最後の行が半分切れ、スクロールできる
+        # ことにも気づけない (実画面の撮影で確認)
+        n_heads = len(rows) - len(files)
+        list_h = n_heads * 20 + len(files) * 41 + 6 * (len(rows) - 1) + 4
+        page.show_dialog(ft.AlertDialog(
+            title=ft.Text('%s — #%d (β版 %s)' % (
+                standalone.button_label(files), pr['number'], tag)),
+            content=ft.Column([
+                ft.Text('mgtkit の画面 (タブ) からは開けないファイルです。'
+                        'β版の置き場所から直接開きます。スクリプトは'
+                        '実行せず、フォルダを開いて選んだ状態にします。',
+                        size=12, color='#555555'),
+                ft.Column(rows, spacing=6, scroll=ft.ScrollMode.AUTO,
+                          height=min(400, list_h)),
+                note,
+            ], tight=True, width=560, spacing=10),
+            actions=[ft.TextButton('閉じる',
+                                   on_click=lambda _: page.pop_dialog())]))
+
     def _edit_feedback_dialog(fb):
         """自分のフィードバックの編集ダイアログ."""
         field = ft.TextField(label='フィードバックを編集', value=fb['text'],
@@ -3104,6 +3237,7 @@ def main(page: ft.Page):
                 overflow=ft.TextOverflow.ELLIPSIS, tooltip=body)))
 
         buttons = []
+        alone_btn = None
         if beta is not None and not final:
             buttons.append(ft.FilledButton(
                 'β版 %s を試す' % beta['tag'], icon=ft.Icons.SCIENCE,
@@ -3111,6 +3245,23 @@ def main(page: ft.Page):
                 on_click=try_beta(pr, beta),
                 bgcolor='#e5e7eb' if locked else AMBER,
                 color='#9ca3af' if locked else '#ffffff'))
+            alone = _standalone_files(pr)
+            if alone:
+                # ボタンの列には足さず専用の行にする (列が伸びると狭い
+                # 画面で右端の「承認」「却下」が切れて見えなくなるため)
+                alone_btn = ft.OutlinedButton(
+                    standalone.button_label(alone),
+                    icon=ft.Icons.OPEN_IN_NEW, disabled=locked,
+                    on_click=open_standalone(pr, beta))
+                buttons.append(alone_btn)
+                lines.append(_line(_H_BTNS, ft.Row([
+                    alone_btn,
+                    ft.Text('mgtkit の画面 (タブ) からは開けないファイルが '
+                            '%d 件あります' % len(alone), size=12,
+                            color='#555555', expand=True, max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS)],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER)))
         fb_all = pr.get('feedback') or []
         # 件数は現在のβ版宛てのみ (統合後は新β版基準で仕切り直し)
         fb = [f for f in fb_all
@@ -3164,8 +3315,10 @@ def main(page: ft.Page):
             else:
                 buttons.append(ft.OutlinedButton('却下',
                                                  on_click=on_reject(pr)))
-        # 演出中の無効化用に操作ボタンを控えておく
+        # 演出中の無効化用に操作ボタンを控えておく (単独のファイルの
+        # ボタンも含む。並べるのは専用の行なので、列からは外す)
         _card_buttons[pr['number']] = list(buttons)
+        buttons = [b for b in buttons if b is not alone_btn]
         if locked:
             # カード情報は薄く、案内文だけ明るく表示する
             rows = [
