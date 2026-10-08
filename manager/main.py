@@ -959,7 +959,9 @@ def main(page: ft.Page):
                 try:
                     body = _history_ctx.get('body_col')
                     if body is not None:
-                        await body.scroll_to(offset=0, duration=10)
+                        await body.scroll_to(
+                            offset=_history_ctx.get('body_y', 0),
+                            duration=10)
                     fig = _history_ctx.get('fig')
                     if fig:
                         await fig['scroll_row'].scroll_to(
@@ -1239,6 +1241,11 @@ def main(page: ft.Page):
                              tight=True)
         _history_ctx['body_col'] = body_col
         _history_ctx['fig'] = fig
+        # 図が内容の高さより高いと、本線が画面の下の方に張り付いて下の
+        # 段が見えない。そのときは本線が内容の中央に来るまで縦にも送る
+        _history_ctx['body_y'] = (
+            max(0, fig['rail_y'] - col_h // 2)
+            if fig and fig['height'] > col_h else 0)
         _history_ctx['open'] = True
 
         def close(_):
@@ -1256,6 +1263,9 @@ def main(page: ft.Page):
                 # (scroll_to は async のためページのループで実行する)
                 await asyncio.sleep(0.25)
                 try:
+                    if _history_ctx.get('body_y'):
+                        await body_col.scroll_to(
+                            offset=_history_ctx['body_y'], duration=10)
                     await fig['scroll_row'].scroll_to(
                         offset=fig['initial_offset'], duration=100)
                 except Exception:

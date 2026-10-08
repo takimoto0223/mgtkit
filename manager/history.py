@@ -252,37 +252,192 @@ def base_label(chip):
 
 
 def lane_order():
-    """レーン番号を内側から順に返す (-1 → +1 → -2 → -3 → ...).
+    """レーン番号を内側から順に返す (-1 → +1 → -2 → +2 → -3 → ...).
 
-    上は 1 段だけ (日付の軸との間に段を増やす余地が無い)。下は必要な
-    だけ深くする。同時に何本の枝が出ても重ねない = 図が縦に伸びるのは
-    許容する (管理者指示 2026-08)。
+    本線の下と上を交互に使い、本線が図のなるべく中央に来るようにする
+    (管理者指示 2026-10。以前は上を 1 段だけにして下へ伸ばしていたため、
+    同時に何本も出ると本線が図の上端に寄り、下へ長い線が並んでいた)。
+    同時に何本の枝が出ても重ねない = 図が縦に伸びるのは許容する
+    (管理者指示 2026-08)。
     """
-    yield -1
-    yield 1
-    n = 2
+    n = 1
     while True:
         yield -n
+        yield n
         n += 1
 
 
-def pack_lanes(spans):
-    """区間の列 → レーン番号の列 (先に来たものほど本線に近いレーン).
+def pack_lanes(spans, open_ends=None, hard=None):
+    """区間の列 → レーン番号の列 (線の交差が少なく、本線が中央に来る並び).
+
+    互いに重ならない区間の塊 (時期の離れた提出) は線が交わりようが
+    ないので、塊ごとに _pack_group で決める (履歴全体では帯が 100 本を
+    超えるが、1 つの塊は数本〜十数本)。
+    """
+    n = len(spans)
+    open_ends = list(open_ends or [False] * n)
+    hard = list(hard or [()] * n)
+    lanes = [None] * n
+    group, reach = [], None
+    for i in sorted(range(n), key=lambda i: (spans[i][0], spans[i][1], i)):
+        if group and spans[i][0] >= reach:
+            _place_group(group, spans, open_ends, hard, lanes)
+            group = []
+        reach = spans[i][1] if not group else max(reach, spans[i][1])
+        group.append(i)
+    if group:
+        _place_group(group, spans, open_ends, hard, lanes)
+    return lanes
+
+
+def _place_group(group, spans, open_ends, hard, lanes):
+    group = sorted(group)       # 渡された順 (提出順) を保つ
+    sub = _pack_group([spans[i] for i in group],
+                      [open_ends[i] for i in group],
+                      [hard[i] for i in group])
+    for i, lane in zip(group, sub):
+        lanes[i] = lane
+
+
+# 1 つの塊でこれより多いときは、移し替えの改善を省く (時間がかかりすぎる)
+IMPROVE_MAX = 24
+
+
+def _pack_group(spans, open_ends, hard):
+    """重なり合う区間の 1 つの塊 → レーン番号の列.
 
     区間は半開区間 [lo, hi) として扱う。端が同じだけ (前の帯の公開位置
     = 次の帯の基点) は重なりとしない。そうしないと連続する提出が交互に
     レーンを変えてしまう。lo/hi は日付でも x 座標でも比較さえできれば
-    よい (モデルは日付、描画は px で同じ規則を使う)。
+    よい (モデルは日付、描画は px で同じ規則を使う)。戻り値は渡された
+    区間の順に並べて返す。
+
+    帯は lo で本線から縦に離れ (分岐)、hi で本線へ縦に戻る (合流)。
+    同じ側のより本線寄りの帯の範囲をこの縦の線が通ると交差になる
+    (_lane_cost)。open_ends[i] が真の帯 (確認中) は hi に縦の線が無い。
+    hard[i] = 帯 i の上で線が通ると山で跨げない範囲 [(x0, x1), ...]
+    (箱・曲線)。そこを通る交差は重く数える。
+
+    決め方 (管理者指示 2026-10「交差しないように」「本線を中央に」):
+    1. 置く順を「終わりが早い順」「始まりが早い順」「渡された順」の
+       3 通りで、1 本ずつ
+       交差がいちばん少ない段に置く (同じなら本線寄り、下を先)。終わり順は
+       公開の早い帯ほど本線寄りになり入れ子の交差が 0、始まり順は段数が
+       最少になる
+    2. それぞれ 1 本ずつ別の段へ移す・2 本の段を入れ替える、を良くなる
+       かぎり繰り返す (後から来た帯が内側に入り込んで外の帯に貫かれる、
+       といった貪欲な置き方の穴を埋める)
+    3. (交差の重さ, 段数, 上下の深い方, 本線からの距離の合計) が最小の
+       並びを採る
     """
-    placed = {}
-    lanes = []
-    for lo, hi in spans:
-        for lane in lane_order():
-            if all(hi <= b0 or b1 <= lo for b0, b1 in placed.get(lane, ())):
-                break       # 空のレーンには必ず置けるので必ず抜ける
-        lanes.append(lane)
-        placed.setdefault(lane, []).append((lo, hi))
-    return lanes
+    n = len(spans)
+
+    def cost_pair(i, li, j, lj):
+        if (li > 0) != (lj > 0) or li == lj:
+            return 0
+        if abs(lj) < abs(li):
+            i, j = j, i     # i = 本線寄り, j = 外側 (縦の線が i を横切る)
+        lo, hi = spans[i]
+        c = 0
+        for x, has in ((spans[j][0], True), (spans[j][1], not open_ends[j])):
+            if has and lo < x < hi:
+                c += HARD_COST if any(a < x < b for a, b in hard[i]) else 1
+        return c
+
+    def fits(i, lane, lanes, skip=()):
+        lo, hi = spans[i]
+        return all(lanes[k] != lane or hi <= spans[k][0]
+                   or spans[k][1] <= lo
+                   for k in range(n) if k != i and k not in skip
+                   and lanes[k] is not None)
+
+    def chip_cost(i, lane, lanes, skip=()):
+        return sum(cost_pair(i, lane, k, lanes[k]) for k in range(n)
+                   if k != i and k not in skip and lanes[k] is not None)
+
+    def score(lanes):
+        cross = sum(cost_pair(i, lanes[i], k, lanes[k])
+                    for i in range(n) for k in range(i + 1, n))
+        up = len({ln for ln in lanes if ln > 0})
+        down = len({ln for ln in lanes if ln < 0})
+        return (cross, up + down, max(up, down),
+                sum(abs(ln) for ln in lanes))
+
+    def candidates(lanes):
+        up = max([ln for ln in lanes if ln is not None and ln > 0] or [0])
+        down = max([-ln for ln in lanes if ln is not None and ln < 0]
+                   or [0])
+        return ([-k for k in range(1, down + 2)]
+                + list(range(1, up + 2)))
+
+    def greedy(order):
+        lanes = [None] * n
+        for i in order:
+            best = min((chip_cost(i, ln, lanes), abs(ln), ln > 0, ln)
+                       for ln in candidates(lanes) if fits(i, ln, lanes))
+            lanes[i] = best[-1]
+        return lanes
+
+    def improve(lanes):
+        cur = score(lanes)
+        for _round in range(4 * n):
+            moved = False
+            for i in range(n):
+                for ln in candidates(lanes):
+                    if ln == lanes[i] or not fits(i, ln, lanes):
+                        continue
+                    trial = lanes[:i] + [ln] + lanes[i + 1:]
+                    sc = score(_compact(trial))
+                    if sc < cur:
+                        lanes, cur, moved = _compact(trial), sc, True
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if lanes[i] == lanes[j]:
+                        continue
+                    trial = lanes[:]
+                    trial[i], trial[j] = lanes[j], lanes[i]
+                    if not (fits(i, trial[i], trial)
+                            and fits(j, trial[j], trial)):
+                        continue
+                    sc = score(trial)
+                    if sc < cur:
+                        lanes, cur, moved = trial, sc, True
+            if not moved:
+                break
+        return lanes
+
+    by_end = sorted(range(n), key=lambda i: (spans[i][1],
+                                             _neg(spans[i][0]), i))
+    by_start = sorted(range(n), key=lambda i: (spans[i][0], spans[i][1], i))
+    best = None
+    # 渡された順 (提出順) も試す。1 本ずつの移し替えでは抜けられない並び
+    # (3 本以上を一度に動かさないと段が減らない) を拾うため
+    for order in (by_end, by_start, list(range(n))):
+        lanes = _compact(greedy(order))
+        if n <= IMPROVE_MAX:
+            lanes = improve(lanes)
+        if best is None or score(lanes) < score(best):
+            best = lanes
+    return best
+
+
+HARD_COST = 10      # 山で跨げない交差 (箱・曲線を通る) の重さ
+
+
+def _neg(v):
+    """並べ替えの「降順」用。数値はそのまま負に、日付は序数を負にする."""
+    if isinstance(v, (datetime.date, datetime.datetime)):
+        return -v.toordinal()
+    return -v
+
+
+def _compact(lanes):
+    """空いた段を詰める (上下それぞれ、本線からの順は変えない)."""
+    up = sorted({ln for ln in lanes if ln > 0})
+    down = sorted({-ln for ln in lanes if ln < 0})
+    m = {ln: k + 1 for k, ln in enumerate(up)}
+    m.update({-ln: -(k + 1) for k, ln in enumerate(down)})
+    return [m[ln] for ln in lanes]
 
 
 def _assign_lanes(chips, today, base_dates):
@@ -306,7 +461,8 @@ def _assign_lanes(chips, today, base_dates):
         if base_date is not None and base_date < start:
             start = base_date
         spans.append((start, max(c['end'] or today, start + day)))
-    for c, lane in zip(chips, pack_lanes(spans)):
+    for c, lane in zip(chips, pack_lanes(
+            spans, open_ends=[c['pending'] for c in chips])):
         c['lane'] = lane
 
 
