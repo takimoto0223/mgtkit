@@ -583,10 +583,13 @@ def _badge_rect(side, cur_x, depart_off=0, rail_y=RAIL_Y):
     重ねない。帯との重なりは本線からの相対位置で決まるので、置き場所の
     判定 (_badge_side) は rail_y の既定値のままでよい。
     """
-    if side == 'top':
-        return (cur_x - BADGE_W / 2, rail_y - 72, BADGE_W, BADGE_H)
-    if side == 'bottom':
-        return (cur_x - BADGE_W / 2, rail_y + 48, BADGE_W, BADGE_H)
+    if side in ('top', 'bottom', 'top_r', 'bottom_r', 'top_l', 'bottom_l'):
+        # _r / _l = 丸の右 / 左に寄せる (合流は丸の左に、分岐は右に縦に
+        # 付くので、片方だけ付く側でも線を避けて置ける)
+        y = rail_y - 72 if side.startswith('top') else rail_y + 48
+        x = {'r': cur_x + 6, 'l': cur_x + 2 - BADGE_W}.get(
+            side[-1], cur_x - BADGE_W / 2)
+        return (x, y, BADGE_W, BADGE_H)
     return (cur_x + 22 + depart_off, rail_y - BADGE_H / 2,
             BADGE_W, BADGE_H)
 
@@ -608,24 +611,63 @@ def _overlaps(a, b, pad=0):
             and a[1] - pad < b[1] + b[3] and b[1] < a[1] + a[3] + pad)
 
 
-def _badge_side(current_tag, node_x, chips, spans, depart_off=0):
-    """現行版バッジの置き場所 'right' | 'top' | 'bottom'.
+BADGE_CURVE_PAD = 6     # 曲線がバッジの高さで横へ膨らむ分の見込み
+BADGE_CHIP_W = 3        # 帯の箱との重なりの重さ (線との重なり = 1)
+
+
+def _badge_side(current_tag, node_x, chips, spans, depart_off=0,
+                depart_span=None):
+    """現行版バッジの置き場所 'right' | 'top' | 'bottom' (| '_r' '_l' 付き).
 
     既定は本線の右 (駅名標と同じ形で、図が変わっても位置が動かない)。
-    右に別の版のノードが来てしまうときだけ、帯の空いている側へ逃がす。
+    右に別の版のノードが来てしまうときだけ、丸の上・下へ逃がす。上 (下)
+    では丸の真上、右寄せ、左寄せの順に、帯の箱にも、本線と上 (下) の段を
+    つなぐ縦の線 (分岐・合流) にも重ならない所を選ぶ。線を見ていなかった
+    ころは、現行版が履歴の途中の版のとき (更新が遅れたメンバーの画面) に
+    合流の矢印がバッジを縦に貫いていた (UI レビュー 2026-10)。
     """
     cur_x = node_x.get(current_tag)
     if cur_x is None:
         return 'right'
-    if not any(cur_x < x < cur_x + BADGE_W + 30 + depart_off
-               for tag, x in node_x.items() if tag != current_tag):
+    right_blocked = any(cur_x < x < cur_x + BADGE_W + 30 + depart_off
+                        for tag, x in node_x.items() if tag != current_tag)
+    if not right_blocked:
         return 'right'
-    for side in ('top', 'bottom'):
+    depart_span = depart_span or {}
+    # 上 (下) の段へ出入りする縦の線の x 範囲。曲線はバッジの高さで少し
+    # 横へ膨らむので、その分を見込む
+    lines = {'top': [], 'bottom': []}
+    drawn = [c for c in chips if c['number'] in spans]
+    for c in drawn:
+        side = 'top' if c['lane'] >= 1 else 'bottom'
+        bx = node_x.get(c['base_tag'])
+        if bx is not None:
+            x0 = bx + DEPART_DX
+            lines[side].append((x0 - 3, x0 + depart_span.get(
+                c['base_tag'], 0) + BADGE_CURVE_PAD))
+        tx = node_x.get(c['target_tag'])
+        if not c['pending'] and tx is not None:
+            lines[side].append((tx - ARRIVE_DX - BADGE_CURVE_PAD,
+                                tx - ARRIVE_DX + 3))
+
+    def conflicts(side):
         rect = _badge_rect(side, cur_x)
-        if not any(_overlaps(rect, _chip_rect(c, spans[c['number']]), 6)
-                   for c in chips if c['number'] in spans):
+        n = BADGE_CHIP_W * sum(
+            _overlaps(rect, _chip_rect(c, spans[c['number']]), 6)
+            for c in drawn)
+        n += sum(rect[0] - 2 < b and a < rect[0] + rect[2] + 2
+                 for a, b in lines[side.split('_')[0]])
+        return n
+
+    cands = [side + tail for side in ('top', 'bottom')
+             for tail in ('', '_r', '_l')]
+    for side in cands:
+        if not conflicts(side):
             return side
-    return 'top'
+    # どこも空かなければ、重なりのいちばん少ない所 (右は隣の版の丸に
+    # 掛かるので 1 つの重なりと数える)
+    return min(cands + ['right'],
+               key=lambda sd: 1 if sd == 'right' else conflicts(sd))
 
 
 LABEL_GAP = 10      # 版名ラベルどうし・ラベルと線の間に取るすき間
@@ -638,11 +680,13 @@ def _node_label_place(tag, x, label, rail_y, attach, up_lines, placed):
     線と重なるので、次の順で空いている所を選ぶ:
     丸の真下 (下の段の線が無いとき。どの丸の名前か迷わない) →
     右上 (上へ出ていく線が無いとき。合流は丸の左に刺さるので右は空く) →
-    左上 (合流の縦線のさらに左)。
+    左上 (合流の縦線のさらに左) → もう 1 段上。
     隣の版名・上の段の縦の線から LABEL_GAP 以上離れない所は避ける
     (上の段を常に使うようになって左へ逃がすことが増え、隣の版名と 6px
     まで詰まって、どちらの丸の名前か読めなかった = UI レビュー 2026-10)。
-    どこも空かなければ、図の左端で切れない最初の候補にする。
+    どこも空かなければ、図の左端で切れない候補のうちいちばんゆとりの
+    ある所にする (版が 1 日違いで並ぶと、最初の候補のままでは名前が
+    重なって読めなかった = UI レビュー 2 巡目)。
     """
     lw = _est_w(label, 12.5)
     above = rail_y - 31
@@ -656,23 +700,28 @@ def _node_label_place(tag, x, label, rail_y, attach, up_lines, placed):
     if tag not in attach['up_dep']:
         opts.append((x + 12, above, 'start'))
     opts.append((x - ARRIVE_DX - 10 - lw, above, 'end'))
+    # もう 1 段上 (上の段の帯との間)。真上が隣の版名とぶつかるとき用。
+    # 上へ出ていく線 (丸の右) を避けて丸の左上に寄せた形も候補にする
+    opts.append((x - lw / 2, rail_y - 49, 'center'))
+    opts.append((x + 2 - lw, rail_y - 49, 'end'))
 
-    def free(o):
+    def room(o):
+        """候補のゆとり (隣の版名・上の段の縦の線までのいちばん狭い間)."""
         x0, y0 = o[0], o[1]
         box = (x0, y0, x0 + lw, y0 + 16)
-        if any(box[0] - LABEL_GAP < p[2] and p[0] < box[2] + LABEL_GAP
-               and box[1] < p[3] and p[1] < box[3] for p in placed):
-            return False
-        if y0 < rail_y and any(box[0] - 2 < b and a < box[2] + 2
-                               for a, b in up_lines):
-            return False
-        return True
+        gaps = [max(p[0] - box[2], box[0] - p[2]) for p in placed
+                if box[1] < p[3] and p[1] < box[3]]
+        if y0 < rail_y:
+            gaps += [max(a - box[2], box[0] - b) - 2 + LABEL_GAP
+                     for a, b in up_lines]
+        return min(gaps or [LABEL_GAP])
 
-    ok = [o for o in opts if o[0] >= 4]
+    ok = [o for o in opts if o[0] >= 4] or opts
     for o in ok:
-        if free(o):
+        if room(o) >= LABEL_GAP:
             return o
-    return (ok or opts)[0]
+    # どこも空かなければ、いちばんゆとりのある所 (重ねて読めなくしない)
+    return max(ok, key=room)
 
 
 def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
@@ -718,16 +767,24 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     # レーンは帯の実際の x で決める (日付だけでは重なりを見落とす)。
     # バッジの置き場所もレーンではなく帯の実際の位置で決める
     # (レーンだけで決めると現行版と関係のない帯の上に重ねてしまう)
-    spans = _spans(today_x)
-    _assign_lanes(chips, node_x, spans)
     badge_off = depart_span.get(current_tag, 0)
-    badge_side = _badge_side(current_tag, node_x, chips, spans, badge_off)
-    if current_tag in node_x:
-        bx, _by, bw, _bh = _badge_rect(badge_side, node_x[current_tag],
-                                       badge_off)
-        today_x = max(today_x, bx + bw + TODAY_GAP)
-    spans = _spans(today_x)     # きょう線が動いた分、確認中の帯も動く
-    _assign_lanes(chips, node_x, spans)
+    # バッジの置き場所は段で決まり (枝が出入りする側には置かない)、段は
+    # きょう線の位置で決まり、きょう線はバッジの右端で決まる。置き場所が
+    # 変わらなくなるまで決め直す (段が入れ替わったのに古い置き場所の
+    # ままだと、合流の矢印がバッジを貫く)
+    badge_side = None
+    for _ in range(3):
+        spans = _spans(today_x)     # きょう線が動いた分、確認中の帯も動く
+        _assign_lanes(chips, node_x, spans)
+        side = _badge_side(current_tag, node_x, chips, spans, badge_off,
+                           depart_span)
+        if side == badge_side:
+            break
+        badge_side = side
+        if current_tag in node_x:
+            bx, _by, bw, _bh = _badge_rect(badge_side, node_x[current_tag],
+                                           badge_off)
+            today_x = max(today_x, bx + bw + TODAY_GAP)
     depart_slots = _depart_slots(chips)
     width = today_x + RIGHT_PAD
     # 上レーンの枝が付くノード (出ていく基点 + 入ってくる合流先)。

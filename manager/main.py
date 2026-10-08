@@ -1241,11 +1241,11 @@ def main(page: ft.Page):
                              tight=True)
         _history_ctx['body_col'] = body_col
         _history_ctx['fig'] = fig
-        # 上の段が多いと本線が図の下の方に来て、開いた直後の画面に
-        # 入らない。そのときは本線が内容の中央に来るまで縦にも送る
+        # 図が内容の高さより高いと、本線が画面の下の方に張り付いて下の
+        # 段が見えない。そのときは本線が内容の中央に来るまで縦にも送る
         _history_ctx['body_y'] = (
             max(0, fig['rail_y'] - col_h // 2)
-            if fig and fig['rail_y'] + 60 > col_h else 0)
+            if fig and fig['height'] > col_h else 0)
         _history_ctx['open'] = True
 
         def close(_):

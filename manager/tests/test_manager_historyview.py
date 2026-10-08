@@ -680,6 +680,58 @@ class TestLineJumps:
             nearest = min(node_x, key=lambda t: abs(node_x[t] - cx))
             assert nearest == tag, '%s の名前が %s の丸に近い' % (tag, nearest)
 
+    def test_crowded_version_labels_do_not_overlap(self):
+        # 1 日違いで版が並び、上下どちらにも枝が付く版が続くと、版名の
+        # 置き場所の候補がすべてふさがる。そのときも重ねず、いちばん
+        # ゆとりのある所に置く (UI レビュー 2 巡目: 「v1.0 初回配布」の
+        # 上に「v1.1」が重なっていた)
+        # v1.1 は「v1.0 初回配布」の 1 日後で、上下どちらにも枝が出る
+        releases = [_rel('v1.1', '2026-08-07'), _rel('v1.0', '2026-08-06')]
+        merged = []
+        pending = [{'number': 170 + i, 'title': 't', 'author': 'p%d' % i,
+                    'created_at': '2026-08-08', 'base_version': 'v1.1'}
+                   for i in range(2)]
+        tl = history.build_timeline(releases, merged, pending,
+                                    today=self.LATER)
+        fig = historyview.build_figure(tl, 'v9.9', self.LATER,
+                                       lambda *a: None)
+        canvas = _canvas(fig)
+        tags = {s['tag'] for s in tl['stables']}
+        boxes = [_bbox(t) for t in _texts(canvas)
+                 if str(t.value).split()[0] in tags
+                 and '現行版' not in str(t.value)]
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1:]:
+                assert not _hits(a, b), '版名が重なっています'
+
+    def test_badge_is_not_pierced_by_a_merge(self):
+        # 現行版が履歴の途中の版 (更新が遅れたメンバーの画面)。右は次の
+        # 版の丸がふさぐので上か下に置くが、上から現行版へ入る合流の
+        # 矢印がバッジを縦に貫かない
+        # v1.3 は提出を伴わない版 (すぐ右に丸が来る)
+        releases = [_rel('v1.3', '2026-08-13'), _rel('v1.2', '2026-08-12'),
+                    _rel('v1.1', '2026-08-09'), _rel('v1.0', '2026-08-06')]
+        releases[1]['pr_number'], releases[2]['pr_number'] = 151, 150
+        merged = [_merged(150, 'a0', '2026-08-06', '2026-08-09', 'v1.0'),
+                  _merged(151, 'a1', '2026-08-06', '2026-08-12', 'v1.0')]
+        tl = history.build_timeline(releases, merged, [], today=self.LATER)
+        fig = historyview.build_figure(tl, 'v1.2', self.LATER,
+                                       lambda *a: None)
+        canvas = _canvas(fig)
+        badge = [r for r in _rects(canvas)
+                 if r.height == historyview.BADGE_H][0]
+        box = (badge.x, badge.y, badge.x + badge.width,
+               badge.y + badge.height)
+        assert box[1] != fig['rail_y'] - historyview.BADGE_H / 2, \
+            '右は次の版の丸がふさぐので上か下に逃がすはず'
+        for _runs, curves, _hops in self._lines(canvas):
+            for cu in curves:
+                for px, py in self._curve_points(cu):
+                    assert not (box[0] < px < box[2]
+                                and box[1] < py < box[3]), \
+                        '線が現行版バッジを貫いています (%.0f, %.0f)' % (
+                            px, py)
+
     def test_pending_pill_clear_of_today_label(self):
         # 名前が短い確認中がいちばん上の段に来ても、「確認中」のピルが
         # 「きょう 〜」の文字に届かない (一続きに読めてしまうため)
