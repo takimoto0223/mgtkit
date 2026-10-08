@@ -93,8 +93,20 @@ def _chip_label(c):
 
 
 def _chip_min_w(c):
-    """帯の幅。「名前 #番号」+ 左右の余白 (どの帯も同じ作り)."""
-    return _est_w(_chip_label(c)) + CHIP_PAD
+    """帯の幅。「名前 #番号」+ 左右の余白 (どの帯も同じ作り).
+
+    確認中の帯はきょう線に寄せて置き、帯の左端の上 (いちばん上の段の
+    とき) に「確認中」のピルが来る。名前が短いとピルが「きょう 〜」の
+    文字に届いて一続きに読めるので、ピルが文字の手前で止まる幅を取る。
+    """
+    w = _est_w(_chip_label(c)) + CHIP_PAD
+    if c.get('pending'):
+        w = max(w, PILL_W + 8 + _est_w(TODAY_LABEL_MAX, 11) / 2
+                - TODAY_GAP)
+    return w
+
+
+TODAY_LABEL_MAX = 'きょう 12/31'   # きょう線のラベルのいちばん長い形
 
 
 def _stroke(color, width=3, dash=None):
@@ -482,9 +494,39 @@ def _assign_lanes(chips, node_x, spans):
     """
     drawn = [c for c in chips if c['number'] in spans]
     lanes = history.pack_lanes(
-        [_chip_extent(c, spans[c['number']], node_x) for c in drawn])
+        [_chip_extent(c, spans[c['number']], node_x) for c in drawn],
+        open_ends=[c['pending'] for c in drawn],
+        hard=[_chip_hard(c, spans[c['number']], node_x) for c in drawn])
     for c, lane in zip(drawn, lanes):
         c['lane'] = lane
+
+
+CURVE_PAD = 20      # 曲線の範囲の見積もりに足す余裕 (深い段の曲線の膨らみ)
+
+
+def _chip_hard(c, span, node_x):
+    """帯のレーンの高さで、ほかの枝の縦の線が通ると山で跨げない x 範囲.
+
+    帯の箱 (外に出したラベル・確認中のピルを含む) と、分岐・合流の
+    1/4 円弧のあたり。横の直線の部分だけが山で跨げる (図の作法 5)。
+    箱を突き抜けたり曲線どうしが斜めに交わったりする並びを
+    history.pack_lanes が重く数えて避ける。
+    """
+    left, right = span
+    label_w = _est_w(_chip_label(c))
+    if label_w + 14 > right - left:
+        left = min(left, right - label_w)
+    if c['pending']:
+        right = max(right, span[0] + PILL_W)
+    out = [(left, right)]
+    base_x = node_x.get(c['base_tag'])
+    if base_x is not None:
+        out.append((base_x, base_x + DERIV_RUN + DEPART_DX + CURVE_PAD))
+    target_x = node_x.get(c['target_tag'])
+    if not c['pending'] and target_x is not None:
+        out.append((target_x - MERGE_LEAD - ARRIVE_DX - CURVE_PAD,
+                    target_x))
+    return out
 
 
 def _depart_span(chips):
@@ -586,6 +628,53 @@ def _badge_side(current_tag, node_x, chips, spans, depart_off=0):
     return 'top'
 
 
+LABEL_GAP = 10      # 版名ラベルどうし・ラベルと線の間に取るすき間
+
+
+def _node_label_place(tag, x, label, rail_y, attach, up_lines, placed):
+    """版名ラベルの置き場所 (左端 x, 上端 y, 揃え 'center'|'start'|'end').
+
+    第一候補は丸の真上の中央。上の段から枝が出入りするノードでは、真上は
+    線と重なるので、次の順で空いている所を選ぶ:
+    丸の真下 (下の段の線が無いとき。どの丸の名前か迷わない) →
+    右上 (上へ出ていく線が無いとき。合流は丸の左に刺さるので右は空く) →
+    左上 (合流の縦線のさらに左)。
+    隣の版名・上の段の縦の線から LABEL_GAP 以上離れない所は避ける
+    (上の段を常に使うようになって左へ逃がすことが増え、隣の版名と 6px
+    まで詰まって、どちらの丸の名前か読めなかった = UI レビュー 2026-10)。
+    どこも空かなければ、図の左端で切れない最初の候補にする。
+    """
+    lw = _est_w(label, 12.5)
+    above = rail_y - 31
+    up = tag in attach['up_dep'] or tag in attach['up_merge']
+    down = tag in attach['down_dep'] or tag in attach['down_merge']
+    opts = []
+    if not up:
+        opts.append((x - lw / 2, above, 'center'))
+    if not down:
+        opts.append((x - lw / 2, rail_y + 13, 'center'))
+    if tag not in attach['up_dep']:
+        opts.append((x + 12, above, 'start'))
+    opts.append((x - ARRIVE_DX - 10 - lw, above, 'end'))
+
+    def free(o):
+        x0, y0 = o[0], o[1]
+        box = (x0, y0, x0 + lw, y0 + 16)
+        if any(box[0] - LABEL_GAP < p[2] and p[0] < box[2] + LABEL_GAP
+               and box[1] < p[3] and p[1] < box[3] for p in placed):
+            return False
+        if y0 < rail_y and any(box[0] - 2 < b and a < box[2] + 2
+                               for a, b in up_lines):
+            return False
+        return True
+
+    ok = [o for o in opts if o[0] >= 4]
+    for o in ok:
+        if free(o):
+            return o
+    return (ok or opts)[0]
+
+
 def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
                  font_family=None):
     """図全体 (レーン見出し + 横スクロール + ◀▶) を組み立てる.
@@ -643,13 +732,13 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     width = today_x + RIGHT_PAD
     # 上レーンの枝が付くノード (出ていく基点 + 入ってくる合流先)。
     # ラベルを真上に置くと枝の線や矢先と重なるため、左へ逃がす目印
-    upper_bases = {t for c in chips if c['lane'] >= 1
-                   for t in (c['base_tag'], c['target_tag']) if t}
-    depth = max([-c['lane'] for c in chips if c['lane'] < 0] or [1])
+    # 段数は描く帯だけで数える (基点の無い帯は描かない)
+    drawn = [c for c in chips if c['number'] in spans]
+    depth = max([-c['lane'] for c in drawn if c['lane'] < 0] or [1])
     # 上の段が増えたぶんだけ本線を下げ、下の段が増えたぶんだけ図を
     # 下へ広げる (いちばん下の帯とその下に置くピル・ラベルの余地は
     # FIG_H が 1 段目のぶんとして持っている)
-    rail_y = _rail_y(chips)
+    rail_y = _rail_y(drawn)
     fig_h = FIG_H + (depth - 1) * LANE_STEP + (rail_y - RAIL_Y)
     grid_bottom = fig_h - 22
 
@@ -697,6 +786,9 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
     # 他の帯の縦寄りの曲線が横切る所に山 (半円) を入れる (図の作法 5)。
     # 本線・きょう線・日付の縦線は線どうしではないので跨がない
     geoms = []
+    attach = {k: set() for k in ('up_dep', 'up_merge', 'down_dep',
+                                 'down_merge')}
+    up_lines = []
     for c in chips:
         base_x = node_x.get(c['base_tag'])
         if base_x is None:
@@ -717,6 +809,17 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
             m_run = m_curve = None
         geoms.append((c, depart, chip_left, chip_right, m,
                       [d_run, m_run], [d_curve, m_curve]))
+        # 版名ラベルの置き場所を決めるための、ノードに付く線の目印
+        side = 'up' if c['lane'] >= 1 else 'down'
+        attach[side + '_dep'].add(c['base_tag'])
+        if m:
+            attach[side + '_merge'].add(c['target_tag'])
+        if side == 'up':
+            # 本線の少し上を通る縦寄りの線 (ラベルの高さで少し曲がる分)
+            up_lines.append((depart - 3, depart + 6))
+            if m:
+                up_lines.append((m[0] - ARRIVE_DX - 6,
+                                 m[0] - ARRIVE_DX + 3))
     for c, depart, chip_left, chip_right, m, runs, _own in geoms:
         others = [cu for g in geoms if g[0] is not c for cu in g[6] if cu]
         d_hops, m_hops = [_hops_on(r, others) if r else [] for r in runs]
@@ -732,6 +835,7 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
         overlays.append((hit, 'chip', c))
 
     # 駅ノード (最後に描いて線の上に載せる)
+    placed = []     # 置いた版名ラベルの矩形 (隣の版名と詰まらないように)
     for s in stables:
         x = node_x[s['tag']]
         if s['tag'] == current_tag:
@@ -759,25 +863,18 @@ def build_figure(tl, current_tag, today, on_item_click, viewport_w=552,
             shapes.append(cv.Circle(x, rail_y, 9, paint=_stroke(NAVY, 3)))
             label = s['tag'] + (' 初回配布' if s is stables[0] and
                                 not s['pr'] else '')
-            ly = rail_y - 31
+            lx, ly, align = _node_label_place(
+                s['tag'], x, label, rail_y, attach, up_lines, placed)
             lw = _est_w(label, 12.5)
-            # 上へ枝が出るノードはラベルを左へ逃がす。ただし図の左端で
-            # 切れるとき (初回配布など) は右側に置く。中央配置も左端で
-            # 切れるなら右側へ (どの端でも切れない・被らないように)
-            # 上に枝が付くノードは、合流の縦線 (ノード中心の ARRIVE_DX 左)
-            # より左までラベルを逃がす
-            dodge = ARRIVE_DX + 10
-            if s['tag'] in upper_bases and x - dodge - lw >= 4:
-                shapes.append(_text(x - dodge, ly, label, 12.5, NAVY,
-                                    weight=ft.FontWeight.BOLD, end=True))
-            elif s['tag'] not in upper_bases and x - lw / 2 >= 4:
-                shapes.append(_text(x, ly, label, 12.5, NAVY,
-                                    weight=ft.FontWeight.BOLD,
-                                    center=True))
-            else:
-                shapes.append(_text(x + 12, ly, label, 12.5, NAVY,
-                                    weight=ft.FontWeight.BOLD))
-            overlays.append(([x - 26, ly, 52, 45], 'stable', s))
+            placed.append((lx, ly, lx + lw, ly + 16))
+            tx = {'start': lx, 'center': lx + lw / 2, 'end': lx + lw}[align]
+            shapes.append(_text(tx, ly, label, 12.5, NAVY,
+                                weight=ft.FontWeight.BOLD,
+                                center=align == 'center',
+                                end=align == 'end'))
+            hx0, hy0 = min(x - 16, lx), min(ly, rail_y - 16)
+            hx1, hy1 = max(x + 16, lx + lw), max(ly + 16, rail_y + 16)
+            overlays.append(([hx0, hy0, hx1 - hx0, hy1 - hy0], 'stable', s))
 
     chip_by_target = {c['target_tag']: c for c in chips
                       if not c['pending']}

@@ -520,21 +520,30 @@ class TestLineJumps:
         assert fig is not None
         return _canvas(fig)
 
+    # 3 本が互い違いに重なる (どの 2 本も入れ子にならない) と、上下に
+    # 分けても 2 本は同じ側に来るので、交差はどう並べても残る
+    STAGGER = [_rel('v1.4', '2026-08-27'), _rel('v1.3', '2026-08-20'),
+               _rel('v1.2', '2026-08-15'), _rel('v1.1', '2026-08-10'),
+               _rel('v1.0', '2026-08-06')]
+    STAGGER_MERGED = [_merged(150, 'fujitaka213-sys', '2026-08-06',
+                              '2026-08-20', 'v1.0'),
+                      _merged(151, 'kanazawaryoma817', '2026-08-10',
+                              '2026-08-27', 'v1.1')]
+
     def _two_close_branches(self):
-        # v1.0 → v1.2 の帯 (#150) が本線のすぐ下に先に置かれ、その途中の
-        # v1.1 から 5 本。上下交互に積むので、下の 2 段目・3 段目へ降りる
-        # 2 本が #150 の横の線を並んで横切る (公開の早い帯ほど本線寄り
-        # に置いても、期間が食い違っている帯どうしの交差は避けられない)
-        merged = [_merged(150, 'tomiriri', '2026-08-06', '2026-08-20',
-                          'v1.0')]
+        # v1.0 → v1.3 と v1.1 → v1.4 の帯に、v1.2 から確認中が 3 本。
+        # 同じ版から出る 2 本が同じ帯の横の線を並んで横切る
         pending = [{'number': n, 'title': 't', 'author': a,
-                    'created_at': d, 'base_version': 'v1.1'}
-                   for n, a, d in ((170, 'y-kunie', '2026-08-25'),
-                                   (171, 'tomiriri', '2026-08-28'),
-                                   (172, 'y-kunie', '2026-08-24'),
-                                   (173, 'tomiriri', '2026-08-26'),
-                                   (174, 'y-kunie', '2026-08-23'))]
-        return self._canvas(merged, pending)
+                    'created_at': '2026-08-24', 'base_version': 'v1.2'}
+                   for n, a in ((170, 'y-kunie'), (171, 'tomiriri'),
+                                (172, 'y-kunie'))]
+        return self._canvas(self.STAGGER_MERGED, pending, self.STAGGER)
+
+    def _interleaved(self):
+        # v1.0 → v1.3、v1.1 → v1.4、v1.2 → 確認中 の 3 本が互い違い
+        pending = [{'number': 170, 'title': 't', 'author': 'y-kunie',
+                    'created_at': '2026-08-24', 'base_version': 'v1.2'}]
+        return self._canvas(self.STAGGER_MERGED, pending, self.STAGGER)
 
     def _mixed(self):
         merged = [_merged(150, 'fujitaka213-sys', '2026-08-06',
@@ -550,22 +559,6 @@ class TestLineJumps:
                                       (171, 'fujitaka213-sys', '2026-08-28',
                                        'v1.1'))]
         return self._canvas(merged, pending)
-
-    def _interleaved(self):
-        # v1.0 → v1.2 (#150) と v1.1 → v1.3 (#151) は期間が食い違う。
-        # #150 が本線のすぐ下、#151 が上へ分かれたあと、v1.1 から出た
-        # 確認中 (#170) は下の 2 段目へ降りるので #150 の横の線を横切る。
-        # v1.1 を v1.2 の直前にして、横切る所を #150 の箱ではなく合流の
-        # 横の線にする
-        releases = [_rel('v1.3', '2026-08-27'), _rel('v1.2', '2026-08-20'),
-                    _rel('v1.1', '2026-08-18'), _rel('v1.0', '2026-08-06')]
-        merged = [_merged(150, 'fujitaka213-sys', '2026-08-06',
-                          '2026-08-20', 'v1.0'),
-                  _merged(151, 'kanazawaryoma817', '2026-08-13',
-                          '2026-08-27', 'v1.1')]
-        pending = [{'number': 170, 'title': 't', 'author': 'y-kunie',
-                    'created_at': '2026-08-24', 'base_version': 'v1.1'}]
-        return self._canvas(merged, pending, releases)
 
     @staticmethod
     def _lines(canvas):
@@ -648,6 +641,57 @@ class TestLineJumps:
         bare, hops = self._crossings(self._mixed())
         assert not bare and not hops
 
+    def _many_branches(self, names=None):
+        releases = [_rel('v1.%d' % (i + 1), '2026-08-%02d' % (20 + i))
+                    for i in range(6)] + [_rel('v1.0', '2026-08-06')]
+        merged = [_merged(150 + i, 'a%d' % i, '2026-08-07',
+                          '2026-08-%02d' % (20 + i), 'v1.0')
+                  for i in range(6)]
+        pending = [{'number': 170 + i, 'title': 't',
+                    'author': (names or ['p%d' % k for k in range(4)])[i],
+                    'created_at': '2026-08-08', 'base_version': 'v1.0'}
+                   for i in range(4)]
+        tl = history.build_timeline(releases, merged, pending,
+                                    today=self.LATER)
+        fig = historyview.build_figure(tl, 'v1.6', self.LATER,
+                                       lambda *a: None)
+        return tl, fig, _canvas(fig)
+
+    def test_version_labels_keep_apart(self):
+        # 上の段から合流が来る版が並んでも、版名どうしは LABEL_GAP 以上
+        # 離し、どの版名も自分の丸にいちばん近い (UI レビュー 2026-10:
+        # 左へ逃がした「v2.3」が隣の「v2.2」と 6px まで詰まっていた)
+        tl, fig, canvas = self._many_branches()
+        node_x = dict(zip([s['tag'] for s in tl['stables']],
+                          sorted({sh.x for sh in canvas.shapes
+                                  if isinstance(sh, cv.Circle)})))
+        labels = {str(t.value).split()[0]: _bbox(t) for t in _texts(canvas)
+                  if str(t.value).split()[0] in node_x
+                  and '現行版' not in str(t.value)}
+        assert len(labels) == len(node_x) - 1       # 現行版はバッジ
+        boxes = list(labels.values())
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1:]:
+                if a[1] < b[3] and b[1] < a[3]:     # 同じ高さに並ぶもの
+                    gap = max(b[0] - a[2], a[0] - b[2])
+                    assert gap >= historyview.LABEL_GAP - 1e-6
+        for tag, b in labels.items():
+            cx = (b[0] + b[2]) / 2
+            nearest = min(node_x, key=lambda t: abs(node_x[t] - cx))
+            assert nearest == tag, '%s の名前が %s の丸に近い' % (tag, nearest)
+
+    def test_pending_pill_clear_of_today_label(self):
+        # 名前が短い確認中がいちばん上の段に来ても、「確認中」のピルが
+        # 「きょう 〜」の文字に届かない (一続きに読めてしまうため)
+        tl, fig, canvas = self._many_branches(['kj', 'kk', 'km', 'kn'])
+        today = [_bbox(t) for t in _texts(canvas)
+                 if str(t.value).startswith('きょう')]
+        pills = [_bbox(r) for r in _rects(canvas)
+                 if r.height == historyview.PILL_H]
+        assert today and pills
+        for p in pills:
+            assert not _hits((p[0] - 6, p[1], p[2] + 6, p[3]), today[0])
+
     def test_many_branches_from_one_version(self):
         # 1 つの版から 10 本 (6 本は順に公開・4 本は確認中) = 2026-10 の
         # 実データの形。提出順に下へ積んでいたときは、合流の線がほかの
@@ -696,6 +740,42 @@ class TestLineJumps:
         assert abs((rail_y - top) - (bottom - rail_y)) <= \
             historyview.LANE_STEP + 40
 
+    def _taking_turns(self):
+        # 2 人が互い違いに出す連続提出 (前の人の公開の前に次の人が出す)
+        releases = [_rel('v1.%d' % i, '2026-08-%02d' % (6 + 4 * i))
+                    for i in range(5)]
+        merged = [_merged(150 + i, ('fujitaka213-sys', 'tomiriri')[i % 2],
+                          '2026-08-%02d' % (6 + 4 * i),
+                          '2026-08-%02d' % (10 + 4 * i), 'v1.%d' % b)
+                  for i, b in enumerate((0, 0, 1, 2))]
+        pending = [{'number': 170, 'title': 't', 'author': 'tomiriri',
+                    'created_at': '2026-08-20', 'base_version': 'v1.3'}]
+        return self._canvas(merged, pending, releases[::-1])
+
+    @pytest.mark.parametrize('case', ['_two_close_branches', '_interleaved',
+                                      '_mixed', '_taking_turns'])
+    def test_lines_do_not_pass_through_chip_boxes(self, case):
+        # 山で跨げるのは横の線どうしだけ。線が帯の箱 (文字) を突き抜ける
+        # 並びは避ける (UI レビュー 2026-10: 以前は 2 人交互の連続提出で
+        # 合流の線が帯の名前を貫いていた)
+        canvas = getattr(self, case)()
+        boxes = [(r.x + 2, r.y + 2, r.x + r.width - 2, r.y + r.height - 2)
+                 for r in _rects(canvas) if r.height == historyview.CHIP_H]
+        for _runs, curves, _hops in self._lines(canvas):
+            for cu in curves:
+                for px, py in self._curve_points(cu):
+                    assert not any(b[0] < px < b[2] and b[1] < py < b[3]
+                                   for b in boxes), \
+                        '線が帯の箱を通っています (%.0f, %.0f)' % (px, py)
+
+    def test_taking_turns_has_no_crossings(self):
+        canvas = self._taking_turns()
+        bare, hops = self._crossings(canvas)
+        assert not bare and not hops
+        ys = {round(r.y) for r in _rects(canvas)
+              if r.height == historyview.CHIP_H}
+        assert len(ys) == 2                 # 上下 1 段ずつで足りる
+
     @pytest.mark.parametrize('case', ['_two_close_branches', '_interleaved',
                                       '_mixed'])
     def test_hop_is_an_upward_half_circle_over_a_line(self, case):
@@ -730,7 +810,11 @@ class TestLineJumps:
         assert els[2].y == 250 - r and els[2].x == 105
         # 同じ版から出る枝は出発を 9 px ずつずらすので、図では離れた山になる
         hops = self._crossings(self._two_close_branches())[1]
-        assert len(hops) == 2 and all(len(h[4]) == 1 for h in hops)
+        by_y = {}
+        for h in hops:
+            by_y.setdefault(h[2], []).append(h)
+        pair = [hs for hs in by_y.values() if len(hs) == 2]
+        assert pair and all(len(h[4]) == 1 for h in pair[0])
 
     @pytest.mark.parametrize('case', ['_two_close_branches', '_interleaved',
                                       '_mixed'])

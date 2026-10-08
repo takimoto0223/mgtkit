@@ -368,6 +368,44 @@ class TestPackLanes:
         # 終わりが同じなら始まりが遅い (= 内側に収まる) 帯が本線寄り
         assert history.pack_lanes([(0, 10), (5, 10)]) == [1, -1]
 
+    def test_two_people_taking_turns_stay_on_two_lanes(self):
+        # 2 人が互い違いに出す連続提出。終わり順に 1 本ずつ置くだけだと、
+        # 後から来た (1,4) が内側の段に入り込み、外の帯の合流の線に
+        # 貫かれて 3 段になっていた (UI レビュー 2026-10 の反例)
+        spans = [(0, 1), (0, 2), (1, 4), (2, 3), (3, 6)]
+        assert history.pack_lanes(spans) == [-1, 1, -1, 1, 1]
+
+    def test_uses_no_more_lanes_than_needed(self):
+        # 同時に重なるのは 2 本まで = 2 段で足りる (3 段にしない)
+        lanes = history.pack_lanes([(0, 1), (0, 2), (1, 3), (2, 3)])
+        assert len(set(lanes)) == 2
+
+    def test_avoids_lines_through_hard_ranges(self):
+        # (0,10) と (5,20) と (8,30) はどの 2 本も互い違い = どう並べても
+        # 同じ側に 2 本来て 1 か所は交わる。交わる所が箱 (hard) なら重く
+        # 数え、横の線の上 (山で跨げる) で交わる並びを選ぶ。箱を考えない
+        # と (8,30) が (0,10) の外側に来て、縦の線が箱 (4,9) を貫く
+        spans = [(0, 10), (5, 20), (8, 30)]
+        hard = [[(4, 9)], [], []]
+        lanes = history.pack_lanes(spans, hard=hard)
+
+        def through_box(i, j):
+            inner, outer = (i, j) if abs(lanes[i]) < abs(lanes[j]) else (j, i)
+            return any(a < x < b for x in spans[outer]
+                       for a, b in hard[inner])
+        same = [(i, j) for i in range(3) for j in range(i + 1, 3)
+                if lanes[i] * lanes[j] > 0]
+        assert same and not any(through_box(i, j) for i, j in same)
+
+    def test_many_spans_stay_fast(self):
+        # 履歴全体 (帯 100 本超) でも、重なりの塊ごとに解くので速い
+        import time
+        spans = [(i * 40, i * 40 + 120) for i in range(150)]
+        t = time.perf_counter()
+        lanes = history.pack_lanes(spans, open_ends=[False] * 150)
+        assert time.perf_counter() - t < 2.0
+        assert len(lanes) == 150 and len(set(lanes)) <= 4
+
     def test_dates_work_as_bounds(self):
         d = datetime.date
         spans = [(d(2026, 8, 1), d(2026, 8, 20)),
