@@ -6,6 +6,7 @@ flet は CI の依存に含めないため、未導入環境では自動スキ�
 """
 import os
 import threading
+import types
 
 import pytest
 
@@ -615,22 +616,26 @@ def _page_with_standalone_files(monkeypatch, tmp_path, files, installed=True):
     monkeypatch.setattr(main.launcher, 'port_in_use', lambda *a, **k: False)
     opened = []
     monkeypatch.setattr(main.standalone, 'open_file',
-                        lambda path, how: opened.append((path, how)))
+                        lambda path, how: (opened.append((path, how)),
+                                           'opened')[1])
+    monkeypatch.setattr(main.time, 'sleep', lambda s: None)
     _open_review_tab(page)
     return page, main, opened
 
 
-def test_standalone_button_appears_only_with_standalone_files(
-        monkeypatch, tmp_path):
-    """単独で開くファイルがある提出だけ「単独の〇〇を開く」を出す.
+def test_standalone_buttons_appear_per_kind(monkeypatch, tmp_path):
+    """単独で開くファイルがある提出だけ、種類ごとに「単独の〇〇を開く」.
 
     単独の HTML は β版を起動しても mgtkit の画面からは開けず、置き場所も
     見えない (提出 #204 のフィードバック「単独のhtmlはβ版だと確認が
-    むずかしい」)。
+    むずかしい」)。スクリプトは実行せず場所を開く。
     """
     page, _main, _opened = _page_with_standalone_files(
         monkeypatch, tmp_path, _ALONE)
-    assert _beta_button(page, '単独のファイルを開く')
+    assert _beta_button(page, '単独の HTML を開く (2)')
+    assert _beta_button(page, '単独のスクリプトの場所を開く')
+    texts = _walk_texts(page.added[1], [])
+    assert any('snow/、wood_joint/ にあります' in t for t in texts)
 
     page, _main, _opened = _page_with_standalone_files(
         monkeypatch, tmp_path, ['app.py'])
@@ -642,31 +647,46 @@ def test_one_standalone_file_opens_directly(monkeypatch, tmp_path):
     page, main, opened = _page_with_standalone_files(
         monkeypatch, tmp_path, ['snow/snow_rain_factor.html'])
     n_dialogs = len(page.dialogs)
-    _beta_button(page, '単独の HTML を開く').on_click(None)
+    btn = _beta_button(page, '単独の HTML を開く')
+    btn.on_click(types.SimpleNamespace(control=btn))
     assert [(os.path.basename(p), how) for p, how in opened] == [
         ('snow_rain_factor.html', 'browser')]
     assert len(page.dialogs) == n_dialogs     # 1 本なら選ぶ画面を出さない
     texts = _walk_texts(page.added[1], [])
     assert any('snow/snow_rain_factor.html を開きました' in t for t in texts)
+    assert btn.content == '単独の HTML を開く'    # 準備中の文言から戻る
 
 
-def test_several_standalone_files_are_offered_in_a_list(monkeypatch,
-                                                        tmp_path):
+def test_several_files_of_a_kind_are_offered_in_a_list(monkeypatch,
+                                                       tmp_path):
     page, main, opened = _page_with_standalone_files(
         monkeypatch, tmp_path, _ALONE)
     n_dialogs = len(page.dialogs)
-    _beta_button(page, '単独のファイルを開く').on_click(None)
+    _beta_button(page, '単独の HTML を開く').on_click(None)
     assert opened == [] and len(page.dialogs) == n_dialogs + 1  # 選ぶ画面
     buttons = [c for c in _walk_controls(page.dialogs[-1].content, [])
                if getattr(c, 'on_click', None)
-               and getattr(c, 'content', None) in ('ブラウザで開く',
-                                                   'フォルダで表示')]
-    # HTML 2 本はブラウザ、スクリプトはフォルダで (実行しない)。app.py は出ない
-    assert [b.content for b in buttons] == ['ブラウザで開く'] * 2 + [
-        'フォルダで表示']
-    buttons[-1].on_click(None)
+               and getattr(c, 'content', None) == 'ブラウザで開く']
+    # 選ぶ画面はその種類だけ (HTML 2 本。スクリプトと app.py は出ない)
+    assert len(buttons) == 2
+    buttons[0].on_click(None)
     assert [(os.path.basename(p), how) for p, how in opened] == [
-        ('build_species.py', 'folder')]
+        ('snow_rain_factor.html', 'browser')]
+
+
+def test_a_file_in_the_list_opens_once_per_press(monkeypatch, tmp_path):
+    """押した瞬間にボタンを無効にして、連打で 2 つ開かないこと."""
+    page, main, opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, _ALONE)
+    _beta_button(page, '単独の HTML を開く').on_click(None)
+    btn = [c for c in _walk_controls(page.dialogs[-1].content, [])
+           if getattr(c, 'content', None) == 'ブラウザで開く'][0]
+    # 開く処理 (裏) を走らせず、押した直後の状態を見る
+    monkeypatch.setattr(main.threading, 'Thread', _NoThread)
+    btn.on_click(None)
+    assert btn.disabled
+    texts = _walk_texts(page.dialogs[-1].content, [])
+    assert any('開いています' in t for t in texts)
 
 
 def test_standalone_files_are_fetched_first_without_stopping_other_betas(

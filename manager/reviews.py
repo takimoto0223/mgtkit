@@ -251,9 +251,11 @@ def _build_pending(prs, config):
             'conflicting': (pr.get('mergeable') or '').upper()
                            == 'CONFLICTING',
             # 変更ファイルのパス (単独で開くファイルを β版のカードに出す。
-            # manager/standalone.py)
+            # manager/standalone.py)。削除したファイルは開けないので外す
+            # (GraphQL の一括取得だけが changeType を持つ。gh pr list の
+            # 経路では、開くときに手元に無いものを外す)
             'files': [f.get('path') for f in pr.get('files') or []
-                      if f.get('path')],
+                      if f.get('path') and f.get('changeType') != 'DELETED'],
         })
     return result
 
@@ -278,7 +280,7 @@ query($owner: String!, $name: String!, $submissions: String!) {
       nodes {
         number title url headRefName headRefOid mergeable createdAt body
         author { login }
-        files(first: 100) { nodes { path } }
+        files(first: 100) { nodes { path changeType } }
         reviews(first: 100) {
           nodes { state body submittedAt author { login } }
         }
