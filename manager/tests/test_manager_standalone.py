@@ -91,10 +91,6 @@ class TestButtons:
     def test_label(self, kind, how, n, label):
         assert standalone.button_label(kind, how, n) == label
 
-    def test_folders(self):
-        assert standalone.folders(standalone.find(PR204)) == [
-            'snow/', 'wood_joint/', 'loadtex/']
-
 
 class TestOpen:
     def test_html_opens_in_the_browser(self, tmp_path, monkeypatch):

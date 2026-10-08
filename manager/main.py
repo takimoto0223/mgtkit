@@ -2175,6 +2175,17 @@ def main(page: ft.Page):
             return '%s の場所を開きました。' % f['path']
         return '%s を開きました。' % f['path']
 
+    def _open_failed_text(kind_how, e):
+        """開けなかったときの文 (開き方ごとに、何が開けなかったかを言う)."""
+        how = kind_how[0] if isinstance(kind_how, list) else kind_how
+        if isinstance(e, FileNotFoundError):
+            return ('ファイルが見つかりませんでした。β版を取り直すため、'
+                    'もう一度押してください。')
+        return {'browser': 'ブラウザを開けませんでした。',
+                'folder': 'ファイルの場所を開けませんでした。'}.get(
+                    how, 'ファイルを開けませんでした。開くアプリが'
+                         '見つかりません。')
+
     def open_standalone(pr, release, kind):
         """「単独の〇〇を開く」: β版を取り込んで、その種類のファイルを開く.
 
@@ -2192,12 +2203,13 @@ def main(page: ft.Page):
             if btn is not None:
                 btn.content = '準備しています...'
             t5_status.value = '%s の単独の%sを準備しています...' % (
-                release['tag'], kind)
+                release['tag'], standalone.kind_name(kind))
             page.update()
 
             def work():
                 tag = release['tag']
                 beta = paths.beta_dir(tag, config)
+                kind_how = [None]
 
                 def progress(msg):
                     t5_status.value = '%s: %s' % (tag, msg)
@@ -2210,13 +2222,20 @@ def main(page: ft.Page):
                         launcher.stop_app(paths.beta_port(config))
                         launcher.remember_beta(None, config)
                 try:
-                    if updater.local_version_info(beta) is None:
-                        if updater.installing():
-                            progress('先に始まった取り込みの完了を'
-                                     '待っています...')
-                        updater.install_if_needed(
-                            repo, release, beta, on_progress=progress,
-                            config=config, prepare=_stop_same_beta)
+                    try:
+                        if updater.local_version_info(beta) is None:
+                            if updater.installing():
+                                progress('先に始まった取り込みの完了を'
+                                         '待っています...')
+                            updater.install_if_needed(
+                                repo, release, beta, on_progress=progress,
+                                config=config, prepare=_stop_same_beta)
+                    except Exception:
+                        log.exception('β版を取り込めませんでした')
+                        t5_status.value = ('β版 %s を取り込めませんでした。'
+                                           '少し時間をおいてから、もう一度'
+                                           '押してください。' % tag)
+                        return
                     app = paths.app_dir(beta)
                     files = [dict(f, local=standalone.local_path(
                                  app, f['path']))
@@ -2224,9 +2243,12 @@ def main(page: ft.Page):
                                                       app)
                              if f['kind'] == kind]
                     files = [f for f in files if os.path.exists(f['local'])]
+                    kind_how[0] = files[0]['how'] if files else None
                     if not files:
                         t5_status.value = ('β版 %s には単独の%sが見つかり'
-                                           'ませんでした。' % (tag, kind))
+                                           'ませんでした。' % (
+                                               tag,
+                                               standalone.kind_name(kind)))
                     elif len(files) == 1:
                         result = standalone.open_file(files[0]['local'],
                                                       files[0]['how'])
@@ -2234,11 +2256,9 @@ def main(page: ft.Page):
                     else:
                         t5_status.value = ''
                         _standalone_dialog(pr, tag, kind, files)
-                except Exception:
+                except Exception as e:
                     log.exception('単独のファイルを開けませんでした')
-                    t5_status.value = ('単独の%sを開けませんでした。β版の取り'
-                                       '込みに失敗したか、ファイルを開く'
-                                       'アプリが見つかりません。' % kind)
+                    t5_status.value = _open_failed_text(kind_how, e)
                 finally:
                     if btn is not None:
                         btn.content = label
@@ -2258,6 +2278,8 @@ def main(page: ft.Page):
                     'app': ft.Icons.DESCRIPTION}[how]
 
         def opener(f, btn, note):
+            folder_text = note.value
+
             def click(_):
                 # 押した瞬間に反応し (二度押しで 2 つ開かないよう無効化)、
                 # 結果は押した行に出す
@@ -2270,12 +2292,15 @@ def main(page: ft.Page):
                         note.value = _opened_text(f, result)
                         page.update()
                         time.sleep(1.5)     # 開いた直後の連打を受けない
+                        # 行の表示も元 (フォルダ名) に戻す。開いた結果は
+                        # ブラウザ・フォルダの窓そのもので分かる
+                        note.color, note.value = '#4b5563', folder_text
                         btn.disabled = False
                         page.update()
-                    except Exception:
+                    except Exception as e:
                         log.exception('単独のファイルを開けませんでした')
-                        dialog_error(btn, note, '開けませんでした。ファイルを'
-                                     '開くアプリが見つかりません。')
+                        dialog_error(btn, note,
+                                     _open_failed_text(f['how'], e))
                 run_bg(work)
             return click
 
@@ -2300,7 +2325,9 @@ def main(page: ft.Page):
         # 高さのまま。高さを見積もると書体や拡大率の違いで空きや切れが出る)
         many = len(rows) > 8
         page.show_dialog(ft.AlertDialog(
-            title=ft.Text('#%d の単独の%s' % (pr['number'], kind), size=18),
+            title=ft.Text(('#%d の単独の%s' % (
+                pr['number'], standalone.kind_name(kind))).strip(),
+                size=18),
             content=ft.Column([
                 ft.Text(intro, size=12, color='#555555'),
                 ft.Column(rows, spacing=6,
@@ -3259,7 +3286,7 @@ def main(page: ft.Page):
 
         buttons = []
         alone_btns = []
-        alone_row = None
+        alone_rows = []
         if beta is not None and not final:
             buttons.append(ft.FilledButton(
                 'β版 %s を試す' % beta['tag'], icon=ft.Icons.SCIENCE,
@@ -3278,14 +3305,12 @@ def main(page: ft.Page):
                           else ft.Icons.OPEN_IN_NEW),
                     disabled=locked,
                     on_click=open_standalone(pr, beta, kind)))
-            if alone_btns:
-                alone_row = _line(_H_BTNS, ft.Row(alone_btns + [
-                    ft.Text('%s にあります' % '、'.join(
-                                standalone.folders(alone)),
-                            size=12, color='#555555', expand=True,
-                            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)],
-                    spacing=8,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER))
+            # 1 行に 2 個まで (種類は最大 4 つ。3 つ並べると幅 700 の画面で
+            # あふれる)。場所は選ぶ画面の各行が持つので、ここには書かない
+            for i in range(0, len(alone_btns), 2):
+                alone_rows.append(_line(_H_BTNS, ft.Row(
+                    alone_btns[i:i + 2], spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER)))
         fb_all = pr.get('feedback') or []
         # 件数は現在のβ版宛てのみ (統合後は新β版基準で仕切り直し)
         fb = [f for f in fb_all
@@ -3358,8 +3383,7 @@ def main(page: ft.Page):
         else:
             lines.append(_line(_H_BTNS, ft.Row(buttons, spacing=8)))
             rows = lines
-        if alone_row is not None:
-            rows.append(alone_row)
+        rows += alone_rows
         # カードの高さは「実際に並べた行」から出す。演出の基点はこの
         # 高さの積み上げで決まるので、行を足したら自動で追従する
         return ft.Container(bgcolor='#f5f7fa', border_radius=6,

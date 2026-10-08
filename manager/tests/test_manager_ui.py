@@ -634,13 +634,22 @@ def test_standalone_buttons_appear_per_kind(monkeypatch, tmp_path):
         monkeypatch, tmp_path, _ALONE)
     assert _beta_button(page, '単独の HTML を開く (2)')
     assert _beta_button(page, '単独のスクリプトの場所を開く')
-    texts = _walk_texts(page.added[1], [])
-    assert any('snow/、wood_joint/ にあります' in t for t in texts)
 
     page, _main, _opened = _page_with_standalone_files(
         monkeypatch, tmp_path, ['app.py'])
     with pytest.raises(AssertionError):
         _beta_button(page, '単独の')
+
+
+def test_standalone_buttons_wrap_two_per_line(monkeypatch, tmp_path):
+    """種類が 3 つ以上でも 1 行に 2 個まで (幅 700 の画面であふれない)."""
+    page, _main, _opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, _ALONE + ['wood_joint/README.md'])
+    rows = [c for c in _walk_controls(page.added[1], [])
+            if isinstance(getattr(c, 'controls', None), list)
+            and any(isinstance(getattr(b, 'content', None), str)
+                    and b.content.startswith('単独の') for b in c.controls)]
+    assert [len(r.controls) for r in rows] == [2, 1]
 
 
 def test_one_standalone_file_opens_directly(monkeypatch, tmp_path):
@@ -672,6 +681,10 @@ def test_several_files_of_a_kind_are_offered_in_a_list(monkeypatch,
     buttons[0].on_click(None)
     assert [(os.path.basename(p), how) for p, how in opened] == [
         ('snow_rain_factor.html', 'browser')]
+    # 開いたあと、押した行は元の表示 (フォルダ名) と押せる状態に戻る
+    texts = _walk_texts(page.dialogs[-1].content, [])
+    assert 'snow/' in texts and not any('開きました' in t for t in texts)
+    assert not buttons[0].disabled
 
 
 def test_a_file_in_the_list_opens_once_per_press(monkeypatch, tmp_path):

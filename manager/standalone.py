@@ -108,22 +108,16 @@ def groups(files):
     return out
 
 
+def kind_name(kind):
+    """「単独の〇〇」の〇〇 (英字の呼び名は前後を空ける: 単独の HTML)."""
+    return (' %s ' % kind) if kind.isascii() else kind
+
+
 def button_label(kind, how, n):
     """カードのボタンの文言「単独の〇〇を開く」 (スクリプトは場所を開く)."""
-    name = (' %s ' % kind) if kind.isascii() else kind
     text = ('単独の%sの場所を開く' if how == 'folder' else '単独の%sを開く') \
-        % name
-    return text.replace('  ', ' ') + (' (%d)' % n if n > 1 else '')
-
-
-def folders(files):
-    """ファイルのあるフォルダ (重複なし・出てきた順)."""
-    out = []
-    for f in files:
-        d = f['path'].rsplit('/', 1)[0] + '/'
-        if d not in out:
-            out.append(d)
-    return out
+        % kind_name(kind)
+    return text + (' (%d)' % n if n > 1 else '')
 
 
 def local_path(app_dir, rel):
