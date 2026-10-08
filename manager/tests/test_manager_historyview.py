@@ -454,6 +454,7 @@ class TestDateAxis:
     def _shapes(self):
         tl = history.build_timeline(self.RELEASES, [], [], today=TODAY)
         fig = historyview.build_figure(tl, 'v1.7', TODAY, lambda *a: None)
+        self.rail_y = fig['rail_y']
         return tl, _canvas(fig).shapes
 
     def _grid_lines(self, shapes):
@@ -471,7 +472,7 @@ class TestDateAxis:
         tl, shapes = self._shapes()
         node_x = {round(s.x) for s in shapes
                   if isinstance(s, cv.Circle)
-                  and s.y == historyview.RAIL_Y}
+                  and s.y == self.rail_y}
         line_x = sorted(round(s.x1) for s in self._grid_lines(shapes))
 
         assert line_x, '日付の縦線が 1 本も無い'
@@ -743,6 +744,31 @@ class TestLineJumps:
         assert today and pills
         for p in pills:
             assert not _hits((p[0] - 6, p[1], p[2] + 6, p[3]), today[0])
+
+    def test_rail_rises_without_upper_lanes(self):
+        # 連続提出だけ (全部が本線の下 1 段目) の図は、上の段の分の空白を
+        # 詰めて本線を上げる。版名と日付の軸の間は空けたまま
+        merged = [_merged(150 + i, 'a', '2026-08-%02d' % (6 + 7 * i),
+                          '2026-08-%02d' % (13 + 7 * i), 'v1.%d' % i)
+                  for i in range(3)]
+        tl = history.build_timeline(self.RELEASES, merged, [],
+                                    today=self.LATER)
+        fig = historyview.build_figure(tl, 'v1.3', self.LATER,
+                                       lambda *a: None)
+        canvas = _canvas(fig)
+        assert all(c['lane'] == -1 for c in tl['chips'])
+        assert fig['rail_y'] == historyview.RAIL_Y - historyview.NO_UPPER_LIFT
+        assert canvas.height == historyview.FIG_H - historyview.NO_UPPER_LIFT
+        tags = {s['tag'] for s in tl['stables']}
+        labels = [_bbox(t) for t in _texts(canvas)
+                  if str(t.value).split()[0] in tags]
+        assert labels and min(b[1] for b in labels) > historyview.AXIS_Y + 8
+        # 本線から上端 (軸) と下端 (帯の下) までがほぼ同じ
+        boxes = [_bbox(r) for r in _rects(canvas)
+                 if r.height == historyview.CHIP_H]
+        above = fig['rail_y'] - historyview.AXIS_Y
+        below = max(b[3] for b in boxes) - fig['rail_y']
+        assert abs(above - below) <= 20
 
     def test_many_branches_from_one_version(self):
         # 1 つの版から 10 本 (6 本は順に公開・4 本は確認中) = 2026-10 の

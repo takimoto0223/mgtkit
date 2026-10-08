@@ -69,9 +69,19 @@ def _rail_y(chips):
     """本線の y。上の段が 2 段以上なら、その分だけ本線を下げる.
 
     いちばん上の段の帯は常に UPPER_TOP に来る (日付の軸との間は一定)。
+    上の段に帯が 1 本も無い (連続提出だけの図 = いちばん多い形) ときは
+    本線を NO_UPPER_LIFT だけ上げる。上の段の分の空白が本線の上に残り、
+    本線が図の中央より上に浮いて見えたため (管理者指示 2026-10)。
     """
-    up = max([c['lane'] for c in chips if c.get('lane', 0) >= 1] or [1])
-    return RAIL_Y + (up - 1) * LANE_STEP
+    ups = [c['lane'] for c in chips if c.get('lane', 0) >= 1]
+    if not ups:
+        return RAIL_Y - NO_UPPER_LIFT
+    return RAIL_Y + (max(ups) - 1) * LANE_STEP
+
+
+# 上の段が無いときに本線を上げる量。版名 (本線の 31px 上) と、上へ逃がした
+# 現行版バッジ (72px 上) が日付の軸 (y=40) にかからない範囲で詰める
+NO_UPPER_LIFT = 50
 
 
 # 半角文字 1 字ぶんの幅の見積もり (太字の実測より少し広めに取る。
