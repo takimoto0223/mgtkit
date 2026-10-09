@@ -208,7 +208,7 @@ def list_pending(config=None):
         'pr', 'list', '--repo', paths.repo_slug(config), '--state', 'open',
         '--json', 'number,title,url,author,headRefName,headRefOid,'
                   'createdAt,reviews,statusCheckRollup,mergeable,'
-                  'comments,body'])
+                  'comments,body,files'])
     try:
         prs = json.loads(out)
     except ValueError:
@@ -250,6 +250,12 @@ def _build_pending(prs, config):
                                         or []),
             'conflicting': (pr.get('mergeable') or '').upper()
                            == 'CONFLICTING',
+            # 変更ファイルのパス (単独で開くファイルを β版のカードに出す。
+            # manager/standalone.py)。削除したファイルは開けないので外す
+            # (GraphQL の一括取得だけが changeType を持つ。gh pr list の
+            # 経路では、開くときに手元に無いものを外す)
+            'files': [f.get('path') for f in pr.get('files') or []
+                      if f.get('path') and f.get('changeType') != 'DELETED'],
         })
     return result
 
@@ -274,6 +280,7 @@ query($owner: String!, $name: String!, $submissions: String!) {
       nodes {
         number title url headRefName headRefOid mergeable createdAt body
         author { login }
+        files(first: 100) { nodes { path changeType } }
         reviews(first: 100) {
           nodes { state body submittedAt author { login } }
         }
@@ -443,6 +450,7 @@ def _pr_from_graphql(node):
         'author': node.get('author') or {},
         'reviews': (node.get('reviews') or {}).get('nodes') or [],
         'comments': (node.get('comments') or {}).get('nodes') or [],
+        'files': (node.get('files') or {}).get('nodes') or [],
         'statusCheckRollup': contexts,
     }
 

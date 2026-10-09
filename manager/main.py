@@ -21,7 +21,8 @@ from . import (autofix, claude_helper, conflicts, diffdialog, diffview,
                history, historyview, installer, launcher, localstate,
                logsetup, migrate, notesview, paths, reviewcache, reviews,
                rocketfx,
-               safeio, selfupdate, settings, submit, uiguard, updater, usage)
+               safeio, selfupdate, settings, standalone, submit, uiguard,
+               updater, usage)
 from .gitcli import GitError
 
 UPDATE_POLL_SECONDS = 10 * 60  # 新しい安定版の定期チェック間隔
@@ -2156,6 +2157,186 @@ def main(page: ft.Page):
             run_bg(work)
         return handler
 
+    def _standalone_files(pr):
+        """提出に含まれる単独で開くファイル (正式版のタブのフォルダは除く).
+
+        部品 (.js など) だけが変わったフォルダの HTML は、正式版の
+        フォルダから拾う (β版はまだ手元に無いことがあるため)。
+        """
+        return standalone.find(pr.get('files') or [],
+                               paths.app_dir(paths.stable_dir(config)))
+
+    def _opened_text(f, result):
+        """開いたあとに出す文 (場所を開いただけなら、そう言う)."""
+        if result == 'revealed' and f['how'] != 'folder':
+            return ('開くアプリが決まっていないため、%s の場所を'
+                    '開きました。' % f['path'])
+        if result == 'revealed':
+            return '%s の場所を開きました。' % f['path']
+        return '%s を開きました。' % f['path']
+
+    def _open_failed_text(kind_how, e):
+        """開けなかったときの文 (開き方ごとに、何が開けなかったかを言う)."""
+        how = kind_how[0] if isinstance(kind_how, list) else kind_how
+        if isinstance(e, FileNotFoundError):
+            return ('ファイルが見つかりませんでした。β版を取り直すため、'
+                    'もう一度押してください。')
+        return {'browser': 'ブラウザを開けませんでした。',
+                'folder': 'ファイルの場所を開けませんでした。'}.get(
+                    how, 'ファイルを開けませんでした。開くアプリが'
+                         '見つかりません。')
+
+    def open_standalone(pr, release, kind):
+        """「単独の〇〇を開く」: β版を取り込んで、その種類のファイルを開く.
+
+        単独で動く HTML やスクリプトは、β版を起動しても mgtkit の画面
+        (タブ) からはたどり着けず、置き場所 (.manager/beta/<版>/) も普段は
+        見えない (提出 #204 のフィードバック)。β版がまだ手元に無ければ
+        取り込んでから、1 本ならそのまま開き、複数なら選ぶ画面を出す。
+        取り込みに数十秒かかることがあり、カードの下の状態表示は画面の
+        外のことがあるので、押したボタン自体に「準備しています...」を出す。
+        """
+        def handler(e):
+            btn = e.control if e is not None else None
+            label = getattr(btn, 'content', None)
+            restore = _freeze_card(pr['number'])
+            if btn is not None:
+                btn.content = '準備しています...'
+            t5_status.value = '%s の単独の%sを準備しています...' % (
+                release['tag'], standalone.kind_name(kind))
+            page.update()
+
+            def work():
+                tag = release['tag']
+                beta = paths.beta_dir(tag, config)
+                kind_how = [None]
+
+                def progress(msg):
+                    t5_status.value = '%s: %s' % (tag, msg)
+                    page.update()
+
+                def _stop_same_beta():
+                    # このβ版が動いたまま壊れていたときだけ止める (別の
+                    # 版が動いていても、置き場所が別なので止めない)
+                    if launcher.running_beta(config) == str(tag):
+                        launcher.stop_app(paths.beta_port(config))
+                        launcher.remember_beta(None, config)
+                try:
+                    try:
+                        if updater.local_version_info(beta) is None:
+                            if updater.installing():
+                                progress('先に始まった取り込みの完了を'
+                                         '待っています...')
+                            updater.install_if_needed(
+                                repo, release, beta, on_progress=progress,
+                                config=config, prepare=_stop_same_beta)
+                    except Exception:
+                        log.exception('β版を取り込めませんでした')
+                        t5_status.value = ('β版 %s を取り込めませんでした。'
+                                           '少し時間をおいてから、もう一度'
+                                           '押してください。' % tag)
+                        return
+                    app = paths.app_dir(beta)
+                    files = [dict(f, local=standalone.local_path(
+                                 app, f['path']))
+                             for f in standalone.find(pr.get('files') or [],
+                                                      app)
+                             if f['kind'] == kind]
+                    files = [f for f in files if os.path.exists(f['local'])]
+                    kind_how[0] = files[0]['how'] if files else None
+                    if not files:
+                        t5_status.value = ('β版 %s には単独の%sが見つかり'
+                                           'ませんでした。' % (
+                                               tag,
+                                               standalone.kind_name(kind)))
+                    elif len(files) == 1:
+                        result = standalone.open_file(files[0]['local'],
+                                                      files[0]['how'])
+                        t5_status.value = _opened_text(files[0], result)
+                    else:
+                        t5_status.value = ''
+                        _standalone_dialog(pr, tag, kind, files)
+                except Exception as e:
+                    log.exception('単独のファイルを開けませんでした')
+                    t5_status.value = _open_failed_text(kind_how, e)
+                finally:
+                    if btn is not None:
+                        btn.content = label
+                    restore()
+                    page.update()
+            run_bg(work)
+        return handler
+
+    def _standalone_dialog(pr, tag, kind, files):
+        """同じ種類の単独のファイルが複数あるときに、どれを開くか選ぶ画面."""
+        how = files[0]['how']
+        btn_label = {'browser': 'ブラウザで開く',
+                     'folder': 'ファイルの場所を開く',
+                     'app': '開く'}[how]
+        btn_icon = {'browser': ft.Icons.OPEN_IN_NEW,
+                    'folder': ft.Icons.FOLDER_OPEN,
+                    'app': ft.Icons.DESCRIPTION}[how]
+
+        def opener(f, btn, note):
+            folder_text = note.value
+
+            def click(_):
+                # 押した瞬間に反応し (二度押しで 2 つ開かないよう無効化)、
+                # 結果は押した行に出す
+                dialog_busy(btn, note, '開いています...')
+
+                def work():
+                    try:
+                        result = standalone.open_file(f['local'], f['how'])
+                        note.color = '#166534'
+                        note.value = _opened_text(f, result)
+                        page.update()
+                        time.sleep(1.5)     # 開いた直後の連打を受けない
+                        # 行の表示も元 (フォルダ名) に戻す。開いた結果は
+                        # ブラウザ・フォルダの窓そのもので分かる
+                        note.color, note.value = '#4b5563', folder_text
+                        btn.disabled = False
+                        page.update()
+                    except Exception as e:
+                        log.exception('単独のファイルを開けませんでした')
+                        dialog_error(btn, note,
+                                     _open_failed_text(f['how'], e))
+                run_bg(work)
+            return click
+
+        rows = []
+        for f in files:
+            folder, name = f['path'].rsplit('/', 1)  # 単独は必ずフォルダの中
+            note = ft.Text(folder + '/', size=11, color='#4b5563')
+            btn = ft.OutlinedButton(btn_label, icon=btn_icon)
+            btn.on_click = opener(f, btn, note)
+            rows.append(ft.Row([
+                ft.Column([
+                    ft.Text(name, size=13, weight=ft.FontWeight.BOLD,
+                            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    note,
+                ], spacing=0, expand=True),
+                btn,
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        intro = 'β版 %s の中のファイルを開きます。' % tag
+        if how == 'folder':
+            intro += 'スクリプトは実行せず、ファイルの場所を開きます。'
+        # 行が多いときだけ高さを決めてスクロールさせる (少ないうちは中身の
+        # 高さのまま。高さを見積もると書体や拡大率の違いで空きや切れが出る)
+        many = len(rows) > 8
+        page.show_dialog(ft.AlertDialog(
+            title=ft.Text(('#%d の単独の%s' % (
+                pr['number'], standalone.kind_name(kind))).strip(),
+                size=18),
+            content=ft.Column([
+                ft.Text(intro, size=12, color='#555555'),
+                ft.Column(rows, spacing=6,
+                          scroll=ft.ScrollMode.AUTO if many else None,
+                          height=400 if many else None, tight=not many),
+            ], tight=True, width=560, spacing=12),
+            actions=[ft.TextButton('閉じる',
+                                   on_click=lambda _: page.pop_dialog())]))
+
     def _edit_feedback_dialog(fb):
         """自分のフィードバックの編集ダイアログ."""
         field = ft.TextField(label='フィードバックを編集', value=fb['text'],
@@ -3104,6 +3285,8 @@ def main(page: ft.Page):
                 overflow=ft.TextOverflow.ELLIPSIS, tooltip=body)))
 
         buttons = []
+        alone_btns = []
+        alone_rows = []
         if beta is not None and not final:
             buttons.append(ft.FilledButton(
                 'β版 %s を試す' % beta['tag'], icon=ft.Icons.SCIENCE,
@@ -3111,6 +3294,23 @@ def main(page: ft.Page):
                 on_click=try_beta(pr, beta),
                 bgcolor='#e5e7eb' if locked else AMBER,
                 color='#9ca3af' if locked else '#ffffff'))
+            alone = _standalone_files(pr)
+            # 単独で開くファイル (mgtkit の画面からは開けないもの) は
+            # 種類ごとのボタンにして、ボタンの列の下の専用の行に並べる
+            # (列に足すと狭い画面で右端の「承認」「却下」が切れる)
+            for kind, how, group in standalone.groups(alone):
+                alone_btns.append(ft.OutlinedButton(
+                    standalone.button_label(kind, how, len(group)),
+                    icon=(ft.Icons.FOLDER_OPEN if how == 'folder'
+                          else ft.Icons.OPEN_IN_NEW),
+                    disabled=locked,
+                    on_click=open_standalone(pr, beta, kind)))
+            # 1 行に 2 個まで (種類は最大 4 つ。3 つ並べると幅 700 の画面で
+            # あふれる)。場所は選ぶ画面の各行が持つので、ここには書かない
+            for i in range(0, len(alone_btns), 2):
+                alone_rows.append(_line(_H_BTNS, ft.Row(
+                    alone_btns[i:i + 2], spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER)))
         fb_all = pr.get('feedback') or []
         # 件数は現在のβ版宛てのみ (統合後は新β版基準で仕切り直し)
         fb = [f for f in fb_all
@@ -3164,8 +3364,9 @@ def main(page: ft.Page):
             else:
                 buttons.append(ft.OutlinedButton('却下',
                                                  on_click=on_reject(pr)))
-        # 演出中の無効化用に操作ボタンを控えておく
-        _card_buttons[pr['number']] = list(buttons)
+        # 演出中の無効化用に操作ボタンを控えておく (単独のファイルの
+        # ボタンも含む。並べるのはボタンの列の下の専用の行)
+        _card_buttons[pr['number']] = list(buttons) + alone_btns
         if locked:
             # カード情報は薄く、案内文だけ明るく表示する
             rows = [
@@ -3182,6 +3383,7 @@ def main(page: ft.Page):
         else:
             lines.append(_line(_H_BTNS, ft.Row(buttons, spacing=8)))
             rows = lines
+        rows += alone_rows
         # カードの高さは「実際に並べた行」から出す。演出の基点はこの
         # 高さの積み上げで決まるので、行を足したら自動で追従する
         return ft.Container(bgcolor='#f5f7fa', border_radius=6,

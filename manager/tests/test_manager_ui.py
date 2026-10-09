@@ -4,7 +4,9 @@ flet の API 変更 (属性名・シグネチャ) による構築時エラーを
 flet は CI の依存に含めないため、未導入環境では自動スキップされる
 (ローカルの開発 venv では manager/requirements.txt 導入後に実行される)。
 """
+import os
 import threading
+import types
 
 import pytest
 
@@ -574,6 +576,146 @@ def test_the_running_beta_is_remembered_after_a_real_launch(monkeypatch):
     assert remembered == [_TRY_BETA['tag']]
     texts = _walk_texts(page.added[1], [])
     assert any('を起動しました' in t for t in texts)
+
+
+_ALONE = ['wood_joint/wood_joint_calc.html', 'wood_joint/build_species.py',
+          'snow/snow_rain_factor.html', 'app.py']
+
+
+def _page_with_standalone_files(monkeypatch, tmp_path, files, installed=True):
+    """単独のファイルを含む提出のβ版カードの画面。戻り値: (page, main, opened).
+
+    β版の置き場所は tmp_path の下にして、提出のファイルを実際に置く。
+    """
+    pending = dict(_TRY_PENDING, files=list(files))
+    page, _pruned, main = _page_with_a_review_snapshot(
+        monkeypatch, [_TRY_BETA, _STABLE])
+    snap = {'pending': [pending], 'releases': [_TRY_BETA, _STABLE],
+            'me': 'yamada-taro', 'merged': []}
+    monkeypatch.setattr(main.reviews, 'fetch_snapshot',
+                        lambda *a, **k: dict(snap))
+    monkeypatch.setattr(main.reviewcache, 'put', lambda *a, **k: dict(snap))
+    monkeypatch.setattr(main.paths, 'beta_dir',
+                        lambda tag, config=None: str(tmp_path / 'beta' / tag))
+    app = tmp_path / 'beta' / _TRY_BETA['tag'] / 'mgtkit'
+    state = {'installed': installed}
+
+    def put_files(*a, **k):
+        for f in files:
+            (app / f).parent.mkdir(parents=True, exist_ok=True)
+            (app / f).write_text('x')
+        state['installed'] = True
+        return True
+    if installed:
+        put_files()
+    monkeypatch.setattr(
+        main.updater, 'local_version_info',
+        lambda *a, **k: ({'version': _TRY_BETA['tag']}
+                         if state['installed'] else None))
+    monkeypatch.setattr(main.updater, 'install_if_needed', put_files)
+    monkeypatch.setattr(main.launcher, 'port_in_use', lambda *a, **k: False)
+    opened = []
+    monkeypatch.setattr(main.standalone, 'open_file',
+                        lambda path, how: (opened.append((path, how)),
+                                           'opened')[1])
+    monkeypatch.setattr(main.time, 'sleep', lambda s: None)
+    _open_review_tab(page)
+    return page, main, opened
+
+
+def test_standalone_buttons_appear_per_kind(monkeypatch, tmp_path):
+    """単独で開くファイルがある提出だけ、種類ごとに「単独の〇〇を開く」.
+
+    単独の HTML は β版を起動しても mgtkit の画面からは開けず、置き場所も
+    見えない (提出 #204 のフィードバック「単独のhtmlはβ版だと確認が
+    むずかしい」)。スクリプトは実行せず場所を開く。
+    """
+    page, _main, _opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, _ALONE)
+    assert _beta_button(page, '単独の HTML を開く (2)')
+    assert _beta_button(page, '単独のスクリプトの場所を開く')
+
+    page, _main, _opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, ['app.py'])
+    with pytest.raises(AssertionError):
+        _beta_button(page, '単独の')
+
+
+def test_standalone_buttons_wrap_two_per_line(monkeypatch, tmp_path):
+    """種類が 3 つ以上でも 1 行に 2 個まで (幅 700 の画面であふれない)."""
+    page, _main, _opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, _ALONE + ['wood_joint/README.md'])
+    rows = [c for c in _walk_controls(page.added[1], [])
+            if isinstance(getattr(c, 'controls', None), list)
+            and any(isinstance(getattr(b, 'content', None), str)
+                    and b.content.startswith('単独の') for b in c.controls)]
+    assert [len(r.controls) for r in rows] == [2, 1]
+
+
+def test_one_standalone_file_opens_directly(monkeypatch, tmp_path):
+    page, main, opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, ['snow/snow_rain_factor.html'])
+    n_dialogs = len(page.dialogs)
+    btn = _beta_button(page, '単独の HTML を開く')
+    btn.on_click(types.SimpleNamespace(control=btn))
+    assert [(os.path.basename(p), how) for p, how in opened] == [
+        ('snow_rain_factor.html', 'browser')]
+    assert len(page.dialogs) == n_dialogs     # 1 本なら選ぶ画面を出さない
+    texts = _walk_texts(page.added[1], [])
+    assert any('snow/snow_rain_factor.html を開きました' in t for t in texts)
+    assert btn.content == '単独の HTML を開く'    # 準備中の文言から戻る
+
+
+def test_several_files_of_a_kind_are_offered_in_a_list(monkeypatch,
+                                                       tmp_path):
+    page, main, opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, _ALONE)
+    n_dialogs = len(page.dialogs)
+    _beta_button(page, '単独の HTML を開く').on_click(None)
+    assert opened == [] and len(page.dialogs) == n_dialogs + 1  # 選ぶ画面
+    buttons = [c for c in _walk_controls(page.dialogs[-1].content, [])
+               if getattr(c, 'on_click', None)
+               and getattr(c, 'content', None) == 'ブラウザで開く']
+    # 選ぶ画面はその種類だけ (HTML 2 本。スクリプトと app.py は出ない)
+    assert len(buttons) == 2
+    buttons[0].on_click(None)
+    assert [(os.path.basename(p), how) for p, how in opened] == [
+        ('snow_rain_factor.html', 'browser')]
+    # 開いたあと、押した行は元の表示 (フォルダ名) と押せる状態に戻る
+    texts = _walk_texts(page.dialogs[-1].content, [])
+    assert 'snow/' in texts and not any('開きました' in t for t in texts)
+    assert not buttons[0].disabled
+
+
+def test_a_file_in_the_list_opens_once_per_press(monkeypatch, tmp_path):
+    """押した瞬間にボタンを無効にして、連打で 2 つ開かないこと."""
+    page, main, opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, _ALONE)
+    _beta_button(page, '単独の HTML を開く').on_click(None)
+    btn = [c for c in _walk_controls(page.dialogs[-1].content, [])
+           if getattr(c, 'content', None) == 'ブラウザで開く'][0]
+    # 開く処理 (裏) を走らせず、押した直後の状態を見る
+    monkeypatch.setattr(main.threading, 'Thread', _NoThread)
+    btn.on_click(None)
+    assert btn.disabled
+    texts = _walk_texts(page.dialogs[-1].content, [])
+    assert any('開いています' in t for t in texts)
+
+
+def test_standalone_files_are_fetched_first_without_stopping_other_betas(
+        monkeypatch, tmp_path):
+    """まだ手元に無いβ版は取り込んでから開く。動いている別のβ版は止めない
+    (置き場所が別なので、ファイルを開くだけなら止める理由が無い)."""
+    page, main, opened = _page_with_standalone_files(
+        monkeypatch, tmp_path, ['snow/snow_rain_factor.html'],
+        installed=False)
+    stopped = []
+    monkeypatch.setattr(main.launcher, 'running_beta',
+                        lambda config=None: 'v9.9-beta.1')
+    monkeypatch.setattr(main.launcher, 'stop_app',
+                        lambda *a, **k: stopped.append(a))
+    _beta_button(page, '単独の HTML を開く').on_click(None)
+    assert len(opened) == 1 and stopped == []
 
 
 def test_launch_waits_for_an_install_instead_of_turning_the_user_away(
