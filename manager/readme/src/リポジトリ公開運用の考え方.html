@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<!--
+  mgtkit リポジトリ公開運用の考え方 (A4 縦 1 枚)
+
+  - 2026-08 版は PDF だけで原稿が無かったので、2026-10 にこの原稿を起こした
+    (見た目は 08 版の PDF に合わせた)
+  - 2026-10 版の変更: 2026-09 に付けた PolyForm Perimeter License 1.0.0
+    (LICENSE.md、権利者 HSC+yt+nt) を反映。たとえ話に「入口の看板」、
+    ① をライセンスの中身に、比較表に「競合製品への転用」の行を足した
+  - 必ず 1 枚に収める。行を足したら PDF で 2 頁目に溢れていないか見る
+  - PDF 化: Chromium で page.goto(この HTML) →
+    page.pdf(format='A4', print_background=True,
+             margin=dict(top='0', bottom='0', left='0', right='0'))
+    (Windows なら msedge --headless --print-to-pdf --no-pdf-header-footer でも同じ)
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>mgtkit リポジトリ公開運用の考え方</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 210mm; padding: 9mm 13mm 4mm;
+    font-family: "IPAPGothic", "IPAGothic", "Yu Gothic UI", "Meiryo", sans-serif;
+    color: #1f2937; font-size: 8.6pt; line-height: 1.55;
+    background: #ffffff;
+  }
+  b { color: #111827; }
+  .title { background: #2b4c6f; color: #ffffff; border-radius: 4px;
+           padding: 2.6mm 4.5mm; font-size: 13pt; font-weight: bold;
+           margin: 0 0 1.8mm; }
+  .lead { color: #6b7280; font-size: 8.4pt; margin: 0 0 2.5mm; line-height: 1.5; }
+  h2 { font-size: 11pt; color: #1e3a5f; margin: 3.5mm 0 1.6mm;
+       border-left: 4px solid #2b4c6f; padding-left: 2.5mm; line-height: 1.4; }
+  .panel { background: #eef4fb; border-radius: 4px; padding: 2.4mm 4mm; }
+  .card { border: 1px solid #d9dee5; border-radius: 4px;
+          padding: 1.8mm 3.5mm; margin-bottom: 1.6mm; }
+  .card .h { font-weight: bold; }
+  .orange { color: #b45309; }
+  .green  { color: #15803d; }
+  .red    { color: #b91c1c; font-weight: bold; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.3pt; }
+  th, td { border: 1px solid #d1d7df; padding: 1mm 2.5mm; text-align: left; }
+  th { background: #eef2f7; font-weight: normal; }
+  thead th { font-weight: bold; }
+  td.ok   { color: #15803d; font-weight: bold; }
+  td.ng   { color: #b91c1c; font-weight: bold; }
+  td.mid  { color: #b45309; font-weight: bold; }
+  .note { color: #6b7280; font-size: 7.8pt; margin: 1.2mm 0 2.5mm; line-height: 1.5; }
+  .note b { color: #4b5563; }
+  .judge { background: #fef9c3; border-left: 4px solid #eab308;
+           border-radius: 4px; padding: 2.5mm 4mm; }
+</style>
+</head>
+<body>
+
+<div class="title">mgtkit のプログラム置き場を「公開」にしていることのリスク整理</div>
+<p class="lead">2026-10 版 — mgtkit のプログラムは GitHub という保管サービス上の「公開(パブリック)リポジトリ」に置いています。その意味とリスクを 1 枚にまとめました。2026-09 に付けたライセンス (PolyForm Perimeter) を反映しています。</p>
+
+<h2>たとえ話: いまは「ガラス張りの工房」</h2>
+<div class="panel">
+  mgtkit の置き場は、いわば<b>ガラス張りの工房</b>です。<b>通りがかりの誰でも、中の道具や図面(プログラムや計算ロジック)を自由に見学・撮影(コピー)できます。</b>
+  ただし、工房に入って<b>作品に手を加えられるのは、鍵(権限)を渡した社内メンバーだけ</b>。しかも完成品の棚(正式版)に置くには「<b>社内 2 名の検印 + 検査機(自動テスト)の合格</b>」が必要で、このルールは工房のシステムが強制します。部外者が改造案を投げ込む(提案する)ことはできますが、検印には一切カウントされず、無視すれば作品には何も影響しません。<br>
+  さらに入口には<b>「利用規約の看板(ライセンス)」</b>を掲げています。撮影したものを持ち帰って自分で使う・手を加える・人に渡すのは自由。ただし<b>そっくり同じ商売(競合する製品)を始めて他人に提供することだけは禁止</b>、という看板です。
+</div>
+
+<h2>公開のままで残るリスク(=「見られる」ことに尽きる)</h2>
+<div class="card">
+  <div class="h orange">① 設計ノウハウの流出【最大の論点・唯一の実質リスク】</div>
+  断面算定のロジック、基準データ、マニュアル、開発のやり取りの履歴まで<b>全世界に公開</b>されます。ライセンス(PolyForm Perimeter License 1.0.0)で、閲覧・自社での利用・改変・再配布は認めたうえで、<b>mgtkit と競合する製品を他者に提供する目的の利用だけを禁止</b>しています。<b>「見て覚えて自分の仕事に使う」ことは止められず</b>、競合製品への転用も見つけて対処するのは現実的に困難です。<b>これは技術でもライセンスでも防げない「経営判断」の領域</b>です。
+</div>
+<div class="card">
+  <div class="h green">② いたずら・乗っ取り → 対策済みでほぼ心配なし</div>
+  部外者ができるのは「見学」と「提案」まで。作品(正式版)を変更できるのは鍵を持つメンバーだけで、検印(承認)も社内メンバーの分しか数えない仕組みを入れてあります。
+</div>
+<div class="card">
+  <div class="h green">③ パスワード類の流出 → 設計で防止済み(ただし猶予ゼロ)</div>
+  API キー等の秘密情報は工房に持ち込まない設計(各自の PC にのみ保存+提出時の自動除外+自動検査)。ただしガラス張りなので、万一うっかり持ち込むと<b>「即座に」見られる</b>点だけは非公開と違います。
+</div>
+
+<h2>「シャッターを閉める(非公開)」にする場合</h2>
+<div class="panel">
+  非公開にする=<b>シャッターを閉めた工房</b>。見学は完全にできなくなりますが、代わりに——<br>
+  ・入る人全員に<b>入館証を 1 枚ずつ発行</b>する手間が復活(インターン・バイト含む)<br>
+  ・「検印 2 名+検査機」のルールを<b>ドアに強制させる装置が有料オプション</b>になる(GitHub Pro: 月 $4 程度。未加入だとルールはアプリ側の運用頼みに)<br>
+  ・入口の看板(ライセンス)はそのまま残ります。外し直す作業はありません
+</div>
+
+<h2>3 つの選択肢の比較</h2>
+<table>
+  <thead>
+    <tr><th style="width:31%"></th><th>公開(いま)</th><th>非公開+無料</th><th>非公開+Pro(月 $4)</th></tr>
+  </thead>
+  <tbody>
+    <tr><th>ノウハウの秘匿</th><td class="ng">✕ 全公開</td><td class="ok">〇</td><td class="ok">〇</td></tr>
+    <tr><th>競合製品への転用</th><td class="mid">△ ライセンスで禁止</td><td class="ok">〇 見られない</td><td class="ok">〇 見られない</td></tr>
+    <tr><th>メンバー追加の手間 *</th><td class="ok">◎ ゼロ</td><td class="mid">△ 1人ずつ招待</td><td class="mid">△ 1人ずつ招待</td></tr>
+    <tr><th>承認ルールの強制(GitHub側)</th><td class="ok">〇 無料</td><td class="ng">✕ なし</td><td class="ok">〇</td></tr>
+    <tr><th>アプリマネージャーの動作</th><td class="ok">〇</td><td class="ok">〇</td><td class="ok">〇</td></tr>
+  </tbody>
+</table>
+<p class="note">* 公開でも誰でも参加できるわけではありません。setup.bat を実行すると「参加申請」が自動で届き、<b>管理者が承認するまで更新版の提出はできない</b>仕様です(承認前も閲覧・起動・更新・β版の試用は可能)。招待の作業なしで、この承認 1 回だけでメンバー追加が完了します。<br>
+ライセンスの本文はリポジトリ直下の LICENSE.md (権利者表記 HSC+yt+nt)。正式な採否と権利者の正式表記は相談のうえ確定します(それまでは暫定)。</p>
+
+<div class="judge">
+  <b>判断基準はただ一つ:「このプログラムと計算ノウハウを、世界中に見られて困るか?」</b><br>
+  困らない → いまの公開運用+ライセンスがベスト(手間ゼロ・保護も無料で有効)。/ 困る → 「非公開+Pro+招待運用」に切り替え(設定変更 3 手順・プログラム改修は不要。いつでも移行できます)。
+</div>
+
+</body>
+</html>
