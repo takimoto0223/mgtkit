@@ -198,8 +198,11 @@ async function vdxRunDxf() {
       return;
     }
     const j = await api('/api/vwdxf_dxf', req);
-    let h = 'DXF ' + j.files.length + ' 件を生成しました → ' +
-            esc(j.out_dir) + openFolderBtn(j.out_dir);
+    // 付属 JSON (部材 ID と図の一覧) は DXF と同名で 1 つずつ並ぶ
+    const nDxf = j.files.filter(f => /\.dxf$/i.test(f.name)).length;
+    const nJson = j.files.length - nDxf;
+    let h = 'DXF ' + nDxf + ' 件' + (nJson ? '（付属 JSON ' + nJson + ' 件）' : '') +
+            'を生成しました → ' + esc(j.out_dir) + openFolderBtn(j.out_dir);
     if (j.info && j.info.length) {
       h += '<br>' + j.info.map(i => esc(i.title)).join(' / ');
     }
