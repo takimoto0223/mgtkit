@@ -155,6 +155,8 @@ class Model:
     # 端部処理で「線上を通過する相手部材」を隣接として拾うために使う。
     covered_nodes: dict[int, list[int]] = field(default_factory=dict)
     footings: list["Footing"] = field(default_factory=list)   # 基礎フーチング（STB由来）
+    # *STORY（層設定）: [(階名, レベル[m])] 低い順。無ければ空 (付属 JSON の story に使う)
+    stories: list = field(default_factory=list)
     # 伏図の既定スタイル。"wood"=最上階以外2枚 / "steel"=各階1枚(柱梁符号・梁実線)。
     # READ が入力形式に応じて設定（mgt=wood / stb=steel）。GUIのmodeより優先される。
     floor_mode: str = "wood"
