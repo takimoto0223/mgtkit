@@ -2167,6 +2167,7 @@ function buildCheckReq() {
     c_up_BSH: +$('c_up_BSH').value,
     case_types: collectCaseTypes(),
     wal_up: +$('c_wal_up').value,
+    w_size_adjust: $('c_w_size_adjust').checked,
     w_material_map: collectWoodMaterialMap(),
     plate_stress_path: ($('c_plate_use').value === 'matlab')
       ? $('c_plate_stress_path').value.trim() : '',

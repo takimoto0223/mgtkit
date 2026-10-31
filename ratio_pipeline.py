@@ -1642,7 +1642,7 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
                     w_panel_co=None, rc_params=None, src_cover=40.0,
                     pile_cover=100.0, pc_params=None,
                     wall_stress_path=None, plate_stress_path=None,
-                    plate_up=1.0, pl_long=None):
+                    plate_up=1.0, pl_long=None, w_size_adjust=True):
     """MIDAS mgt + 応力txt から鉄骨・木造の断面検定を実行する.
 
     (関数名は従来のまま run_steel_check だが、対象は鉄骨に加えて
@@ -1673,6 +1673,10 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
       wal_up              木材の長期許容応力度の割増 (MIDASratioplot_fig.m
                           冒頭 questdlg「長期荷重の木部材の許容応力度は？」)。
                           1.0=長期 (既定) / 1.3=中長期 (積雪)。
+      w_size_adjust       集成材の曲げ寸法調整係数 kz を考慮するか (既定 True)。
+                          木質構造設計規準 資料表2.5 (異等級 h0=300mm /
+                          同一等級 h0=100mm、α=1/9 の区分値) を強軸曲げの
+                          基準強度に乗じる (原典MATLAB版には無い追加機能)。
       w_material_map      木材料の W_AL 行番号 (1-based) の明示指定
                           dict {mgt材料番号: W_AL行番号}。
                           未指定の木材料は材料名から自動対応 (w_al_match:
@@ -2319,7 +2323,8 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
                     ele_material[2], element_no,
                     maxratios[load_no][section_index, 1:3],
                     maxratios_text[section_index][load_no],
-                    section_no, LOAS_CASE_NAME, pick_section_name, wal_up)
+                    section_no, LOAS_CASE_NAME, pick_section_name, wal_up,
+                    size_adjust=w_size_adjust)
                 maxratios[load_no][section_index, 1:3] = mr
                 maxratios_text[section_index][load_no] = mtext
             elif ele_material[1] == 5:  # SRCの検定

@@ -643,6 +643,9 @@
         <select id="c_wal_up">
           <option value="1.0" selected>長期 (1.1F/3)</option>
           <option value="1.3">中長期・積雪 (1.3×1.1F/3)</option></select></label>
+      <label class="inline" title="木質構造設計規準 資料表2.5 (kz=(h0/h)^(1/9)、h0=異等級構成300mm・同一等級構成100mm の区分値) を集成材の強軸曲げの基準強度に乗じます。弱軸曲げ・圧縮・引張・せん断には乗じません。">
+        <input type="checkbox" id="c_w_size_adjust" checked>
+        集成材の曲げ寸法調整係数を考慮</label>
       <span class="fhint">荷重ケースごとの種別 (長期/水平のみ/短期(組合せ済み))
         と木材種別 (W_AL行)・RC配筋設定をここで指定します。
         未読込のまま検定するとケース数からの自動判定になります。</span>

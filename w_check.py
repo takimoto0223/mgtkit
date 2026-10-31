@@ -1293,10 +1293,63 @@ def W_TSR_analysis(sectionsize, stress, timecase, SN):
 # W_ratio_analysis.m (privatetool_function/MIDAS/ratio/W/)
 # ===========================================================================
 
+# ===========================================================================
+# 集成材の曲げに関する寸法調整係数 (原典MATLAB版には無い追加機能)
+# 出典: 日本建築学会「木質構造設計規準・同解説」資料表2.5
+#       (kz=(h0/h)^(1/9)、h0=異等級構成300mm/同一等級構成100mm を区分値化したもの。
+#        集成材等建築物構造設計マニュアル 式(2.1-1) と同じ。平13国交告第1024号の
+#        曲げの基準強度も同様に調整する)
+# h = 集成材の厚さ方向(積層方向)の辺長 = 強軸曲げの材せい。強軸曲げ(Fby)のみに
+# 乗じ、弱軸曲げ(幅方向 Fbz)・圧縮・引張・せん断には乗じない。
+# ===========================================================================
+
+_KZ_SYM = ((300, 1.00), (450, 0.96), (600, 0.93), (750, 0.91), (900, 0.89),
+           (1050, 0.87), (1200, 0.86), (1350, 0.85), (1500, 0.84),
+           (1650, 0.83), (1800, 0.82), (float('inf'), 0.80))
+_KZ_UNI = ((100, 1.00), (150, 0.96), (200, 0.93), (250, 0.90), (300, 0.89),
+           (float('inf'), 0.85))
+
+
+def w_glulam_kz(w_name, h):
+    """集成材の曲げ寸法調整係数 (資料表2.5).
+
+    w_name: W_AL表の行ラベル、h: 強軸曲げの材せい (mm)。
+    戻り値: (kz, 構成ラベル)。集成材でなければ (1.0, None)。
+    """
+    n = str(w_name)
+    if '集成材' not in n:
+        return 1.0, None
+    if '同一' in n:
+        table, label = _KZ_UNI, '同一等級構成集成材'
+    else:
+        table, label = _KZ_SYM, '異等級構成集成材'
+    for h_max, k in table:
+        if h <= h_max + 1e-9:
+            return k, label
+    return table[-1][1], label
+
+
+def _insert_kz_text(text, kz, label, h, fby0):
+    """詳細文の基準強度行の直後に寸法調整係数の注記を入れる."""
+    line = ('寸法調整係数 kz=' + _num2str(kz, '%15.2f') + '（' + label
+            + '、材せい ' + _num2str(h, '%15.0f') + 'mm、木質構造設計規準 '
+            '資料表2.5）を曲げ（強軸）の基準強度に乗じた：'
+            + _num2str(fby0, '%15.2f') + '×' + _num2str(kz, '%15.2f') + '＝'
+            + _num2str(fby0 * kz, '%15.2f') + 'N/mm2')
+    out = list(text)
+    for i, t in enumerate(out):
+        if str(t).startswith('*木材情報:基準強度'):
+            out.insert(i + 2, line)
+            return out
+    out.append(line)
+    return out
+
+
 @_matlabenv
 def W_ratio_analysis(sectionsize, buck_length, stress, timecase, material_no,
                      ele_no, maxratios, maxratios_text, section_no,
-                     LOAS_CASE_NAME, pick_section_name, wal_up):
+                     LOAS_CASE_NAME, pick_section_name, wal_up,
+                     size_adjust=True):
     """木造部材の断面検定（曲げ圧縮部材の検定）ディスパッチャ (W_ratio_analysis.m).
 
     material_no は mgtopen_material が material 3列目に格納した W_AL 行番号
@@ -1306,6 +1359,8 @@ def W_ratio_analysis(sectionsize, buck_length, stress, timecase, material_no,
 
     sectionsize は m 単位 (内部で×1000)。後ろから2番目の要素×1000が種別コード:
       1000:H(未対応), 2000:中実角→W_SB, 3000:中実丸→W_SR
+    size_adjust=True のとき、集成材 (W_AL行ラベルに「集成材」) の中実角断面は
+    強軸曲げの基準強度に寸法調整係数 kz (w_glulam_kz) を乗じる (追加機能)。
     戻り値: (ratio_output, maxratios, maxratios_text)
     maxratios = [要素番号, 最大検定比]。
     """
@@ -1330,6 +1385,13 @@ def W_ratio_analysis(sectionsize, buck_length, stress, timecase, material_no,
         print('木材のH断面は対応していません')
         raise RuntimeError('木材のH断面は対応していません')  # MATLAB: stop
     elif code == 2000:  # 中実角断面の検定
+        # 集成材の曲げ寸法調整係数 (size_adjust=True のとき。追加機能)
+        kz, kz_label = (w_glulam_kz(W_name[al_index - 1], sectionsize[0])
+                        if size_adjust else (1.0, None))
+        fby0 = float(wood_al[2])
+        if kz != 1.0:
+            wood_al = wood_al.copy()
+            wood_al[2] = fby0 * kz
         ratio_output = W_SB_analysis(sectionsize[0:n - 2], buck_length,
                                      stress, timecase, wood_al, section_no,
                                      wal_up)
@@ -1339,6 +1401,9 @@ def W_ratio_analysis(sectionsize, buck_length, stress, timecase, material_no,
             maxratios_text = W_SB_analysis_text(
                 sectionsize[0:n - 2], buck_length, stress, timecase, wood_al,
                 ele_no, section_no, LOAS_CASE_NAME, pick_section_name, wal_up)
+            if kz != 1.0:
+                maxratios_text = _insert_kz_text(
+                    maxratios_text, kz, kz_label, sectionsize[0], fby0)
 
     elif code == 3000:  # 中実丸断面の検定
         ratio_output = W_SR_analysis(sectionsize[0:n - 2], buck_length,
