@@ -15,6 +15,7 @@ from .draw.parts_list import LIST_SCALE_DEFAULT, build_list_figures, list_catego
 from .draw.plan import build_plan
 from .render import dxf as _dxf
 from .render import preview as _preview
+from .render import sidecar as _sidecar
 
 _CACHE = {}
 _CACHE_LOCK = threading.Lock()
@@ -66,7 +67,8 @@ def plan_figures(M, key, o, top_z=None, sheet=None):
     if sheet:
         sheets = [sheet if sheet in sheets else sheets[0]]
     return [build_plan(M, key, o['scale'], o['paper'], o['text_mm'], grids=o['grids'],
-                       wood_sheet=sh, grid_paper_mm=o['grid_mm']) for sh in sheets]
+                       wood_sheet=sh, grid_paper_mm=o['grid_mm'], levels=o['level_lines'])
+            for sh in sheets]
 
 
 def options(p):
@@ -116,7 +118,8 @@ def build_figures(M, axes, levels, o):
 def export(path, out_dir, axes, levels, o, limit_sec_no=DEFAULT_LIMIT_SEC_NO):
     """DXF を書き出す (図の種類ごとに 1 ファイル: <元名>_伏図 / _軸組図 / _リスト、struct_cad と同じ)
 
-    → (ファイルの list, [{title, scale}])。
+    DXF ごとに同名の付属 JSON (図と部材の一覧、render/sidecar.py) も書く。
+    → (ファイルの list (DXF と JSON), [{title, scale}])。
     """
     M = load(path, limit_sec_no)
     figs = build_figures(M, axes, levels, o)
@@ -129,6 +132,10 @@ def export(path, out_dir, axes, levels, o, limit_sec_no=DEFAULT_LIMIT_SEC_NO):
         if part:
             f, i = _dxf.export(part, out_dir, '%s_%s' % (base, name))
             made.append(f)
+            try:
+                made.append(_sidecar.write(f, M, part, o, path))
+            except Exception as e:  # noqa: BLE001 付属 JSON が書けなくても DXF は出す
+                print('注意: 付属 JSON (%s) を書けませんでした: %s' % (os.path.basename(f), e))
             info_ += i
     return made, info_
 
