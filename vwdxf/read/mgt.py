@@ -91,6 +91,7 @@ def _apply_unit_scale(model: Model, s: float) -> None:
             sec.steel_dims = [d * s for d in sec.steel_dims]
     for k in list(model.thicknesses):
         model.thicknesses[k] *= s
+    model.stories = [(n, z * s) for n, z in model.stories]
     for rc in model.rebar_columns.values():
         rc.cover *= s
         rc.hoop_pitch *= s
@@ -176,6 +177,7 @@ def read_mgt(path: str, encoding: str | None = None) -> Model:
     from .member import parse_members
     from .rebar import parse_rebar_beams, parse_rebar_columns
     from .section import parse_sections
+    from .story import parse_story
     from .thickness import parse_thickness
 
     from . import detect_encoding
@@ -204,5 +206,7 @@ def read_mgt(path: str, encoding: str | None = None) -> Model:
         parse_rebar_columns(blocks["REBAR-COLUMN"], model)
     if "REBAR-BEAM" in blocks:
         parse_rebar_beams(blocks["REBAR-BEAM"], model)
+    if "STORY" in blocks:
+        parse_story(blocks["STORY"], model)
     _apply_unit_scale(model, unit_scale)   # 全長さ量をメートルへ正規化
     return model

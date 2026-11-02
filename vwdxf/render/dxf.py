@@ -6,6 +6,9 @@
   VW10J 自身が書き出す DXF と同じ形。R2010 + Standard/txt では VW10J で文字が潰れた (2026-09-19)。
   試験ファイルは works/mgtkit-dxf-kaizen/font_test/ (A〜F、ここは E 案)。
 線種は縮尺ごとに紙面寸法を焼き込んで定義する (LTSCALE の扱いが CAD ごとに違うため)。
+図形ごとの印 (部材 ID・図の ID など、Drawing IR の tag) は XDATA (アプリ名 STRUCTURAL_CAD、
+グループコード 1000 の KEY=VALUE) で付ける。VW10J などは XDATA を無視するので見た目は変わらない。
+ブロック参照は INSERT に付け、ブロック定義の中には付けない。
 """
 import math
 import os
@@ -14,9 +17,13 @@ import re
 from ..style import (ANSI31_SPACING, DASHED_PAPER_MM, DXF_CODEPAGE,
                      DXF_VERSION, GRID_DASHDOT_PAPER_MM, TEXT_STYLE,
                      TEXT_STYLE_FONT_FILE)
-from .. import ids, sections
+from .. import sections
 from ..draw.primitives import (Circle, Hatch, Line, NameRef, Poly, RebarRef, SectionRef,
                                Text, layer_color)
+
+XDATA_APP = 'STRUCTURAL_CAD'
+_XDATA_ORDER = ('MID', 'EL', 'KIND', 'CODE', 'SEC', 'SECNO', 'ROLE', 'FIG', 'FL', 'AX')
+_XDATA_MAX_BYTES = 255     # グループコード 1000 の文字列の上限
 
 _TEXT_FALLBACK = {'–': '-', '—': '-', '−': '-'}
 _ALIGN = {'BC': 'BOTTOM_CENTER', 'MC': 'MIDDLE_CENTER', 'BL': 'BOTTOM_LEFT'}
@@ -41,17 +48,34 @@ def dxf_text(txt):
     return ''.join(out)
 
 
+def set_xdata(ent, tag):
+    """図形 ent に印 tag (dict) を XDATA で付ける. 値は DXF 本体と同じ文字コード (Shift-JIS).
+
+    上限 (255 バイト) を超える値は付けない (長い EL など。付属 JSON の elements で引ける)。
+    """
+    if not tag:
+        return
+    keys = [k for k in _XDATA_ORDER if k in tag] + [k for k in tag if k not in _XDATA_ORDER]
+    items = []
+    for k in keys:
+        v = dxf_text('%s=%s' % (k, tag[k]))
+        if len(v.encode('cp932', errors='replace')) > _XDATA_MAX_BYTES:
+            continue
+        items.append((1000, v))
+    ent.set_xdata(XDATA_APP, items)
+
+
 def new_doc():
     import ezdxf
     # 寸法スタイルは使わないので入れない (入れると矢印のブロックがシンボルとして VW10J に入る)
     doc = ezdxf.new(DXF_VERSION, setup=['linetypes', 'styles'])
+    if XDATA_APP not in doc.appids:
+        doc.appids.new(XDATA_APP)
     doc.header['$INSUNITS'] = 4      # mm (ezdxf の既定は 6 = m で、VW10J が 1000 倍に読む)
     doc.header['$MEASUREMENT'] = 1   # メートル法
     if DXF_CODEPAGE:
         doc.header['$DWGCODEPAGE'] = DXF_CODEPAGE
         doc.encoding = {'ANSI_932': 'cp932'}.get(DXF_CODEPAGE, doc.encoding)
-    if ids.APPID not in doc.appids:
-        doc.appids.new(ids.APPID)      # 部材 ID の印 (XDATA)。VW10J は読み飛ばす (2026-10-13 確認)
     name, face = TEXT_STYLE
     if name not in doc.styles:
         if TEXT_STYLE_FONT_FILE:
@@ -232,25 +256,17 @@ def _rebar_block(doc, dia, r, layer='0'):
 
 
 def write_figure(fig, msp, origin=(0.0, 0.0)):
-    """Figure 1 枚をモデル空間へ書く. origin は図の置き場所のずらし.
-
-    全図形に部材 ID などの印 (XDATA、アプリ名 STRUCTURAL_CAD) を付ける (ids.py)。
-    """
+    """Figure 1 枚をモデル空間へ書く. origin は図の置き場所のずらし. → 書いた図形の list."""
     from ezdxf.enums import TextEntityAlignment
     doc = msp.doc
     ox, oy = origin
     n = fig.scale
-    fid = ids.figure_id(fig)
 
     def mv(p):
         return (p[0] + ox, p[1] + oy)
 
-    def tag(e, p):
-        if e is not None:
-            e.set_xdata(ids.APPID, ids.xdata_tags(p.meta, fid, dxf_text))
-
+    made = []
     for p in fig.prims:
-        e = None
         if isinstance(p, Poly):
             attrs = {'layer': _layer(doc, p.layer)}
             lt = _linetype(doc, p.ltype, n)
@@ -266,14 +282,14 @@ def write_figure(fig, msp, origin=(0.0, 0.0)):
         elif isinstance(p, Circle):
             e = msp.add_circle(mv(p.center), p.r, dxfattribs={'layer': _layer(doc, p.layer)})
         elif isinstance(p, Text):
-            e = t = msp.add_text(dxf_text(p.text), dxfattribs={
+            e = msp.add_text(dxf_text(p.text), dxfattribs={
                 'layer': _layer(doc, p.layer), 'height': p.height, 'rotation': p.rotation,
                 'style': TEXT_STYLE[0]})
-            t.set_placement(mv(p.pos), align=getattr(TextEntityAlignment, _ALIGN[p.align]))
+            e.set_placement(mv(p.pos), align=getattr(TextEntityAlignment, _ALIGN[p.align]))
         elif isinstance(p, Hatch):
-            e = h = msp.add_hatch(dxfattribs={'layer': _layer(doc, p.layer)})
-            h.set_pattern_fill('ANSI31', scale=p.spacing / ANSI31_SPACING)
-            h.paths.add_polyline_path([mv(q) for q in p.points], is_closed=True)
+            e = msp.add_hatch(dxfattribs={'layer': _layer(doc, p.layer)})
+            e.set_pattern_fill('ANSI31', scale=p.spacing / ANSI31_SPACING)
+            e.paths.add_polyline_path([mv(q) for q in p.points], is_closed=True)
         elif isinstance(p, SectionRef):
             e = msp.add_blockref(_section_block(doc, p), mv(p.pos), dxfattribs={
                 'layer': _layer(doc, p.layer), 'rotation': p.rotation})
@@ -283,7 +299,11 @@ def write_figure(fig, msp, origin=(0.0, 0.0)):
         elif isinstance(p, RebarRef):
             name = _rebar_block(doc, p.dia, p.r, p.layer)
             e = msp.add_blockref(name, mv(p.pos), dxfattribs={'layer': _layer(doc, p.layer)})
-        tag(e, p)
+        else:
+            continue
+        set_xdata(e, p.tag)
+        made.append(e)
+    return made
 
 
 def _layout(figs):
@@ -320,20 +340,21 @@ def _layout(figs):
     return out
 
 
-def export(figs, out_dir, name, M=None, o=None, levels=None):
-    """Figure の列 (同じ種類・同じ縮尺) → 1 つの DXF <name>.dxf. 戻り値: (ファイル, [{title, scale}]).
+layout = _layout      # 付属 JSON (render/sidecar.py) が同じ置き場所を使う
 
-    M を渡すと、同じ名前の付属 JSON <name>.json も書く (部材 ID・図の一覧。ids.build_json)。
-    """
+
+def export(figs, out_dir, name):
+    """Figure の列 (同じ種類・同じ縮尺) → 1 つの DXF <name>.dxf. 戻り値: (ファイル, [{title, scale}])."""
     os.makedirs(out_dir, exist_ok=True)
     doc = new_doc()
     msp = doc.modelspace()
-    origins = _layout(figs)
-    for fig, origin in zip(figs, origins):
-        write_figure(fig, msp, origin)
-    base = os.path.join(out_dir, name.replace('/', '_').replace('\\', '_'))
-    out = base + '.dxf'
+    from ezdxf import bbox as _bbox
+    for fig, origin in zip(figs, _layout(figs)):
+        ents = write_figure(fig, msp, origin)
+        # 付属 JSON の bbox 用: 書いた図形の範囲 (DXF 座標、文字は ezdxf のフォント計測)
+        ext = _bbox.extents(ents)
+        if ext.has_data:
+            fig.meta['dxf_extents'] = (ext.extmin.x, ext.extmin.y, ext.extmax.x, ext.extmax.y)
+    out = os.path.join(out_dir, name.replace('/', '_').replace('\\', '_') + '.dxf')
     doc.saveas(out)
-    if M is not None and figs:
-        ids.write_json(base + '.json', ids.build_json(M, figs[0].kind, figs, origins, levels, o or {}))
     return out, [{'title': f.title, 'scale': f.scale} for f in figs]

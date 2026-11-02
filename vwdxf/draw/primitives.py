@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Drawing IR — 図 1 枚分の図形 (DXF とプレビューが同じものを描く).
 
-meta = 図形の印 (部材 ID・役割など。ids.py)。DXF の XDATA (STRUCTURAL_CAD) と付属 JSON に使う。
-
 座標は原寸 mm。文字高さ・記号の大きさは作図の時点で「紙面 mm × 縮尺」にしてある。
 render/dxf.py と render/preview.py はこの型だけを見る。
+各図形の tag は部材 ID などの印 (dict)。DXF では XDATA (アプリ名 STRUCTURAL_CAD) になり、
+見た目には関わらない (2026-10-13 追加、structural-cad 向け)。
 """
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
@@ -26,7 +26,7 @@ class Poly:
     layer: str
     closed: bool = True
     ltype: Optional[str] = None
-    meta: Optional[dict] = field(default=None, repr=False, compare=False)
+    tag: Optional[dict] = None
 
 
 @dataclass
@@ -35,7 +35,7 @@ class Line:
     p2: Point
     layer: str
     ltype: Optional[str] = None
-    meta: Optional[dict] = field(default=None, repr=False, compare=False)
+    tag: Optional[dict] = None
 
 
 @dataclass
@@ -43,7 +43,7 @@ class Circle:
     center: Point
     r: float
     layer: str
-    meta: Optional[dict] = field(default=None, repr=False, compare=False)
+    tag: Optional[dict] = None
 
 
 @dataclass
@@ -54,7 +54,7 @@ class Text:
     layer: str
     align: str = 'BC'        # 'BC'=下中央 / 'MC'=中央 / 'BL'=左下
     rotation: float = 0.0
-    meta: Optional[dict] = field(default=None, repr=False, compare=False)
+    tag: Optional[dict] = None
 
 
 @dataclass
@@ -63,7 +63,7 @@ class Hatch:
     points: List[Point]
     layer: str
     spacing: float
-    meta: Optional[dict] = field(default=None, repr=False, compare=False)
+    tag: Optional[dict] = None
 
 
 @dataclass
@@ -79,7 +79,7 @@ class SectionRef:
     rotation: float
     layer: str
     down: bool = False
-    meta: Optional[dict] = field(default=None, repr=False, compare=False)
+    tag: Optional[dict] = None
 
 
 @dataclass
@@ -91,7 +91,7 @@ class NameRef:
     height: float
     rotation: float
     layer: str
-    meta: Optional[dict] = field(default=None, repr=False, compare=False)
+    tag: Optional[dict] = None
 
 
 @dataclass
@@ -101,7 +101,7 @@ class RebarRef:
     pos: Point
     r: float
     layer: str
-    meta: Optional[dict] = field(default=None, repr=False, compare=False)
+    tag: Optional[dict] = None
 
 
 @dataclass
@@ -115,7 +115,65 @@ class Figure:
     sheet: Optional[str] = None                  # 木造の伏図: 'beam' / 'column' / 'full'
     frame_box: Optional[Tuple[float, float, float, float]] = None   # 並べるときの基準範囲 [mm]
     dirkey: Optional[str] = None                 # 軸組図の向き 'x' / 'y' / None (斜め)
-    info: dict = field(default_factory=dict)     # 付属 JSON 用 (名前・頁・断面・構面の向き など)
+    fig_id: str = ''                             # 図の ID (XDATA の FIG・付属 JSON の figures[].id)
+    meta: dict = field(default_factory=dict)     # 付属 JSON 用 (grids / levels / members / origin)
+
+
+# ---------------------------------------------------------------------------
+# 部材 ID の印 (XDATA STRUCTURAL_CAD の KEY=VALUE。仕様は vwdxf/README.md「部材 ID と付属 JSON」)
+# ---------------------------------------------------------------------------
+
+def figure_id(kind, name, variant=None, page=None):
+    """図の ID. XDATA の FIG と付属 JSON の figures[].id はここだけで作る.
+
+    伏図 plan:<床名>[:beam|:column] (木造の 1 枚もの 'full' は付けない) /
+    軸組図 axis:<通り名> / 部材リスト list:<題名>[:<頁>] (複数ページのときだけ頁)。
+    """
+    parts = [kind, str(name)]
+    if variant and variant != 'full':
+        parts.append(str(variant))
+    if page:
+        parts.append(str(page))
+    return ':'.join(parts)
+
+
+def member_kind(m):
+    """KIND の値: トラス要素は 'truss'、それ以外は column / beam / brace."""
+    return 'truss' if m['truss'] else m['kind']
+
+
+def member_tag(m, role, **extra):
+    """線材 m (members.py の member) の印. MID = 代表の要素番号、EL = 結合した要素 (2 つ以上のとき)."""
+    tag = {'MID': m['elem']}
+    if len(m['eles']) > 1:
+        tag['EL'] = ','.join(str(e) for e in m['eles'])
+    tag['KIND'] = member_kind(m)
+    if m['code']:
+        tag['CODE'] = m['code']
+    tag['SEC'] = m['sec_name']
+    tag['ROLE'] = role
+    tag.update(extra)
+    return tag
+
+
+def wall_tag(el_id, name, role, **extra):
+    """面要素の壁の印. MID = 面要素の要素番号、CODE = 板厚の名前."""
+    tag = {'MID': int(el_id), 'KIND': 'wall'}
+    if name:
+        tag['CODE'] = name
+    tag['ROLE'] = role
+    tag.update(extra)
+    return tag
+
+
+def stamp(prims, fig_id):
+    """図の全図形に FIG を入れる. 印の無い図形は ROLE=other."""
+    for p in prims:
+        if p.tag is None:
+            p.tag = {'ROLE': 'other'}
+        p.tag.setdefault('ROLE', 'other')
+        p.tag['FIG'] = fig_id
+    return prims
 
 
 def prims_bounds(prims):

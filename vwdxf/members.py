@@ -14,8 +14,6 @@ Model IR (read/) から、作図で使う「部材」(member) を組み立てる
 """
 import math
 
-import re
-
 import numpy as np
 
 from . import sections
@@ -136,76 +134,6 @@ def plan_dir(m):
     return v / L if L > 1e-12 else None
 
 
-BEAM_LEVEL_MODES = ('top', 'center', 'bottom', 'offset')
-_BEAM_LEVEL_WORDS = {'天端': 'top', 'top': 'top', '芯': 'center', '中心': 'center', 'center': 'center',
-                     '下端': 'bottom', 'bottom': 'bottom'}
-
-
-def parse_beam_level_overrides(text):
-    """「G1=下端, WG2=-50, 12=芯」→ {キー: (mode, offset_mm)}. キーは符号 (文字列) か断面番号 (int).
-
-    値: 天端 / 芯 / 下端、または数値 (= 天端を節点から その mm だけ上げる。下げるときは −)。
-    区切りは , 、 ; 改行。読めない指定は ValueError (画面に出す)。
-    """
-    out = {}
-    for tok in [t.strip() for t in re.split(r'[,、;；\n]+', str(text or '')) if t.strip()]:
-        if '=' not in tok and '＝' not in tok:
-            raise ValueError('梁のレベルの指定「%s」は「符号=天端」の形で書いてください' % tok)
-        k, v = re.split(r'[=＝]', tok, 1)
-        k, v = k.strip(), v.strip().replace('＋', '+').replace('−', '-').replace('ー', '-')
-        if not k or not v:
-            raise ValueError('梁のレベルの指定「%s」が読めません' % tok)
-        key = int(k) if k.isdigit() else k
-        if v in _BEAM_LEVEL_WORDS:
-            out[key] = (_BEAM_LEVEL_WORDS[v], 0.0)
-        else:
-            try:
-                out[key] = ('offset', float(v.replace('mm', '')))
-            except ValueError:
-                raise ValueError('梁のレベルの指定「%s」の値は 天端・芯・下端 か mm の数値にしてください' % tok)
-    return out
-
-
-def beam_shift_fn(spec=None):
-    """梁のレベルの指定 → g(部材, 半せい[m]) = 梁の芯を節点から上へ動かす量 [m].
-
-    MATLAB 版 (figure_dxf.m の Glevel / G_up) と同じ規則:
-      top    (Glevel=Inf)  節点 = 天端      → g = -半せい   (vwdxf の既定)
-      center (Glevel=0)    節点 = 芯        → g = 0
-      bottom (Glevel=-Inf) 節点 = 下端      → g = +半せい
-      offset (Glevel=1)    天端 = 節点 + 値 → g = 値 - 半せい (値は mm、上が +)
-    spec = None / 'top' などの文字列 / {'mode', 'offset_mm', 'overrides'}。
-    overrides = {符号 or 断面番号: (mode, offset_mm)} は MATLAB の断面ごとの Glevel に当たる (符号でも引ける)。
-    """
-    if callable(spec):
-        return spec
-    if spec is None or isinstance(spec, str):
-        spec = {'mode': spec or 'top'}
-    mode0 = spec.get('mode') or 'top'
-    off0 = float(spec.get('offset_mm') or 0.0)
-    ov = spec.get('overrides') or {}
-
-    def _g(mode, off_mm, half):
-        if mode == 'center':
-            return 0.0
-        if mode == 'bottom':
-            return half
-        if mode == 'offset':
-            return off_mm / 1000.0 - half
-        return -half
-
-    def g(member, half):
-        mode, off = mode0, off0
-        if ov and member is not None:
-            hit = ov.get(member.get('code')) if member.get('code') else None
-            if hit is None:
-                hit = ov.get(int(member.get('sec_no', -1)))
-            if hit is not None:
-                mode, off = hit
-        return _g(mode, off, half)
-    return g
-
-
 def end_extension(M, mi, beam_level='center'):
     """部材 mi の (1 端, 2 端) の軸方向の延長量 [m] (struct_cad members.end_extension).
 
@@ -228,16 +156,17 @@ def end_extension(M, mi, beam_level='center'):
         order = (0.0, 0.0)
     my_pd = plan_dir(me)
 
-    # 梁のレベル: 'top' / 'center' / 'bottom' か beam_shift_fn の関数 (相手の部材ごとにずらす量を返す)。
-    # 柱の端は、取り付く相手の梁の面 (= 節点 + ずらす量 ± 半幅) まで延ばす (相手ごとに求めて大きい方)。
-    gfn = beam_shift_fn(beam_level)
+    def _gup(half):
+        if beam_level == 'top':
+            return -half
+        if beam_level == 'bottom':
+            return half
+        return 0.0
 
     ext = [0.0, 0.0]
     for k, node in enumerate((int(me['n1']), int(me['n2']))):
         best = 0.0
         best_sup = 0.0
-        best_o = sup_o = None
-        col_ext = None            # 柱: 相手ごとの (半幅 + ずらす量 × 向き) の最大
         for j in M.node_all.get(node, []):
             if j == mi:
                 continue
@@ -249,28 +178,21 @@ def end_extension(M, mi, beam_level='center'):
                 if my_pd is not None and opd is not None \
                         and abs(float(np.dot(my_pd, opd))) > 0.985:
                     continue          # 平行 (継手) は相手にしない
-                h = apparent_half(me, other)
-                if h > best_sup:
-                    best_sup, sup_o = h, other      # 直交 = 支持梁
+                best_sup = max(best_sup, apparent_half(me, other))   # 直交 = 支持梁
             else:
-                h = apparent_half(me, other)
-                if h > best:
-                    best, best_o = h, other
-                if kind == 'column' and h > 0:
-                    c = h + gfn(other, h) * order[k]
-                    col_ext = c if col_ext is None else max(col_ext, c)
+                best = max(best, apparent_half(me, other))
         if released[k]:
-            supp, so = (best, best_o) if best >= best_sup else (best_sup, sup_o)
+            supp = max(best, best_sup)
             if supp <= 0:
                 ext[k] = 0.0
             elif kind == 'column':
-                ext[k] = -(supp + own_half) + gfn(so, supp) * order[k]
+                ext[k] = -(supp + own_half) + _gup(supp) * order[k]
             else:
                 ext[k] = -(supp + own_half)
         elif best <= 0:
             ext[k] = 0.0
         elif kind == 'column':
-            ext[k] = col_ext
+            ext[k] = best + _gup(best) * order[k]
         else:
             ext[k] = best
     return ext[0], ext[1]
@@ -539,6 +461,34 @@ def plan_keys(M):
     return [dict(p) for p in M._plans]
 
 
+def member_floor_groups(M):
+    """部材番号 → 床グループの名前の list (低い順、伏図の候補の順).
+
+    梁・斜材は ELEM_LIST に入っている床グループ、柱は下端の節点が床の節点に入っている床グループ
+    (伏図と同じく「上に立つ柱」の床)。どれにも無い部材は入れない。
+    """
+    if not hasattr(M, '_member_floor_groups'):
+        out = {}
+        for p in plan_keys(M):
+            g = p['label']
+            for i in group_members(M, g):
+                if M.members[i]['kind'] != 'column':
+                    out.setdefault(i, []).append(g)
+            nodes = set(group_floor_nodes(M, g))
+            for i, m in enumerate(M.members):
+                if m['kind'] == 'column':
+                    low = m['n1'] if float(m['p1'][2]) <= float(m['p2'][2]) else m['n2']
+                    if low in nodes:
+                        out.setdefault(i, []).append(g)
+        M._member_floor_groups = out
+    return M._member_floor_groups
+
+
+def member_floors(M):
+    """部材番号 → 床の名前 (軸組図の部材の XDATA FL 用) = member_floor_groups の先頭 (低い床)."""
+    return {i: gs[0] for i, gs in member_floor_groups(M).items()}
+
+
 def plan_levels(M):
     return [plan_key_z(M, p['key']) for p in plan_keys(M)]
 
@@ -651,8 +601,9 @@ __all__ = [
     'GRID_OVERHANG_M', 'StructModel', 'TRUSS_END_FACTOR', 'TRUSS_TYPES',
     '_member_in_group', '_note_once', 'apparent_half', 'auto_frames', 'axis_direction',
     'build_struct_model', 'classify', 'columns_at_node', 'elevation_section_angle',
-    'BEAM_LEVEL_MODES', 'beam_shift_fn', 'end_extension', 'ensure_surfaces', 'floor_levels', 'frame_dir', 'frame_dir_extents',
-    'frame_geometry', 'frame_label', 'group_floor_nodes', 'group_members', 'member_ends', 'parse_beam_level_overrides',
-    'plan_dir', 'plan_key_is_flat', 'plan_key_z', 'plan_keys', 'plan_levels', 'plan_width',
-    'plane_inclination', 'plans_extent', 'section_extent', 'wood_plan_sheets', 'wood_top_z',
+    'end_extension', 'ensure_surfaces', 'floor_levels', 'frame_dir', 'frame_dir_extents',
+    'frame_geometry', 'frame_label', 'group_floor_nodes', 'group_members', 'member_ends',
+    'member_floor_groups', 'member_floors', 'plan_dir', 'plan_key_is_flat', 'plan_key_z', 'plan_keys', 'plan_levels',
+    'plan_width', 'plane_inclination', 'plans_extent', 'section_extent', 'wood_plan_sheets',
+    'wood_top_z',
 ]
