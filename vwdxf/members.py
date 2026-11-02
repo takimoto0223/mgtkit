@@ -461,6 +461,34 @@ def plan_keys(M):
     return [dict(p) for p in M._plans]
 
 
+def member_floor_groups(M):
+    """部材番号 → 床グループの名前の list (低い順、伏図の候補の順).
+
+    梁・斜材は ELEM_LIST に入っている床グループ、柱は下端の節点が床の節点に入っている床グループ
+    (伏図と同じく「上に立つ柱」の床)。どれにも無い部材は入れない。
+    """
+    if not hasattr(M, '_member_floor_groups'):
+        out = {}
+        for p in plan_keys(M):
+            g = p['label']
+            for i in group_members(M, g):
+                if M.members[i]['kind'] != 'column':
+                    out.setdefault(i, []).append(g)
+            nodes = set(group_floor_nodes(M, g))
+            for i, m in enumerate(M.members):
+                if m['kind'] == 'column':
+                    low = m['n1'] if float(m['p1'][2]) <= float(m['p2'][2]) else m['n2']
+                    if low in nodes:
+                        out.setdefault(i, []).append(g)
+        M._member_floor_groups = out
+    return M._member_floor_groups
+
+
+def member_floors(M):
+    """部材番号 → 床の名前 (軸組図の部材の XDATA FL 用) = member_floor_groups の先頭 (低い床)."""
+    return {i: gs[0] for i, gs in member_floor_groups(M).items()}
+
+
 def plan_levels(M):
     return [plan_key_z(M, p['key']) for p in plan_keys(M)]
 
@@ -575,6 +603,7 @@ __all__ = [
     'build_struct_model', 'classify', 'columns_at_node', 'elevation_section_angle',
     'end_extension', 'ensure_surfaces', 'floor_levels', 'frame_dir', 'frame_dir_extents',
     'frame_geometry', 'frame_label', 'group_floor_nodes', 'group_members', 'member_ends',
-    'plan_dir', 'plan_key_is_flat', 'plan_key_z', 'plan_keys', 'plan_levels', 'plan_width',
-    'plane_inclination', 'plans_extent', 'section_extent', 'wood_plan_sheets', 'wood_top_z',
+    'member_floor_groups', 'member_floors', 'plan_dir', 'plan_key_is_flat', 'plan_key_z', 'plan_keys', 'plan_levels',
+    'plan_width', 'plane_inclination', 'plans_extent', 'section_extent', 'wood_plan_sheets',
+    'wood_top_z',
 ]

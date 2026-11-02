@@ -13,13 +13,14 @@ vwdxf の追加: 通り芯・レベル線にする通りとフロアは画面で
 """
 from .. import sections
 from ..members import (elevation_section_angle, frame_dir, frame_geometry, group_members,
-                       member_ends, plan_dir, section_extent)
+                       member_ends, member_floors, plan_dir, section_extent)
 from ..style import (LAYER_MEMBER, LAYER_SECTION, LAYER_TEXT, LAYER_TITLE, LAYER_TRUSS,
                      LAYER_WALL_ELEV, WALL_HATCH_PAPER_MM)
 from .figure import (LABEL_GAP_RATIO, auto_scale, canon_normal, elevation_grid_prims,
                      frame_common_extent, grid_lines, level_lines, level_prims, text_width,
                      width_rect)
-from .primitives import Figure, Hatch, Line, NameRef, Poly, SectionRef, Text, prims_bounds
+from .primitives import (Figure, Hatch, Line, NameRef, Poly, SectionRef, Text, figure_id,
+                         member_tag, prims_bounds, stamp, wall_tag)
 
 
 def build_elevation(M, key, scale=None, paper='A3', text_paper_mm=2.5, grids=None,
@@ -44,10 +45,17 @@ def build_elevation(M, key, scale=None, paper='A3', text_paper_mm=2.5, grids=Non
     n = int(scale) if scale else auto_scale(w_mm, h_mm, paper)
     th = text_paper_mm * n
     P = []
+    floors = member_floors(M)
+
+    def fl(i):          # 部材の床 (XDATA FL)。床グループに無い部材は付けない
+        return {'FL': floors[i]} if i in floors else {}
+
+    mids = {}       # 図に出た部材: MID → 付属 JSON 用の手がかり (出た順)
 
     # 通り芯とレベル線 (背面)
     P += elevation_grid_prims(M, dvec, c, u0, span, grid_lines(M, grids), n, grid_paper_mm, gname)
-    P += level_prims(level_lines(M, levels), u0, span, n, grid_paper_mm)
+    lvls = level_lines(M, levels)
+    P += level_prims(lvls, u0, span, n, grid_paper_mm)
 
     # 壁・面要素 (部材の背面)
     eles = set(int(e) for e in group.elem_ids)
@@ -55,13 +63,16 @@ def build_elevation(M, key, scale=None, paper='A3', text_paper_mm=2.5, grids=Non
         if el.is_line or el.id not in eles or any(k not in M.node_xyz for k in el.nodes):
             continue
         pts = [to2d(M.node_xyz[k]) for k in el.nodes]
-        P.append(Hatch(pts, LAYER_WALL_ELEV[0], WALL_HATCH_PAPER_MM * n))
-        P.append(Poly(pts, LAYER_WALL_ELEV[0]))
         name = M.ir.thickness_names.get(el.prop, '')
+        P.append(Hatch(pts, LAYER_WALL_ELEV[0], WALL_HATCH_PAPER_MM * n,
+                       tag=wall_tag(el.id, name, 'hatch', AX=gname)))
+        P.append(Poly(pts, LAYER_WALL_ELEV[0], tag=wall_tag(el.id, name, 'outline', AX=gname)))
+        mids.setdefault(int(el.id), ('wall', int(el.id), True))
         if name:
             cx = sum(p[0] for p in pts) / len(pts)
             cy = sum(p[1] for p in pts) / len(pts)
-            P.append(NameRef(sections.name_block(name), name, (cx, cy), th, 0.0, LAYER_TEXT[0]))
+            P.append(NameRef(sections.name_block(name), name, (cx, cy), th, 0.0, LAYER_TEXT[0],
+                             tag=wall_tag(el.id, name, 'code', AX=gname)))
 
     # 部材
     for i in idx:
@@ -76,10 +87,12 @@ def build_elevation(M, key, scale=None, paper='A3', text_paper_mm=2.5, grids=Non
             layer = LAYER_MEMBER['column' if m['kind'] == 'column' else 'beam'][0]
         e1, e2 = member_ends(M, i, 'top')
         rect = width_rect(p1, p2, w, (e1 * 1000.0, e2 * 1000.0), g_up)
+        tag = member_tag(m, 'outline', AX=gname, **fl(i))
         if rect is None:
-            P.append(Line(p1, p2, layer))
+            P.append(Line(p1, p2, layer, tag=tag))
         else:
-            P.append(Poly(rect, layer))
+            P.append(Poly(rect, layer, tag=tag))
+        mids.setdefault(m['elem'], ('line', i, True))
         if m['code']:
             dx, dy = p2[0] - p1[0], p2[1] - p1[1]
             L = (dx * dx + dy * dy) ** 0.5
@@ -96,7 +109,7 @@ def build_elevation(M, key, scale=None, paper='A3', text_paper_mm=2.5, grids=Non
                     d = (0.0 if m['kind'] == 'beam' else wmax / 2.0) + gap + th / 2.0
                     pos = (mid[0] + nx * d, mid[1] + ny * d)
                 P.append(NameRef(sections.name_block(m['code']), m['code'], pos, th, 0.0,
-                                 LAYER_TEXT[0]))
+                                 LAYER_TEXT[0], tag=member_tag(m, 'code', AX=gname, **fl(i))))
 
     # 面外から取り付く梁の断面記号 (節点ごとに 1 つ)
     in_group = set(idx)
@@ -118,16 +131,31 @@ def build_elevation(M, key, scale=None, paper='A3', text_paper_mm=2.5, grids=Non
             u, z = to2d(M.node_xyz[k])
             sym = o['code'] or 'S%d' % o['sec_no']
             P.append(SectionRef(sections.block_name(sym), o['sec'], (u, z - hv * 1000.0),
-                                elevation_section_angle(o, dvec), LAYER_SECTION['beam'][0]))
+                                elevation_section_angle(o, dvec), LAYER_SECTION['beam'][0],
+                                tag=member_tag(o, 'section', AX=gname, **fl(j))))
+            mids.setdefault(o['elem'], ('line', j, False))     # 面外の梁 (断面記号だけ)
             break
 
     # 見出し: 通りの名前を構面の上 1m、中央に
     P.append(Text(((min(us) + max(us)) / 2.0 * 1000.0, max(zs) * 1000.0 + 1000.0), gname,
-                  grid_paper_mm * n, LAYER_TITLE[0], 'MC'))
+                  grid_paper_mm * n, LAYER_TITLE[0], 'MC', tag={'ROLE': 'title', 'AX': gname}))
+    fid = figure_id('axis', gname)
+    stamp(P, fid)
+    # 付属 JSON: 通り芯 (縦線の u 位置)・レベル (梁天の高さ)・基準点 (左の通り芯 × 下のレベル)
+    gx = sorted(({'name': p.tag['AX'], 'coord': p.p1[0]} for p in P
+                 if isinstance(p, Line) and p.tag.get('ROLE') == 'grid'),
+                key=lambda g: g['coord'])
+    lv = sorted(({'name': lb, 'z': z * 1000.0} for lb, z in lvls), key=lambda v: v['z'])
+    ox = gx[0]['coord'] if gx else u0 * 1000.0
+    oz = lv[0]['z'] if lv else min(zs) * 1000.0
+    meta = {'name': gname, 'grids': {'X': gx, 'Y': []}, 'levels': lv, 'members': mids,
+            'frame_dir': (float(dvec[0]), float(dvec[1])),
+            'frame_point': (float(c[0]), float(c[1])),     # 構面が通る点 (モデルの X・Y [m])
+            'origin': (ox, oz), 'origin_from': 'grid' if gx and lv else 'extent'}
     return Figure('axis', str(key), gname, n, prims_bounds(P), P,
                   frame_box=(u0 * 1000.0, min(zs) * 1000.0, (u0 + span) * 1000.0,
                              max(zs) * 1000.0),
-                  dirkey=frame_dir(dvec))
+                  dirkey=frame_dir(dvec), fig_id=fid, meta=meta)
 
 
 __all__ = ['build_elevation']

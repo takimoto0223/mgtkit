@@ -142,7 +142,9 @@ def grid_lines(M, keys):
 
 
 def _bubble(center, label, r, th):
-    return [Circle(center, r, LAYER_TEXT[0]), Text(center, label, th, LAYER_TEXT[0], 'MC')]
+    tag = {'ROLE': 'grid-mark', 'AX': label}
+    return [Circle(center, r, LAYER_TEXT[0], tag=dict(tag)),
+            Text(center, label, th, LAYER_TEXT[0], 'MC', tag=dict(tag))]
 
 
 def plan_grid_prims(M, lines, n_scale, grid_mm):
@@ -168,7 +170,7 @@ def plan_grid_prims(M, lines, n_scale, grid_mm):
         t0, t1 = t0 - GRID_OVERHANG_M, t1 + GRID_OVERHANG_M
         a = ((p[0] + d[0] * t0) * 1000.0, (p[1] + d[1] * t0) * 1000.0)
         b = ((p[0] + d[0] * t1) * 1000.0, (p[1] + d[1] * t1) * 1000.0)
-        out.append(Line(a, b, LAYER_GRID[0], 'grid'))
+        out.append(Line(a, b, LAYER_GRID[0], 'grid', tag={'ROLE': 'grid', 'AX': label}))
         out += _bubble((a[0] - d[0] * r, a[1] - d[1] * r), label, r, th)
     return out
 
@@ -200,7 +202,8 @@ def elevation_grid_prims(M, dvec, c, u0, span, lines, n_scale, grid_mm, self_nam
         if any(abs(u - v) < 1.0 for v in seen):
             continue
         seen.append(u)
-        out.append(Line((u, z_lo - OVER), (u, z_hi + OVER), LAYER_GRID[0], 'grid'))
+        out.append(Line((u, z_lo - OVER), (u, z_hi + OVER), LAYER_GRID[0], 'grid',
+                        tag={'ROLE': 'grid', 'AX': label}))
         out += _bubble((u, z_lo - OVER - r), label, r, th)
     return out
 
@@ -232,8 +235,10 @@ def level_prims(levels, u0, span, n_scale, grid_mm):
     out = []
     for label, z in levels:
         zz = z * 1000.0
-        out.append(Line((a, zz), (b, zz), LAYER_GRID[0], 'grid'))
-        out.append(Text((a - 2 * r, zz), '▽' + label, th, LAYER_TEXT[0], 'MC'))
+        out.append(Line((a, zz), (b, zz), LAYER_GRID[0], 'grid',
+                        tag={'ROLE': 'level', 'FL': label}))
+        out.append(Text((a - 2 * r, zz), '▽' + label, th, LAYER_TEXT[0], 'MC',
+                        tag={'ROLE': 'level-mark', 'FL': label}))
     return out
 
 
