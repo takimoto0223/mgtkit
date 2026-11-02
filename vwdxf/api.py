@@ -7,11 +7,13 @@ routes.py (画面) からはここの関数だけを呼ぶ。読み込み結果�
 import os
 import threading
 
-from .members import (auto_frames, build_struct_model, plan_key_is_flat, plan_key_z, plan_keys,
+from .members import (BEAM_LEVEL_MODES, auto_frames, build_struct_model,
+                      parse_beam_level_overrides, plan_key_is_flat, plan_key_z, plan_keys,
                       plan_levels, wood_plan_sheets, wood_top_z)
 from .style import DEFAULT_LIMIT_SEC_NO, GRID_PT_DEFAULT, PT_MM, TEXT_PT_DEFAULT
 from .draw.elevation import build_elevation
 from .draw.parts_list import LIST_SCALE_DEFAULT, build_list_figures, list_categories
+from .draw.figure import level_lines
 from .draw.plan import build_plan
 from .render import dxf as _dxf
 from .render import preview as _preview
@@ -57,7 +59,8 @@ def info(M):
 
 def axis_figure(M, key, o):
     return build_elevation(M, key, o['scale'], o['paper'], o['text_mm'], grids=o['grids'],
-                           levels=o['level_lines'], grid_paper_mm=o['grid_mm'])
+                           levels=o['level_lines'], wood=o['wood'], grid_paper_mm=o['grid_mm'],
+                           beam_level=o['beam_level'])
 
 
 def plan_figures(M, key, o, top_z=None, sheet=None):
@@ -85,7 +88,25 @@ def options(p):
         'level_lines': list(p.get('level_lines') or []),
         'wood': bool(p.get('wood')),
         'list_categories': list(p.get('list_categories') or []),
+        'beam_level': beam_level_option(p),
     }
+
+
+def beam_level_option(p):
+    """画面の「梁のレベル」→ members.beam_shift_fn の指定 (軸組図だけに効く。利用者の指定 2026-10-31).
+
+    beam_level = top (節点 = 天端、既定) / center (芯) / bottom (下端) / offset (天端を節点から beam_offset mm 上げる)、
+    beam_level_overrides = 「G1=下端, WG2=-50, 12=芯」(符号か断面番号ごと。MATLAB 版の Glevel に当たる)。
+    """
+    mode = str(p.get('beam_level') or 'top')
+    if mode not in BEAM_LEVEL_MODES:
+        raise ValueError('梁のレベルの指定 %s が読めません' % mode)
+    try:
+        off = float(p.get('beam_offset') or 0.0)
+    except (TypeError, ValueError):
+        raise ValueError('梁のレベルの寸法 (mm) は数値で入れてください')
+    return {'mode': mode, 'offset_mm': off,
+            'overrides': parse_beam_level_overrides(p.get('beam_level_overrides') or '')}
 
 
 def list_figures(M, o, categories):
@@ -127,10 +148,24 @@ def export(path, out_dir, axes, levels, o, limit_sec_no=DEFAULT_LIMIT_SEC_NO):
     made, info_ = [], []
     for name, part in figs.items():
         if part:
-            f, i = _dxf.export(part, out_dir, '%s_%s' % (base, name))
+            # 付属 JSON (同じ名前の .json: 部材 ID・図の一覧。structural-cad が読む) も書く
+            f, i = _dxf.export(part, out_dir, '%s_%s' % (base, name), M=M, o=o,
+                               levels=level_lines(M, o['level_lines']))
             made.append(f)
+            js = os.path.splitext(f)[0] + '.json'
+            if os.path.exists(js):
+                made.append(js)          # 付属 JSON も画面のダウンロードに並べる
             info_ += i
     return made, info_
+
+
+def zip_files(files, zip_path):
+    """書き出したファイルを 1 つの zip にまとめる (中のファイル名はそのまま、UTF-8 の名前) → zip のパス."""
+    import zipfile
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            z.write(f, os.path.basename(f))
+    return zip_path
 
 
 def preview(path, out_path, kind, key, o, limit_sec_no=DEFAULT_LIMIT_SEC_NO, sheet=None, page=1):

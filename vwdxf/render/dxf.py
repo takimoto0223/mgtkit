@@ -14,7 +14,7 @@ import re
 from ..style import (ANSI31_SPACING, DASHED_PAPER_MM, DXF_CODEPAGE,
                      DXF_VERSION, GRID_DASHDOT_PAPER_MM, TEXT_STYLE,
                      TEXT_STYLE_FONT_FILE)
-from .. import sections
+from .. import ids, sections
 from ..draw.primitives import (Circle, Hatch, Line, NameRef, Poly, RebarRef, SectionRef,
                                Text, layer_color)
 
@@ -50,6 +50,8 @@ def new_doc():
     if DXF_CODEPAGE:
         doc.header['$DWGCODEPAGE'] = DXF_CODEPAGE
         doc.encoding = {'ANSI_932': 'cp932'}.get(DXF_CODEPAGE, doc.encoding)
+    if ids.APPID not in doc.appids:
+        doc.appids.new(ids.APPID)      # 部材 ID の印 (XDATA)。VW10J は読み飛ばす (2026-10-13 確認)
     name, face = TEXT_STYLE
     if name not in doc.styles:
         if TEXT_STYLE_FONT_FILE:
@@ -230,48 +232,58 @@ def _rebar_block(doc, dia, r, layer='0'):
 
 
 def write_figure(fig, msp, origin=(0.0, 0.0)):
-    """Figure 1 枚をモデル空間へ書く. origin は図の置き場所のずらし."""
+    """Figure 1 枚をモデル空間へ書く. origin は図の置き場所のずらし.
+
+    全図形に部材 ID などの印 (XDATA、アプリ名 STRUCTURAL_CAD) を付ける (ids.py)。
+    """
     from ezdxf.enums import TextEntityAlignment
     doc = msp.doc
     ox, oy = origin
     n = fig.scale
+    fid = ids.figure_id(fig)
 
     def mv(p):
         return (p[0] + ox, p[1] + oy)
 
+    def tag(e, p):
+        if e is not None:
+            e.set_xdata(ids.APPID, ids.xdata_tags(p.meta, fid, dxf_text))
+
     for p in fig.prims:
+        e = None
         if isinstance(p, Poly):
             attrs = {'layer': _layer(doc, p.layer)}
             lt = _linetype(doc, p.ltype, n)
             if lt:
                 attrs['linetype'] = lt
-            msp.add_lwpolyline([mv(q) for q in p.points], close=p.closed, dxfattribs=attrs)
+            e = msp.add_lwpolyline([mv(q) for q in p.points], close=p.closed, dxfattribs=attrs)
         elif isinstance(p, Line):
             attrs = {'layer': _layer(doc, p.layer)}
             lt = _linetype(doc, p.ltype, n)
             if lt:
                 attrs['linetype'] = lt
-            msp.add_line(mv(p.p1), mv(p.p2), dxfattribs=attrs)
+            e = msp.add_line(mv(p.p1), mv(p.p2), dxfattribs=attrs)
         elif isinstance(p, Circle):
-            msp.add_circle(mv(p.center), p.r, dxfattribs={'layer': _layer(doc, p.layer)})
+            e = msp.add_circle(mv(p.center), p.r, dxfattribs={'layer': _layer(doc, p.layer)})
         elif isinstance(p, Text):
-            t = msp.add_text(dxf_text(p.text), dxfattribs={
+            e = t = msp.add_text(dxf_text(p.text), dxfattribs={
                 'layer': _layer(doc, p.layer), 'height': p.height, 'rotation': p.rotation,
                 'style': TEXT_STYLE[0]})
             t.set_placement(mv(p.pos), align=getattr(TextEntityAlignment, _ALIGN[p.align]))
         elif isinstance(p, Hatch):
-            h = msp.add_hatch(dxfattribs={'layer': _layer(doc, p.layer)})
+            e = h = msp.add_hatch(dxfattribs={'layer': _layer(doc, p.layer)})
             h.set_pattern_fill('ANSI31', scale=p.spacing / ANSI31_SPACING)
             h.paths.add_polyline_path([mv(q) for q in p.points], is_closed=True)
         elif isinstance(p, SectionRef):
-            msp.add_blockref(_section_block(doc, p), mv(p.pos), dxfattribs={
+            e = msp.add_blockref(_section_block(doc, p), mv(p.pos), dxfattribs={
                 'layer': _layer(doc, p.layer), 'rotation': p.rotation})
         elif isinstance(p, NameRef):
-            msp.add_blockref(_name_block(doc, p), mv(p.pos), dxfattribs={
+            e = msp.add_blockref(_name_block(doc, p), mv(p.pos), dxfattribs={
                 'layer': _layer(doc, p.layer), 'rotation': p.rotation})
         elif isinstance(p, RebarRef):
             name = _rebar_block(doc, p.dia, p.r, p.layer)
-            msp.add_blockref(name, mv(p.pos), dxfattribs={'layer': _layer(doc, p.layer)})
+            e = msp.add_blockref(name, mv(p.pos), dxfattribs={'layer': _layer(doc, p.layer)})
+        tag(e, p)
 
 
 def _layout(figs):
@@ -308,13 +320,20 @@ def _layout(figs):
     return out
 
 
-def export(figs, out_dir, name):
-    """Figure の列 (同じ種類・同じ縮尺) → 1 つの DXF <name>.dxf. 戻り値: (ファイル, [{title, scale}])."""
+def export(figs, out_dir, name, M=None, o=None, levels=None):
+    """Figure の列 (同じ種類・同じ縮尺) → 1 つの DXF <name>.dxf. 戻り値: (ファイル, [{title, scale}]).
+
+    M を渡すと、同じ名前の付属 JSON <name>.json も書く (部材 ID・図の一覧。ids.build_json)。
+    """
     os.makedirs(out_dir, exist_ok=True)
     doc = new_doc()
     msp = doc.modelspace()
-    for fig, origin in zip(figs, _layout(figs)):
+    origins = _layout(figs)
+    for fig, origin in zip(figs, origins):
         write_figure(fig, msp, origin)
-    out = os.path.join(out_dir, name.replace('/', '_').replace('\\', '_') + '.dxf')
+    base = os.path.join(out_dir, name.replace('/', '_').replace('\\', '_'))
+    out = base + '.dxf'
     doc.saveas(out)
+    if M is not None and figs:
+        ids.write_json(base + '.json', ids.build_json(M, figs[0].kind, figs, origins, levels, o or {}))
     return out, [{'title': f.title, 'scale': f.scale} for f in figs]

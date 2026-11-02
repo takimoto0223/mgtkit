@@ -14,11 +14,11 @@
         <label class="inline"><input type="radio" name="vdx_mode" value="other"
           checked onchange="vdxRefreshPrevSel()"> 木造以外 (伏図1枚)</label>
         <label class="inline"><input type="radio" name="vdx_mode" value="wood"
-          onchange="vdxRefreshPrevSel()"> 木造 (伏図2枚: 梁伏図・柱伏図)</label>
+          onchange="vdxRefreshPrevSel()"> 木造 (伏図2枚: 梁伏図・柱壁図)</label>
       </div>
       <div class="row">
         <span class="hint">木造では最上階以外の伏図を2枚にします。梁伏図=梁は実線と梁符号、
-          柱は断面のみ / 柱伏図=梁は破線 (S-Yellow20破線)・梁符号なし、柱符号、その床から立ち上がる壁
+          柱は断面のみ / 柱壁図=梁は破線 (S-Yellow20破線)・梁符号なし、柱符号、その床から立ち上がる壁
           (S-Orange40・板厚符号)。最上階と木造以外は1枚で全部描きます。柱は床の節点から上へ伸びる柱を描き、
           下の柱はピンで分かれるとき・上に柱が無いときだけ×印 (S-Cyan20)。</span>
       </div>
@@ -57,6 +57,20 @@
       </div>
       <div class="groupbox" id="vdx_lvlines_box"><span class="hint">
         mgt ファイルを読み込むとフロア一覧を表示します</span></div>
+      <div class="row"><b>梁のレベル</b>
+        <label class="inline"><input type="radio" name="vdx_blevel" value="top" checked> 節点＝天端</label>
+        <label class="inline"><input type="radio" name="vdx_blevel" value="center"> 節点＝芯</label>
+        <label class="inline"><input type="radio" name="vdx_blevel" value="bottom"> 節点＝下端</label>
+        <label class="inline"><input type="radio" name="vdx_blevel" value="offset"> 天端を節点から
+          <input type="number" id="vdx_boffset" value="0" step="5" style="width:70px"
+            oninput="document.querySelector('input[name=vdx_blevel][value=offset]').checked = true"> mm ずらす (上が＋)</label>
+      </div>
+      <div class="row">
+        <label class="inline">符号・断面番号ごとの指定
+          <input type="text" id="vdx_blevel_ov" placeholder="例: G1=下端, WG2=-50, 12=芯" style="width:22em"></label>
+        <span class="hint">軸組図の梁を、節点に対してどの高さに描くか (MATLAB 版の Glevel と同じ)。柱の端・梁符号・面外の梁の断面記号・木造の X も合わせて動きます。
+          個別の指定は「符号=天端 / 芯 / 下端 / mm の数値 (天端を節点から上げる量、下げるときは −)」を「,」で区切って書き、上の選択より優先します。伏図は変わりません。</span>
+      </div>
     </fieldset>
     <fieldset class="subbox">
       <legend>3. 伏図の設定</legend>

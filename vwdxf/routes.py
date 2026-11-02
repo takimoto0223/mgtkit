@@ -86,7 +86,15 @@ def make_blueprint(host):
                                         list(p.get('levels') or []), api.options(p), _limit(p))
             files = [{'name': os.path.basename(f), 'url': host._register_file(f) + '&dl=1'}
                      for f in made]
-            return jsonify({'files': files, 'info': info, 'out_dir': out_dir, 'notes': notes})
+            # まとめてダウンロード: 今回書いた DXF と付属 JSON を 1 つの zip に (利用者の依頼 2026-10-31)
+            stem = os.path.join(out_dir, os.path.splitext(os.path.basename(p['mgt_path']))[0])
+            z = api.zip_files(made, stem + '_DXF一式.zip')
+            zip_file = {'name': os.path.basename(z), 'url': host._register_file(z) + '&dl=1'}
+            # DXF だけの zip (付属 JSON を入れない。利用者の依頼 2026-11-02)
+            zd = api.zip_files([f for f in made if f.lower().endswith('.dxf')], stem + '_DXFのみ.zip')
+            zip_dxf = {'name': os.path.basename(zd), 'url': host._register_file(zd) + '&dl=1'}
+            return jsonify({'files': files, 'zip': zip_file, 'zip_dxf': zip_dxf, 'info': info,
+                            'out_dir': out_dir, 'notes': notes})
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
         except Exception as e:  # noqa: BLE001

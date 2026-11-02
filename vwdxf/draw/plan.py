@@ -21,6 +21,7 @@ from ..style import (DASHED_SUFFIX, LAYER_DOWN_COLUMN, LAYER_MEMBER, LAYER_SECTI
 from .figure import (LABEL_GAP_RATIO, auto_scale, grid_lines, label_beside, plan_grid_prims,
                      plan_text_angle, symbol_half_extent, text_width, width_rect)
 from .primitives import Figure, Line, NameRef, Poly, SectionRef, Text, prims_bounds
+from ..ids import member_meta, plain_meta, wall_meta
 
 
 def _wall_plan_segment(M, nodes):
@@ -49,6 +50,30 @@ def _wall_support_width(M, nodes, t):
             for m in M.members:
                 if {m['n1'], m['n2']} == bottom:
                     return plan_width(m)
+            # 壁の下の梁が途中の節点で分かれているとき (1 枚の壁の下に梁 2 本): 同じ高さ・同じ線上で重なる梁の幅
+            # (以前は見つからず、壁を通り芯の上に描いていた。利用者の報告 2026-10-31)
+            if len(bottom) == 2:
+                a, b = (M.node_xyz[n] for n in sorted(bottom))
+                dx, dy = float(b[0] - a[0]), float(b[1] - a[1])
+                L = math.hypot(dx, dy)
+                if L > 1e-9:
+                    ux, uy = dx / L, dy / L
+                    best = 0.0
+                    for m in M.members:
+                        if m['kind'] != 'beam':
+                            continue
+                        p1, p2 = m['p1'], m['p2']
+                        if abs(float(p1[2]) - zmin) > 0.01 or abs(float(p2[2]) - zmin) > 0.01:
+                            continue
+                        off = [(float(q[0] - a[0]) * -uy + float(q[1] - a[1]) * ux) for q in (p1, p2)]
+                        if max(abs(v) for v in off) > 0.01:
+                            continue        # 同じ線上でない
+                        t1, t2 = sorted(float(q[0] - a[0]) * ux + float(q[1] - a[1]) * uy for q in (p1, p2))
+                        if t2 - 0.01 <= 0.0 or t1 + 0.01 >= L:
+                            continue        # 壁の範囲と重ならない
+                        best = max(best, plan_width(m))
+                    if best > 0:
+                        return best
     return t if t > 0 else 0.2
 
 
@@ -60,7 +85,7 @@ def rising_walls(M, fz, cx, cy):
     """
     ensure_surfaces(M)
     out = []
-    for _ele, tid, nodes in M._surfaces:
+    for ele, tid, nodes in M._surfaces:
         zs = [float(M.node_xyz[n][2]) for n in nodes if n in M.node_xyz]
         if len(zs) < 3 or plane_inclination(M, nodes) < WALL_INCLINE_DEG:
             continue
@@ -85,7 +110,7 @@ def rising_walls(M, fz, cx, cy):
         i2 = (bx + nx * inner, by + ny * inner)
         i1 = (ax + nx * inner, ay + ny * inner)
         ctr = ((o1[0] + i2[0]) / 2.0, (o1[1] + i2[1]) / 2.0)
-        out.append(([o1, o2, i2, i1], ctr, name))
+        out.append(([o1, o2, i2, i1], ctr, name, ele, ((ax, ay), (bx, by)), (nx, ny), outer))
     return out
 
 
@@ -122,17 +147,18 @@ def build_plan(M, level, scale=None, paper='A3', text_paper_mm=2.5, grids=None,
             layer, ltype = (LAYER_TRUSS[0] if m['truss'] else LAYER_MEMBER['beam'][0]), None
         e1, e2 = member_ends(M, i, 'center')
         rect = width_rect(p1, p2, plan_width(m) * 1000.0, (e1 * 1000.0, e2 * 1000.0))
+        mk = dict(FL=gname)
         if rect is None:
-            P.append(Line(p1, p2, layer, ltype))
+            P.append(Line(p1, p2, layer, ltype, meta=member_meta(m, 'outline', **mk)))
         else:
-            P.append(Poly(rect, layer, True, ltype))
+            P.append(Poly(rect, layer, True, ltype, meta=member_meta(m, 'outline', **mk)))
         if wood_sheet != 'column' and m['code']:
             # 梁の脇 (文字の上側 = 水平の梁は上、縦の梁は左) へ、見付け幅の半分 + すき間だけ出す
             rot = plan_text_angle(p1, p2)
             mid = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
             P.append(NameRef(sections.name_block(m['code']), m['code'],
                              label_beside(mid, rot, plan_width(m) * 500.0, th), th, rot,
-                             LAYER_TEXT[0]))
+                             LAYER_TEXT[0], meta=member_meta(m, 'code', **mk)))
 
     # 柱 (断面記号)。符号は梁伏図では出さない
     drawn = set()
@@ -147,7 +173,8 @@ def build_plan(M, level, scale=None, paper='A3', text_paper_mm=2.5, grids=None,
             m = M.members[j]
             sym = m['code'] or 'S%d' % m['sec_no']
             P.append(SectionRef(sections.block_name(sym, down), m['sec'], (x, y), m['beta'],
-                                LAYER_DOWN_COLUMN[0] if down else LAYER_SECTION['column'][0], down))
+                                LAYER_DOWN_COLUMN[0] if down else LAYER_SECTION['column'][0], down,
+                                meta=member_meta(m, 'section', FL=gname)))
         if name_j is not None and wood_sheet != 'beam' and M.members[name_j]['code']:
             # 柱の断面記号の右上へ
             mc = M.members[name_j]
@@ -156,7 +183,7 @@ def build_plan(M, level, scale=None, paper='A3', text_paper_mm=2.5, grids=None,
             gap = LABEL_GAP_RATIO * th
             P.append(NameRef(sections.name_block(code), code,
                              (x + hx + gap + text_width(code, th) / 2.0, y + hy + gap + th / 2.0),
-                             th, 0.0, LAYER_TEXT[0]))
+                             th, 0.0, LAYER_TEXT[0], meta=member_meta(mc, 'code', FL=gname)))
         drawn.add(node)
 
     # 木造の柱伏図: その床から立ち上がる壁
@@ -165,24 +192,34 @@ def build_plan(M, level, scale=None, paper='A3', text_paper_mm=2.5, grids=None,
         ys = [float(M.node_xyz[k][1]) for k in floor_nodes]
         cx = sum(xs) / len(xs) if xs else 0.0
         cy = sum(ys) / len(ys) if ys else 0.0
-        for corners, ctr, name in rising_walls(M, fz, cx, cy):
-            P.append(Poly([(a * 1000.0, b * 1000.0) for a, b in corners], LAYER_WALL[0]))
+        for corners, ctr, name, ele, (wa, wb), (wnx, wny), wout in rising_walls(M, fz, cx, cy):
+            P.append(Poly([(a * 1000.0, b * 1000.0) for a, b in corners], LAYER_WALL[0],
+                          meta=wall_meta(ele, name, 'outline', FL=gname)))
             if name:
-                P.append(NameRef(sections.name_block(name), name,
-                                 (ctr[0] * 1000.0, ctr[1] * 1000.0), th, 0.0, LAYER_TEXT[0]))
+                # 壁の向きに回し (Y 方向の壁は縦書き)、壁の外側 (床の中心から遠い側) の脇へ出す。
+                # シンボルは同じ <符号>_NAME1 を回して置く (利用者の指定 2026-10-31。横向きの壁も同じ置き方に)
+                rot = plan_text_angle((wa[0], wa[1]), (wb[0], wb[1]))
+                if abs(rot) < 1.0:
+                    rot = 0.0
+                mx, my = (wa[0] + wb[0]) / 2.0, (wa[1] + wb[1]) / 2.0
+                d = wout * 1000.0 + LABEL_GAP_RATIO * th + th / 2.0      # 文字の高さの向きが壁に直交する
+                pos = (mx * 1000.0 + wnx * d, my * 1000.0 + wny * d)
+                P.append(NameRef(sections.name_block(name), name, pos, th, rot, LAYER_TEXT[0],
+                                 meta=wall_meta(ele, name, 'code', FL=gname)))
 
     if not beams and not drawn:
         raise ValueError('伏図 %s に描画できる部材がありません' % gname)
 
     # 見出し: 床の名前を伏図全体の範囲の上 1m、中央に
     tg = grid_paper_mm * n
-    P.append(Text(((gx0 + gx1) / 2.0, gy1 + 1000.0), gname, tg, LAYER_TITLE[0], 'MC'))
+    P.append(Text(((gx0 + gx1) / 2.0, gy1 + 1000.0), gname, tg, LAYER_TITLE[0], 'MC',
+                  meta=plain_meta('title', FL=gname)))
     if not wood_sheet or wood_sheet == 'full':
         title = gname
     else:
-        title = '%s (%s)' % (gname, {'beam': '梁伏図', 'column': '柱伏図'}[wood_sheet])
+        title = '%s (%s)' % (gname, {'beam': '梁伏図', 'column': '柱壁図'}[wood_sheet])
     return Figure('plan', key, title, n, prims_bounds(P), P, wood_sheet,
-                  frame_box=(gx0, gy0, gx1, gy1))
+                  frame_box=(gx0, gy0, gx1, gy1), info={'name': gname, 'title': gname, 'z': fz})
 
 
 __all__ = ['build_plan', 'rising_walls']

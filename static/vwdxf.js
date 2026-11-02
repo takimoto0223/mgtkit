@@ -63,7 +63,7 @@ function vdxRefreshPrevSel() {
     if (wood && pl.top === false) {
       plan.push('<option value="plan_beam:' + esc(pl.key) + '">梁伏図 ' +
                 esc(pl.label) + '</option>');
-      plan.push('<option value="plan_column:' + esc(pl.key) + '">柱伏図 ' +
+      plan.push('<option value="plan_column:' + esc(pl.key) + '">柱壁図 ' +
                 esc(pl.label) + '</option>');
     } else {
       plan.push('<option value="plan:' + esc(pl.key) + '">伏図 ' +
@@ -148,6 +148,9 @@ function vdxCommon() {
     grids: checkedVals('vdxgrid'),
     wood: vdxWood(),
     level_lines: checkedVals('vdxlvline'),
+    beam_level: (document.querySelector('input[name="vdx_blevel"]:checked') || {}).value || 'top',
+    beam_offset: +$('vdx_boffset').value || 0,
+    beam_level_overrides: $('vdx_blevel_ov').value,
     list_categories: checkedVals('vdxlistcat'),
     limit_sec_no: +$('vdx_limit').value};
 }
@@ -205,7 +208,12 @@ async function vdxRunDxf() {
     }
     setMsg('vdx_msg', h, 'msg-ok');
     $('vdx_msg').innerHTML += notesHtml(j.notes);
-    $('vdx_files').innerHTML = j.files.map(f =>
+    const nDxf = j.files.filter(f => /\.dxf$/i.test(f.name)).length;
+    $('vdx_files').innerHTML = (j.zip ? '<div class="pdfblock"><b>まとめて (DXF と付属 JSON、' + j.files.length +
+      ' ファイルの zip)</b><a class="dl" href="' + j.zip.url + '">まとめてダウンロード</a>' +
+      (j.zip_dxf ? ' <a class="dl" href="' + j.zip_dxf.url + '">DXF だけまとめてダウンロード (' + nDxf + ' ファイル)</a>' : '') +
+      '</div>' : '') +
+      j.files.map(f =>
       '<div class="pdfblock"><b>' + esc(f.name) + '</b>' +
       '<a class="dl" href="' + f.url + '">ダウンロード</a></div>').join('');
   } catch (e) { setMsg('vdx_msg', esc(e.message), 'msg-err'); }

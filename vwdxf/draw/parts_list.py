@@ -38,6 +38,7 @@ from .primitives import Circle, Figure, Line, Poly, RebarRef, Text, prims_bounds
 # 区分ごとの表仕様: (タイトル, 属性行)
 SPECS = {
     'S': ('鉄骨部材リスト', ['符号', '位置', '断面', '形状', '鋼種', '備考']),
+    # 木造の材種は「べいまつ無等級」のように材種＋等級を書く（利用者の指定 2026-10-29）。等級の欄は必要な場合があるので残す（2026-10-31）
     'W': ('木造断面リスト', ['符号', '位置', '断面', '形状', '材種', '等級', '備考']),
     'OTHER': ('その他断面リスト',
               ['符号', '位置', '断面', '形状', '材種', '等級', '備考']),
@@ -256,7 +257,11 @@ def attr_value(sec, info, attr):
     is_wood = info['mtype'] == 'USER' and mname.startswith('W-')
     main = mname[2:].partition('_')[0] if is_wood else ''
     if attr == '材種':
-        return main.partition('-')[0] if is_wood else mname
+        if not is_wood:
+            return mname
+        species, _sep, grade = main.partition('-')
+        # 等級の無い材料（W-べいまつ など）は「べいまつ無等級」、等級のある材料は材種だけ（等級は「等級」の欄）（利用者の指定 2026-11-02）
+        return species if grade else species + '無等級'
     if attr == '等級':
         return main.partition('-')[2] if is_wood else ''
     return ''
@@ -461,24 +466,30 @@ def _block_prims(cat, block, x0, ytop, th, k, dims, n_scale):
     for attr in rows:
         h = sec_h if attr == '断面' else other_h
         cy = y - h / 2.0
+        # 印 (付属 JSON・XDATA 用): 見出し列は役割だけ、断面の列は断面番号 SECNO (符号の行は CODE も)
         prims.append(('poly', [(x0, y - h), (x0 + lw, y - h), (x0 + lw, y), (x0, y)],
-                      True, lt))
-        prims.append(('text', (x0 + lw / 2.0, cy), attr, th, lt))
+                      True, lt, {'ROLE': 'list-frame'}))
+        prims.append(('text', (x0 + lw / 2.0, cy), attr, th, lt, {'ROLE': 'list-cell'}))
         for ci, (sec, info) in enumerate(block):
             cx0 = x0 + lw + ci * sec_w
             cx = cx0 + sec_w / 2.0
+            mk = {'SEC': sec.name, 'SECNO': int(sec.no)}
             prims.append(('poly', [(cx0, y - h), (cx0 + sec_w, y - h), (cx0 + sec_w, y),
-                                   (cx0, y)], True, lt))
+                                   (cx0, y)], True, lt, dict(mk, ROLE='list-frame')))
             if attr == '断面':
-                prims += _shape_prims(sec, cx, cy, LAYER_SECTION[info['role']][0])
+                cell = _shape_prims(sec, cx, cy, LAYER_SECTION[info['role']][0])
                 if info['col']:
-                    prims += _rc_column_prims(info['col'], sec, cx, cy)
+                    cell += _rc_column_prims(info['col'], sec, cx, cy)
                 elif info['beam']:
-                    prims += _rc_beam_prims(info['beam'], sec, cx, cy)
+                    cell += _rc_beam_prims(info['beam'], sec, cx, cy)
+                prims += [tuple(q) + (dict(mk, ROLE='list-cell'),) for q in cell]
             else:
                 val = attr_value(sec, info, attr)
                 if val:
-                    prims.append(('text', (cx, cy), val, th, lt))
+                    cm = dict(mk, ROLE='list-cell')
+                    if attr == '符号':
+                        cm['CODE'] = val
+                    prims.append(('text', (cx, cy), val, th, lt, cm))
         y -= h
     return prims, y
 
@@ -544,8 +555,11 @@ def build_list_figures(M, scale=LIST_SCALE_DEFAULT, paper='A3', text_paper_mm=2.
                 prims += [_shift(p, 0.0, -yoff) for p in bprims]
             title = title0 + ('' if len(pages) == 1 else ' (%d/%d)' % (pi + 1, len(pages)))
             n = pg['n']
-            figs.append((cat, _prims_fig(prims, '%s  S=1/%d (%s)' % (title, n, paper), n, cat,
-                                         pi + 1, title_paper_mm or 5.0)))
+            fig = _prims_fig(prims, '%s  S=1/%d (%s)' % (title, n, paper), n, cat,
+                             pi + 1, title_paper_mm or 5.0)
+            fig.info = {'name': title0, 'page': pi + 1, 'pages': len(pages),
+                        'sections': [int(sec.no) for b in pg['blocks'] for sec, _i in b]}
+            figs.append((cat, fig))
     return figs
 
 
@@ -563,35 +577,42 @@ def _page_width(cat, blocks, n, text_paper_mm):
     return max(_layout_block(cat, b, n, text_paper_mm, size_items)[1] for b in blocks)
 
 
+def _meta_of(p):
+    """表組みのタプルの最後に付けた印 (dict)。無ければ None."""
+    return p[-1] if isinstance(p[-1], dict) else None
+
+
 def _shift(p, dx, dy):
     t = p[0]
     mv = (lambda q: (q[0] + dx, q[1] + dy))
+    mk = (_meta_of(p),) if _meta_of(p) is not None else ()
     if t == 'poly':
-        return ('poly', [mv(q) for q in p[1]], p[2], p[3])
+        return ('poly', [mv(q) for q in p[1]], p[2], p[3]) + mk
     if t == 'line':
-        return ('line', mv(p[1]), mv(p[2]), p[3])
+        return ('line', mv(p[1]), mv(p[2]), p[3]) + mk
     if t == 'circle':
-        return ('circle', mv(p[1]), p[2], p[3])
+        return ('circle', mv(p[1]), p[2], p[3]) + mk
     if t == 'text':
-        return ('text', mv(p[1]), p[2], p[3], p[4])
+        return ('text', mv(p[1]), p[2], p[3], p[4]) + mk
     if t == 'rebar':
-        return ('rebar', p[1], mv(p[2]), p[3], p[4])
+        return ('rebar', p[1], mv(p[2]), p[3], p[4]) + mk
     return p
 
 
 def _to_prim(p):
     """表組みの内部形式 (タプル) → Drawing IR."""
     t = p[0]
+    mk = _meta_of(p)
     if t == 'poly':
-        return Poly(list(p[1]), p[3], closed=p[2])
+        return Poly(list(p[1]), p[3], closed=p[2], meta=mk)
     if t == 'line':
-        return Line(p[1], p[2], p[3])
+        return Line(p[1], p[2], p[3], meta=mk)
     if t == 'circle':
-        return Circle(p[1], p[2], p[3])
+        return Circle(p[1], p[2], p[3], meta=mk)
     if t == 'text':
-        return Text(p[1], p[2], p[3], p[4], 'MC')
+        return Text(p[1], p[2], p[3], p[4], 'MC', meta=mk)
     if t == 'rebar':
-        return RebarRef(int(p[1]), p[2], p[3], p[4])
+        return RebarRef(int(p[1]), p[2], p[3], p[4], meta=mk)
     raise ValueError(t)
 
 
@@ -600,5 +621,5 @@ def _prims_fig(prims, title, n_scale, cat='', page=1, title_paper_mm=5.0):
     P = [_to_prim(p) for p in prims]
     x0, _y0, _x1, y1 = prims_bounds(P) if P else (0.0, 0.0, 1.0, 1.0)
     th = title_paper_mm * n_scale
-    P.append(Text((x0, y1 + th * 1.5), title, th, LAYER_TITLE[0], 'BL'))
+    P.append(Text((x0, y1 + th * 1.5), title, th, LAYER_TITLE[0], 'BL', meta={'ROLE': 'title'}))
     return Figure('list', cat, title, n_scale, prims_bounds(P), P)

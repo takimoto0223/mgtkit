@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Drawing IR — 図 1 枚分の図形 (DXF とプレビューが同じものを描く).
 
+meta = 図形の印 (部材 ID・役割など。ids.py)。DXF の XDATA (STRUCTURAL_CAD) と付属 JSON に使う。
+
 座標は原寸 mm。文字高さ・記号の大きさは作図の時点で「紙面 mm × 縮尺」にしてある。
 render/dxf.py と render/preview.py はこの型だけを見る。
 """
@@ -24,6 +26,7 @@ class Poly:
     layer: str
     closed: bool = True
     ltype: Optional[str] = None
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -32,6 +35,7 @@ class Line:
     p2: Point
     layer: str
     ltype: Optional[str] = None
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -39,6 +43,7 @@ class Circle:
     center: Point
     r: float
     layer: str
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -49,6 +54,7 @@ class Text:
     layer: str
     align: str = 'BC'        # 'BC'=下中央 / 'MC'=中央 / 'BL'=左下
     rotation: float = 0.0
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -57,6 +63,7 @@ class Hatch:
     points: List[Point]
     layer: str
     spacing: float
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -72,6 +79,7 @@ class SectionRef:
     rotation: float
     layer: str
     down: bool = False
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -83,6 +91,7 @@ class NameRef:
     height: float
     rotation: float
     layer: str
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -92,6 +101,7 @@ class RebarRef:
     pos: Point
     r: float
     layer: str
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -105,6 +115,7 @@ class Figure:
     sheet: Optional[str] = None                  # 木造の伏図: 'beam' / 'column' / 'full'
     frame_box: Optional[Tuple[float, float, float, float]] = None   # 並べるときの基準範囲 [mm]
     dirkey: Optional[str] = None                 # 軸組図の向き 'x' / 'y' / None (斜め)
+    info: dict = field(default_factory=dict)     # 付属 JSON 用 (名前・頁・断面・構面の向き など)
 
 
 def prims_bounds(prims):
