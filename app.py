@@ -83,7 +83,8 @@ def _check_cache_key(p):
     keys = ['mgt_path', 'beam_stress_path', 'truss_stress_path',
             'select_length', 'judge_H', 'H_beam_RCsupport', 'limit_sec_no',
             'c_up_STKR', 'c_up_BCR', 'c_up_BCP', 'c_up_BSH',
-            'case_types', 'wal_up', 'w_material_map', 'w_panel_co',
+            'case_types', 'wal_up', 'w_size_adjust', 'w_material_map',
+            'w_panel_co',
             'qup_mode', 'qup_beam', 'qup_wall', 'qup_src', 'rc',
             'src_cover', 'select_unit',
             'pile_cover', 'pc', 'wall_stress_path', 'plate_stress_path',
@@ -1715,6 +1716,8 @@ def api_steel_check():
                 limit_sec_no=float(p.get('limit_sec_no', 9000)),
                 case_types=case_types,
                 wal_up=float(p.get('wal_up', 1.0)),
+                # 集成材の曲げ寸法調整係数 (未指定=考慮する)
+                w_size_adjust=bool(p.get('w_size_adjust', True)),
                 w_material_map=w_material_map,
                 w_panel_co=w_panel_co,
                 qup=qup,
