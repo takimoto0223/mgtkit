@@ -61,6 +61,7 @@ from .alst import ALST_S
 from .secprops import BSB, BSR, BP, BBOX
 from .w_check import (
     W_ratio_analysis, W_truss_ratio_analysis, w_al_match,
+    W_LAMBDA_NOTE, w_lambda_note_lines,
 )
 from .rc_check import (RC_ratio_analysis, rcw_input_row, RC4_YOSE_FIX,
                        RCSR_NMZ_FIX)
@@ -81,6 +82,7 @@ from .s_check import (
     TSB_analysis, TSB_analysis_text,
     TSR_analysis, TSR_analysis_text,
     TSR_SIGN_FIX,
+    _SLENDER_LAST, STEEL_LAMBDA_NOTE, note_steel_lambda, steel_lambda_note_lines,
 )
 
 
@@ -1484,6 +1486,7 @@ def S_truss_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
     n = max(sectionsize.shape)
     code = sectionsize[n - 2]
     stress = np.asarray(stress, dtype=float)
+    _SLENDER_LAST['lam'] = None
 
     if code == 1000:  # H鋼断面の検定
         ratio_output = TH_analysis(sectionsize[0:n - 2], buck_length,
@@ -1503,7 +1506,8 @@ def S_truss_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
             maxratios[1] = float(np.max(np.max(ratio_output)))
             maxratios_text = TSB_analysis_text(
                 sectionsize[0:n - 2], Truss_times * stress, timecase, SN,
-                ele_no, section_no, Lminus, LOAS_CASE_NAME, pick_section_name)
+                ele_no, section_no, Lminus, LOAS_CASE_NAME, pick_section_name,
+                length=buck_length)
     elif code == 3000:  # 中実丸断面の検定
         ratio_output = TSR_analysis(sectionsize[0:n - 2], buck_length,
                                     Truss_times * stress, timecase, SN)
@@ -1512,7 +1516,8 @@ def S_truss_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
             maxratios[1] = float(np.max(np.max(ratio_output)))
             maxratios_text = TSR_analysis_text(
                 sectionsize[0:n - 2], Truss_times * stress, timecase, SN,
-                ele_no, section_no, LOAS_CASE_NAME, pick_section_name)
+                ele_no, section_no, LOAS_CASE_NAME, pick_section_name,
+                length=buck_length)
     elif code == 4000:  # 鋼管断面の検定＜圧縮引張検定＞
         ratio_output = TP_analysis(sectionsize[0:n - 2], buck_length,
                                    Truss_times * stress, timecase, SN)
@@ -1531,7 +1536,8 @@ def S_truss_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
             maxratios[1] = float(np.max(np.max(ratio_output)))
             maxratios_text = TC_analysis_text(
                 sectionsize[0:n - 2], Truss_times * stress, timecase, SN,
-                ele_no, section_no, Lminus, LOAS_CASE_NAME, pick_section_name)
+                ele_no, section_no, Lminus, LOAS_CASE_NAME, pick_section_name,
+                length=buck_length)
     elif code == 7000:  # 角形鋼管鋼断面の検定＜圧縮引張検定＞
         ratio_output = TBOX_analysis(sectionsize[0:n - 2], buck_length,
                                      Truss_times * stress, timecase, SN)
@@ -1550,7 +1556,8 @@ def S_truss_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
             maxratios[1] = float(np.max(np.max(ratio_output)))
             maxratios_text = TL_analysis_text(
                 sectionsize[0:n - 2], Truss_times * stress, timecase, SN,
-                ele_no, section_no, Lminus, LOAS_CASE_NAME, pick_section_name)
+                ele_no, section_no, Lminus, LOAS_CASE_NAME, pick_section_name,
+                length=buck_length)
     elif code == 18000:  # 二丁溝形鋼(2C)断面の検定 (mgtkit独自拡張)
         ratio_output = TC2_analysis(sectionsize[0:n - 2], buck_length,
                                     Truss_times * stress, timecase, SN, Lminus)
@@ -1572,6 +1579,9 @@ def S_truss_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
                 timecase, SN, ele_no, section_no, Lminus, LOAS_CASE_NAME,
                 pick_section_name)
     # 該当コードなし → MATLAB同様 ratio_output 未定義エラー
+    # 細長比上限(250)超過の圧縮材を記録 (mgtkit独自拡張 2026-11。検定比は不変)
+    note_steel_lambda(section_no, ele_no, np.atleast_2d(Truss_times * stress)[:, 0:2],
+                      pick_section_name)
     return ratio_output, maxratios, maxratios_text
 
 
@@ -1728,6 +1738,8 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
     # ユーザー承認による原典(MATLAB)バグ修正 2026-07-08:
     # 引張材(丸鋼)が圧縮のとき検定値が負となる原典バグの修正適用を検知する
     TSR_SIGN_FIX['hit'] = False
+    STEEL_LAMBDA_NOTE.clear()
+    W_LAMBDA_NOTE.clear()
     SRC_CHECK_NOTE['hit'] = False
     RC4_YOSE_FIX['hit'] = False
     RCSR_NMZ_FIX['hit'] = False
@@ -2832,6 +2844,9 @@ def run_steel_check(mgt_path, beam_stress_path, truss_stress_path=None,
             print('注記: 角形CFT(EBC)は原典(MATLAB)が動作しない経路のため '
                   '(SA_CFTSBcolumn_AIJのBBOX呼び出し引数不足)、tx=ty=t を'
                   '補完して算定しています(NOTE SB_BBOX_T4)。')
+    # 細長比の注意 (mgtkit独自拡張 2026-11)
+    for _line in steel_lambda_note_lines() + w_lambda_note_lines():
+        print(_line)
     if TSR_SIGN_FIX['hit']:
         # ユーザー承認による原典(MATLAB)バグ修正 2026-07-08
         print('注記: 引張材(丸鋼)に圧縮が生じたため、負となる検定値の符号を'
