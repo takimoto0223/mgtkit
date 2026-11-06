@@ -118,6 +118,67 @@ def _timecase_stop():
     raise RuntimeError('長短期設定ミス')
 
 
+# ---------------------------------------------------------------------------
+# 細長比の上限チェック (mgtkit独自拡張 2026-11)
+#   各 *_analysis が算定に用いた細長比を _SLENDER_LAST に記録し、
+#   ディスパッチャ (S_ratio_analysis / S_truss_ratio_analysis) が
+#   圧縮が生じた要素について上限 (鋼材250) 超過を STEEL_LAMBDA_NOTE に集める。
+#   検定比そのものは変えない (知らせるだけ)。ratio_pipeline.run_steel_check
+#   が実行毎にリセットし、最後に注記として出力する。
+# ---------------------------------------------------------------------------
+
+STEEL_LAMBDA_LIMIT = 250.0
+_SLENDER_LAST = {'lam': None}
+STEEL_LAMBDA_NOTE = {}  # 断面番号 -> {'lam': 最大細長比, 'eles': set(要素番号), 'name': 断面名}
+
+
+def _rec_lam(lam):
+    """直近の検定で用いた細長比を記録する."""
+    try:
+        _SLENDER_LAST['lam'] = float(lam)
+    except (TypeError, ValueError):
+        _SLENDER_LAST['lam'] = None
+
+
+def note_steel_lambda(section_no, ele_no, axial, section_name=''):
+    """直近の検定の細長比が上限を超え、かつ圧縮(軸力<0)があれば記録する."""
+    lam = _SLENDER_LAST.get('lam')
+    _SLENDER_LAST['lam'] = None
+    if lam is None or not np.isfinite(lam) or lam <= STEEL_LAMBDA_LIMIT:
+        return
+    ax = np.asarray(axial, dtype=float)
+    if not np.any(ax < 0):
+        return
+    key = float(section_no)
+    rec = STEEL_LAMBDA_NOTE.setdefault(
+        key, {'lam': 0.0, 'eles': set(), 'name': str(section_name).strip()})
+    rec['lam'] = max(rec['lam'], lam)
+    rec['eles'].add(int(ele_no))
+
+
+def steel_lambda_note_lines():
+    """STEEL_LAMBDA_NOTE を注記の行リストにする."""
+    lines = []
+    if not STEEL_LAMBDA_NOTE:
+        return lines
+    lines.append('注意: 圧縮が生じる鉄骨部材に細長比 %d を超えるものがあります '
+                 '(検定比は細長比から求めた fc で算定済みですが、細長比の上限は'
+                 '判定していません。部材・モデルの確認をしてください)。'
+                 % int(STEEL_LAMBDA_LIMIT))
+    keys = sorted(STEEL_LAMBDA_NOTE)
+    for sn in keys[:15]:
+        rec = STEEL_LAMBDA_NOTE[sn]
+        eles = sorted(rec['eles'])
+        shown = ', '.join(str(e) for e in eles[:10])
+        if len(eles) > 10:
+            shown += ' ほか%d要素' % (len(eles) - 10)
+        lines.append('・断面番号 %d %s: 最大細長比 %.0f / 要素 %s'
+                     % (int(sn), rec['name'], rec['lam'], shown))
+    if len(keys) > 15:
+        lines.append('・ほか %d 断面' % (len(keys) - 15))
+    return lines
+
+
 # ===========================================================================
 # NMMQ_analysis
 # ===========================================================================
@@ -188,6 +249,7 @@ def H_analysis(sectionsize, length, stress, timecase, SN,
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -377,6 +439,7 @@ def BOX_analysis(sectionsize, length, stress, timecase, SN, stress_L, c_up):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -473,6 +536,7 @@ def P_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / ixs
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -565,6 +629,7 @@ def C_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -671,6 +736,7 @@ def CC_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -771,6 +837,7 @@ def SB_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -923,6 +990,7 @@ def SR_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
 
     lamdadfc = lamdax
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1046,6 +1114,7 @@ def CT_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1149,6 +1218,7 @@ def L_analysis(sectionsize, length, stress, timecase, SN):
 
     Aw = BL(sectionsize, 11)
     Af = BL(sectionsize, 10)
+    ivs = BL(sectionsize, 13)  # 最小断面二次半径 (mgtkit独自拡張 2026-11)
 
     # 長短期設定
     if timecase >= 10:
@@ -1180,7 +1250,11 @@ def L_analysis(sectionsize, length, stress, timecase, SN):
     # 圧縮
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
-    lamdadfc = max(lamdax, lamday)
+    # 単一山形鋼は最小軸(v軸)まわりの座屈で決まるため、最小断面二次半径で
+    # 細長比を求める (座屈長さは強・弱の大きい方。mgtkit独自拡張 2026-11)
+    lamdav = max(length[0], length[1]) * 100 / ivs
+    lamdadfc = max(lamdax, lamday, lamdav)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1290,6 +1364,7 @@ def HT_analysis(sectionsize, length, stress, timecase, SN,
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1472,6 +1547,7 @@ def HwCP_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1567,6 +1643,7 @@ def TH_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1637,6 +1714,7 @@ def TBOX_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1705,6 +1783,7 @@ def TP_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / ixs
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1776,6 +1855,7 @@ def TC_analysis(sectionsize, length, stress, timecase, SN, Lminus):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1852,6 +1932,7 @@ def TC2_analysis(sectionsize, length, stress, timecase, SN, Lminus):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -1898,6 +1979,7 @@ def TL_analysis(sectionsize, length, stress, timecase, SN, Lminus):
     a = BL(sectionsize, 1)
     ixs = BL(sectionsize, 4)
     iys = BL(sectionsize, 5)
+    ivs = BL(sectionsize, 13)  # 最小断面二次半径 (mgtkit独自拡張 2026-11)
 
     # 断面力取り込み（単位をN/mm2系にする．）
     Fx1 = stress[:, 0] * 10 ** 3
@@ -1926,7 +2008,10 @@ def TL_analysis(sectionsize, length, stress, timecase, SN, Lminus):
     # 圧縮
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
-    lamdadfc = max(lamdax, lamday)
+    # 単一山形鋼は最小断面二次半径で細長比を求める (mgtkit独自拡張 2026-11)
+    lamdav = max(length[0], length[1]) * 100 / ivs
+    lamdadfc = max(lamdax, lamday, lamdav)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -2003,6 +2088,7 @@ def TL2_analysis(sectionsize, length, stress, timecase, SN, Lminus):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -2041,6 +2127,9 @@ def TSB_analysis(sectionsize, length, stress, timecase, SN, Lminus):
     stress = np.atleast_2d(np.asarray(stress, dtype=float))
     SN = np.asarray(SN, dtype=float).ravel()
 
+    # 細長比は欠損前の全断面で求める (mgtkit独自拡張 2026-11)
+    ixs = BSB(sectionsize, 4)
+    iys = BSB(sectionsize, 5)
     # 鋼材断面性能 ([a a_index]=max(...) → 大きい辺から欠損を控除)
     if sectionsize[0] >= sectionsize[1]:  # MATLAB max は先頭優先
         a_index = 1
@@ -2048,12 +2137,12 @@ def TSB_analysis(sectionsize, length, stress, timecase, SN, Lminus):
         a_index = 2
     sectionsize[a_index - 1] = sectionsize[a_index - 1] - Lminus
     a = BSB(sectionsize, 1)
-    ixs = BSB(sectionsize, 4)
-    iys = BSB(sectionsize, 5)
 
     # 断面力取り込み（単位をN/mm2系にする．）
-    Fx1 = np.abs(stress[:, 0] * 10 ** 3)
-    Fx2 = np.abs(stress[:, 1] * 10 ** 3)
+    # mgtkit独自拡張 2026-11: 原典は abs() で常に引張扱い(ft)だったが、
+    # 圧縮時は他断面と同じく細長比から求めた fc で検定するため符号を残す
+    Fx1 = stress[:, 0] * 10 ** 3
+    Fx2 = stress[:, 1] * 10 ** 3
 
     # 長短期設定
     if timecase >= 10:
@@ -2077,6 +2166,7 @@ def TSB_analysis(sectionsize, length, stress, timecase, SN, Lminus):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -2159,6 +2249,7 @@ def TSR_analysis(sectionsize, length, stress, timecase, SN):
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _rec_lam(lamdadfc)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -4034,6 +4125,7 @@ def L_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
 
     Aw = BL(sectionsize, 11)
     Af = BL(sectionsize, 10)
+    ivs = BL(sectionsize, 13)  # 最小断面二次半径 (mgtkit独自拡張 2026-11)
 
     text = ['山形鋼・軸力および2軸曲げに対する断面算定']
     text.append('軸力を考慮した山形鋼の断面算定を行う．曲げについては2軸曲げを考慮する．')
@@ -4058,7 +4150,8 @@ def L_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
     text.append('*断面性能')
     text.append('断面積：' + n2s(a) + 'cm2')
     text.append('断面係数(強)：' + n2s(Zx) + 'cm3' + '　断面係数(弱)：' + n2s(Zy) + 'cm3')
-    text.append('断面二次半径(強)：' + n2s(ixs) + 'cm' + '　断面二次半径(弱)：' + n2s(iys) + 'cm')
+    text.append('断面二次半径(強)：' + n2s(ixs) + 'cm' + '　断面二次半径(弱)：' + n2s(iys) + 'cm'
+                + '　断面二次半径(最小)：' + n2s(ivs) + 'cm')
 
     # 断面力取り込み（単位をN/mm2系にする．）
     Fxx = stress[:, 0] * 10 ** 3
@@ -4097,7 +4190,8 @@ def L_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
     # 圧縮
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
-    lamdadfc = max(lamdax, lamday)
+    lamdav = max(length[0], length[1]) * 100 / ivs
+    lamdadfc = max(lamdax, lamday, lamdav)
     Lamda = 1500 / math.sqrt(F / 1.5)
 
     if lamdadfc > Lamda:
@@ -4110,7 +4204,8 @@ def L_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
     text.append('座屈長さ(強)：' + n2s(length[0] * 1000, '%15.0f') + 'mm' + '　座屈長さ(弱)：'
                 + n2s(length[1] * 1000, '%15.0f') + 'mm' + '　圧縮フランジ間距離：'
                 + n2s(length[2] * 1000, '%15.0f') + 'mm')
-    text.append('細長比(強)：' + n2s(lamdax, '%15.0f') + '　細長比(弱)：' + n2s(lamday, '%15.0f'))
+    text.append('細長比(強)：' + n2s(lamdax, '%15.0f') + '　細長比(弱)：' + n2s(lamday, '%15.0f')
+                + '　細長比(最小軸)：' + n2s(lamdav, '%15.0f'))
 
     text.append('　　')
     text.append('*鋼材情報')
@@ -5147,12 +5242,79 @@ def TP_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
 
 
 # ---------------------------------------------------------------------------
+# トラス材詳細テキスト用: 圧縮時の fc (mgtkit独自拡張 2026-11)
+#   TC/TL/TSB/TSR の詳細テキストは原典では圧縮でも ft で検定比を出しており、
+#   検定 (*_analysis) の fc と食い違っていた。圧縮時は検定と同じ fc を出す。
+# ---------------------------------------------------------------------------
+
+def _truss_text_fc(length, i_list, F, timecase):
+    """座屈長さ length[m] と断面二次半径 i_list[cm] から (細長比list, fc, Λ) を返す.
+
+    細長比は i_list の各値ごと (強軸, 弱軸, [最小軸]) に求め、最大値で fc を算定。
+    timecase==2 (短期) は 1.5 倍。length=None のときは (None, None, None)。
+    """
+    if length is None:
+        return None, None, None
+    length = np.asarray(length, dtype=float).ravel()
+    lk = [length[0], length[1]]
+    lams = []
+    for k, iv in enumerate(i_list):
+        L = lk[k] if k < 2 else max(lk)
+        lams.append(L * 100 / iv)
+    lam = max(lams)
+    Lamda = 1500 / math.sqrt(F / 1.5)
+    if lam > Lamda:
+        fc = 18 / 65 / (lam / Lamda) ** 2 * F
+    else:
+        fc = ((1 - 0.4 * (lam / Lamda) ** 2) / (1.5 + 2 / 3 * (lam / Lamda) ** 2)) * F
+    if timecase == 2:
+        fc = 1.5 * fc
+    return lams, fc, Lamda
+
+
+def _truss_text_comp_lines(text, lams, fc, Lamda, t_case, ratio1, ratio2, n2s,
+                           i_list=None, length=None):
+    """圧縮時の許容応力度・検定比の行を text に足す (引張の行の代わり).
+
+    i_list: 断面二次半径[cm] (強, 弱, [最小])、length: 座屈長さ[m]。
+    H形などのトラス詳細テキストと同じく、細長比の根拠として表示する。
+    """
+    names = ['強', '弱', '最小軸']
+    inames = ['強', '弱', '最小']
+    if i_list is not None:
+        text.append('　　')
+        text.append('*断面二次半径')
+        text.append('　'.join('断面二次半径(%s)：%scm' % (inames[k], n2s(v))
+                             for k, v in enumerate(i_list)))
+    if length is not None:
+        lk = np.asarray(length, dtype=float).ravel()
+        text.append('　　')
+        text.append('*部材支持条件')
+        text.append('座屈長さ(強)：' + n2s(lk[0] * 1000, '%15.0f') + 'mm'
+                    + '　座屈長さ(弱)：' + n2s(lk[1] * 1000, '%15.0f') + 'mm'
+                    + ('　座屈長さ(最小軸)：' + n2s(max(lk[0], lk[1]) * 1000, '%15.0f') + 'mm'
+                       if i_list is not None and len(i_list) > 2 else ''))
+    text.append('　　')
+    text.append('*細長比')
+    text.append('　'.join('細長比(%s)：%s' % (names[k], n2s(v, '%15.0f'))
+                         for k, v in enumerate(lams))
+                + '　限界細長比：' + n2s(Lamda, '%15.0f'))
+    text.append('　　')
+    text.append('*許容応力度　[' + t_case + ']')
+    text.append('圧縮許容応力度：' + n2s(fc, '%15.0f') + 'N/mm2'
+                + '　(圧縮力が生じるため，細長比から求めた fc で検定する)')
+    text.append('　　')
+    text.append('*検定比　[' + t_case + ']　**i端　j端の順に示す**')
+    text.append('圧縮検定：' + n2s(ratio1, '%15.2f') + ',　' + n2s(ratio2, '%15.2f'))
+
+
+# ---------------------------------------------------------------------------
 # TC_analysis_text.m
 # ---------------------------------------------------------------------------
 
 @_matlabenv
 def TC_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
-                     Lminus, LOAS_CASE_NAME, section_name):
+                     Lminus, LOAS_CASE_NAME, section_name, length=None):
     """溝形鋼の引張力に対する断面算定詳細テキスト (TC_analysis_text.m)."""
     n2s = _num2str
     sectionsize = np.asarray(sectionsize, dtype=float).ravel()
@@ -5161,8 +5323,10 @@ def TC_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
     # 鋼材断面性能
     a = BC(sectionsize, 1)
+    ixs = BC(sectionsize, 4)
+    iys = BC(sectionsize, 5)
 
-    text = ['溝形鋼の引張力に対する断面算定']
+    text = ['溝形鋼の軸力に対する断面算定']  # mgtkit独自拡張 2026-11: 圧縮も検定するため
     text.append('　　')
 
     # 断面力取り込み（単位をN/mm2系にする．）
@@ -5198,6 +5362,8 @@ def TC_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
         ft = F / 1.5
     if timecase == 2:
         ft = F
+    i_c = [ixs, iys]
+    lams_c, fc_c, Lamda_c = _truss_text_fc(length, i_c, F, timecase)
 
     text.append('*断面性能')
     text.append('断面積：' + n2s(a) + 'cm2')
@@ -5210,13 +5376,19 @@ def TC_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     sigma_cx1 = Fx1 / (a * 100)
     sigma_cx2 = Fx2 / (a * 100)
 
+    is_comp = False
     if np.all(sigma_cx1 >= 0) and np.all(sigma_cx2 >= 0):
         ratio_cx1 = np.abs(sigma_cx1) / ft
         ratio_cx2 = np.abs(sigma_cx2) / ft
     else:
         print('トラス材に圧縮！：断面ID/' + n2s(section_no, '%15.0f'))
-        ratio_cx1 = np.abs(sigma_cx1) / ft
-        ratio_cx2 = np.abs(sigma_cx2) / ft
+        if fc_c is not None:  # mgtkit独自拡張 2026-11: 検定と同じ fc
+            is_comp = True
+            ratio_cx1 = np.abs(sigma_cx1) / fc_c
+            ratio_cx2 = np.abs(sigma_cx2) / fc_c
+        else:  # 座屈長さ未指定の呼び出し (原典どおり ft)
+            ratio_cx1 = np.abs(sigma_cx1) / ft
+            ratio_cx2 = np.abs(sigma_cx2) / ft
 
     text.append('　　')
     text.append('　　')
@@ -5226,6 +5398,11 @@ def TC_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     text.append('　　')
     text.append('*設計用応力　[' + t_case + ']　j端')
     text.append('軸力' + n2s(Fx2 / 1000, '%15.1f') + 'kN')
+
+    if is_comp:
+        _truss_text_comp_lines(text, lams_c, fc_c, Lamda_c, t_case,
+                               ratio_cx1, ratio_cx2, n2s, i_list=i_c, length=length)
+        return text
 
     text.append('　　')
     text.append('　　')
@@ -5365,7 +5542,7 @@ def TC2_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
 
 @_matlabenv
 def TL_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
-                     Lminus, LOAS_CASE_NAME, section_name):
+                     Lminus, LOAS_CASE_NAME, section_name, length=None):
     """山形鋼の引張力に対する断面算定詳細テキスト (TL_analysis_text.m)."""
     n2s = _num2str
     sectionsize = np.asarray(sectionsize, dtype=float).ravel()
@@ -5374,8 +5551,11 @@ def TL_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
     # 鋼材断面性能
     a = BL(sectionsize, 1)
+    ixs = BL(sectionsize, 4)
+    iys = BL(sectionsize, 5)
+    ivs = BL(sectionsize, 13)  # 最小断面二次半径 (単一山形鋼は最小軸で評価)
 
-    text = ['溝形鋼の引張力に対する断面算定']  # 元コードのまま (タイトルは溝形鋼表記)
+    text = ['山形鋼の軸力に対する断面算定']  # mgtkit独自拡張 2026-11: 原典は「溝形鋼の引張力」表記
     text.append('　　')
 
     # 断面力取り込み（単位をN/mm2系にする．）
@@ -5384,8 +5564,9 @@ def TL_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
     text.append('断面符号：' + section_name + '断面番号：' + n2s(section_no) + '　要素番号：' + n2s(ele_no))
     text.append('　　')
+    # mgtkit独自拡張 2026-11: 板厚が2回並ぶ表示 (L-65x65x6x6) を梁要素と同じ形に
     text.append('山形鋼：L-' + n2s(sectionsize[0]) + 'x' + n2s(sectionsize[1]) + 'x'
-                + n2s(sectionsize[2]) + 'x' + n2s(sectionsize[3]))
+                + n2s(sectionsize[2]))
 
     text.append('断面欠損幅：' + n2s(Lminus) + 'mm')
     # 長短期設定
@@ -5411,6 +5592,8 @@ def TL_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
         ft = F / 1.5
     if timecase == 2:
         ft = F
+    i_c = [ixs, iys, ivs]
+    lams_c, fc_c, Lamda_c = _truss_text_fc(length, i_c, F, timecase)
 
     text.append('*断面性能')
     text.append('断面積：' + n2s(a) + 'cm2')
@@ -5423,13 +5606,19 @@ def TL_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     sigma_cx1 = Fx1 / (a * 100)
     sigma_cx2 = Fx2 / (a * 100)
 
+    is_comp = False
     if np.all(sigma_cx1 >= 0) and np.all(sigma_cx2 >= 0):
         ratio_cx1 = np.abs(sigma_cx1) / ft
         ratio_cx2 = np.abs(sigma_cx2) / ft
     else:
         print('トラス材に圧縮！：断面ID/' + n2s(section_no, '%15.0f'))
-        ratio_cx1 = np.abs(sigma_cx1) / ft
-        ratio_cx2 = np.abs(sigma_cx2) / ft
+        if fc_c is not None:  # mgtkit独自拡張 2026-11: 検定と同じ fc
+            is_comp = True
+            ratio_cx1 = np.abs(sigma_cx1) / fc_c
+            ratio_cx2 = np.abs(sigma_cx2) / fc_c
+        else:  # 座屈長さ未指定の呼び出し (原典どおり ft)
+            ratio_cx1 = np.abs(sigma_cx1) / ft
+            ratio_cx2 = np.abs(sigma_cx2) / ft
 
     text.append('　　')
     text.append('　　')
@@ -5439,6 +5628,11 @@ def TL_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     text.append('　　')
     text.append('*設計用応力　[' + t_case + ']　j端')
     text.append('軸力' + n2s(Fx2 / 1000, '%15.1f') + 'kN')
+
+    if is_comp:
+        _truss_text_comp_lines(text, lams_c, fc_c, Lamda_c, t_case,
+                               ratio_cx1, ratio_cx2, n2s, i_list=i_c, length=length)
+        return text
 
     text.append('　　')
     text.append('　　')
@@ -5458,13 +5652,16 @@ def TL_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
 @_matlabenv
 def TSB_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
-                      Lminus, LOAS_CASE_NAME, section_name):
+                      Lminus, LOAS_CASE_NAME, section_name, length=None):
     """中実角材（FBブレース）の引張力に対する断面算定詳細テキスト (TSB_analysis_text.m)."""
     n2s = _num2str
     sectionsize = list(np.asarray(sectionsize, dtype=float).ravel())
     stress = np.atleast_2d(np.asarray(stress, dtype=float))
     SN = np.asarray(SN, dtype=float).ravel()
 
+    # 細長比は欠損前の全断面で求める (mgtkit独自拡張 2026-11)
+    ixs = BSB(sectionsize, 4)
+    iys = BSB(sectionsize, 5)
     # 鋼材断面性能 ([a a_index]=max(...) → 大きい辺から欠損を控除)
     if sectionsize[0] >= sectionsize[1]:  # MATLAB max は先頭優先
         a_index = 1
@@ -5473,14 +5670,14 @@ def TSB_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     sectionsize[a_index - 1] = sectionsize[a_index - 1] - Lminus
     a = BSB(sectionsize, 1)
 
-    text = ['中実角材（FBブレース）の引張力に対する断面算定/引張応力として検討']
+    text = ['中実角材（FBブレース）の軸力に対する断面算定']
     text.append('　　')
 
     # 断面力取り込み（単位をN/mm2系にする．）
-    Fx1 = np.abs(stress[:, 0] * 10 ** 3)
-    Fx2 = np.abs(stress[:, 1] * 10 ** 3)
-
-    print('ムク角鋼材のトラス要素は引張検定をおこなっている')
+    # mgtkit独自拡張 2026-11: 原典は abs() で常に引張検定としていたが、
+    # 圧縮時は細長比から求めた fc で検定する (TSB_analysis と同じ)
+    Fx1 = stress[:, 0] * 10 ** 3
+    Fx2 = stress[:, 1] * 10 ** 3
 
     text.append('断面符号：' + section_name + '断面番号：' + n2s(section_no) + '　要素番号：' + n2s(ele_no))
     text.append('　　')
@@ -5510,6 +5707,8 @@ def TSB_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
     if timecase == 2:
         ft = F
+    i_c = [ixs, iys]
+    lams_c, fc_c, Lamda_c = _truss_text_fc(length, i_c, F, timecase)
     text.append('　　')
     text.append('*鋼材情報')
     text.append('F値：' + n2s(F, '%15.0f') + 'N/mm2' + '　E：20500 N/mm2')
@@ -5518,13 +5717,19 @@ def TSB_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     sigma_cx1 = Fx1 / (a * 100)
     sigma_cx2 = Fx2 / (a * 100)
 
+    is_comp = False
     if np.all(sigma_cx1 >= 0) and np.all(sigma_cx2 >= 0):
         ratio_cx1 = np.abs(sigma_cx1) / ft
         ratio_cx2 = np.abs(sigma_cx2) / ft
     else:
         print('トラス材に圧縮！：断面ID/' + n2s(section_no, '%15.0f'))
-        ratio_cx1 = np.abs(sigma_cx1) / ft
-        ratio_cx2 = np.abs(sigma_cx2) / ft
+        if fc_c is not None:  # mgtkit独自拡張 2026-11: 検定と同じ fc
+            is_comp = True
+            ratio_cx1 = np.abs(sigma_cx1) / fc_c
+            ratio_cx2 = np.abs(sigma_cx2) / fc_c
+        else:  # 座屈長さ未指定の呼び出し (原典どおり ft)
+            ratio_cx1 = np.abs(sigma_cx1) / ft
+            ratio_cx2 = np.abs(sigma_cx2) / ft
 
     text.append('　　')
     text.append('　　')
@@ -5534,6 +5739,11 @@ def TSB_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     text.append('　　')
     text.append('*設計用応力　[' + t_case + ']　j端')
     text.append('軸力' + n2s(Fx2 / 1000, '%15.1f') + 'kN')
+
+    if is_comp:
+        _truss_text_comp_lines(text, lams_c, fc_c, Lamda_c, t_case,
+                               ratio_cx1, ratio_cx2, n2s, i_list=i_c, length=length)
+        return text
 
     text.append('　　')
     text.append('　　')
@@ -5673,7 +5883,7 @@ def TL2_analysis_text(sectionsize, length, stress, timecase, SN, ele_no,
 
 @_matlabenv
 def TSR_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
-                      LOAS_CASE_NAME, section_name):
+                      LOAS_CASE_NAME, section_name, length=None):
     """中実鋼管（丸鋼ブレース）の引張力に対する断面算定詳細テキスト (TSR_analysis_text.m)."""
     n2s = _num2str
     sectionsize = np.atleast_1d(np.asarray(sectionsize, dtype=float)).ravel()
@@ -5682,9 +5892,12 @@ def TSR_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
     # 鋼材断面性能
     a = BSR(sectionsize, 1)
+    ixs = BSR(sectionsize, 4)
+    iys = BSR(sectionsize, 5)
 
-    RR = a  # 元コードのまま (断面積を径として表示)
-    text = ['中実鋼管（丸鋼ブレース）の引張力に対する断面算定']
+    # mgtkit独自拡張 2026-11: 原典は断面積を径として表示していたため径(mm)に修正
+    RR = sectionsize[0]  # mm
+    text = ['中実鋼管（丸鋼ブレース）の軸力に対する断面算定']  # mgtkit独自拡張 2026-11
     text.append('　　')
 
     # 断面力取り込み（単位をN/mm2系にする．）
@@ -5693,7 +5906,7 @@ def TSR_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
     text.append('断面符号：' + section_name + '断面番号：' + n2s(section_no) + '　要素番号：' + n2s(ele_no))
     text.append('　　')
-    text.append('鋼管径（中実）：●-' + n2s(RR))
+    text.append('鋼管径（中実）：●-' + n2s(RR, '%15.0f'))
 
     # 長短期設定
     if timecase >= 10:
@@ -5706,7 +5919,8 @@ def TSR_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
         print('ERROR:長短期設定ミス')
         raise RuntimeError('長短期設定ミス')
     text.append('*断面性能')
-    text.append('断面積：' + n2s(a) + 'cm2')
+    text.append('断面積：' + n2s(a) + 'cm2'
+                + '　有効断面積(0.75A)：' + n2s(a * 0.75) + 'cm2')
 
     # 長期許容応力度計算
     if SN[0] == 1:
@@ -5724,6 +5938,8 @@ def TSR_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
 
     if timecase == 2:
         ft = F
+    i_c = [ixs, iys]
+    lams_c, fc_c, Lamda_c = _truss_text_fc(length, i_c, F, timecase)
     text.append('　　')
     text.append('*鋼材情報')
     text.append('F値(短期許容引張応力度)：' + n2s(F, '%15.0f') + 'N/mm2' + '　E：20500 N/mm2')
@@ -5732,13 +5948,19 @@ def TSR_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     sigma_cx1 = Fx1 / (a * 100 * 0.75)
     sigma_cx2 = Fx2 / (a * 100 * 0.75)
 
+    is_comp = False
     if np.all(sigma_cx1 >= 0) and np.all(sigma_cx2 >= 0):
         ratio_cx1 = np.abs(sigma_cx1) / ft
         ratio_cx2 = np.abs(sigma_cx2) / ft
     else:
         print('トラス材に圧縮！：断面ID/' + n2s(section_no, '%15.0f'))
-        ratio_cx1 = np.abs(sigma_cx1) / ft
-        ratio_cx2 = np.abs(sigma_cx2) / ft
+        if fc_c is not None:  # mgtkit独自拡張 2026-11: 検定と同じ fc
+            is_comp = True
+            ratio_cx1 = np.abs(sigma_cx1) / fc_c
+            ratio_cx2 = np.abs(sigma_cx2) / fc_c
+        else:  # 座屈長さ未指定の呼び出し (原典どおり ft)
+            ratio_cx1 = np.abs(sigma_cx1) / ft
+            ratio_cx2 = np.abs(sigma_cx2) / ft
 
     text.append('　　')
     text.append('　　')
@@ -5748,6 +5970,11 @@ def TSR_analysis_text(sectionsize, stress, timecase, SN, ele_no, section_no,
     text.append('　　')
     text.append('*設計用応力　[' + t_case + ']　j端')
     text.append('軸力' + n2s(Fx2 / 1000, '%15.1f') + 'kN')
+
+    if is_comp:
+        _truss_text_comp_lines(text, lams_c, fc_c, Lamda_c, t_case,
+                               ratio_cx1, ratio_cx2, n2s, i_list=i_c, length=length)
+        return text
 
     text.append('　　')
     text.append('　　')
@@ -5790,6 +6017,7 @@ def S_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
         lb_table = [list(r) for r in lb_table]
     n = max(sectionsize.shape)
     code = sectionsize[n - 2]
+    _SLENDER_LAST['lam'] = None
 
     if code == 1000:  # H鋼断面の検定
         ratio_output = H_analysis(sectionsize[0:n - 2], buck_length, stress, timecase,
@@ -5913,4 +6141,7 @@ def S_ratio_analysis(sectionsize, buck_length, stress, timecase, SN,
                 lb_table[idx][2] = buck_length[2]
 
     # 該当コードなしの場合、MATLAB同様 ratio_output 未定義エラーとなる
+    # 細長比上限(250)超過の圧縮材を記録 (mgtkit独自拡張 2026-11。検定比は不変)
+    note_steel_lambda(section_no, ele_no, np.atleast_2d(np.asarray(stress, dtype=float))[:, 0],
+                      pick_section_name)
     return ratio_output, maxratios, maxratios_text, lb_table

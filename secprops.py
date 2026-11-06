@@ -916,7 +916,7 @@ def BL(sectionsize, index):
 
     入力はmm単位系 出力はcm系
     入力例 BL([H B t],型)
-    型は 1:a, 4:ixs, 5:iys, 6:Zx, 7:Zy, 10:Af, 11:Aw
+    型は 1:a, 4:ixs, 5:iys, 6:Zx, 7:Zy, 10:Af, 11:Aw, 13:iv(最小断面二次半径)
     """
     sectionsize = np.asarray(sectionsize, dtype=float).ravel()
 
@@ -974,6 +974,10 @@ def BL(sectionsize, index):
         return Aw
     elif index == 12:
         _stop('山形鋼断面性能データ型指定エラー')
+    elif index == 13:
+        # 最小断面二次半径 iv (cm)。L_data 14列目 (mgtkit独自拡張:
+        # 単一山形鋼の細長比を最小軸で評価するため)
+        return pickup_ability[13]
     else:
         _stop('山形鋼断面性能データ型指定エラー')
 
