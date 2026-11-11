@@ -442,6 +442,57 @@ def w_al_match(material_name):
 
 
 # ===========================================================================
+# 細長比150超の注意 (mgtkit独自拡張 2026-11)
+#   W_SB/W_SR_analysis が用いた細長比を _W_SLENDER_LAST に記録し、
+#   W_ratio_analysis が圧縮のある要素で 150 超を W_LAMBDA_NOTE に集める。
+#   ratio_pipeline.run_steel_check が実行毎にリセットし、最後に注記として出す。
+# ===========================================================================
+
+W_LAMBDA_LIMIT = 150.0
+_W_SLENDER_LAST = {'lam': None}
+W_LAMBDA_NOTE = {}  # 断面番号 -> {'lam', 'eles', 'name'}
+
+W_LAMBDA_TEXT_NOTE = ('※細長比が150を超えるため，圧縮許容応力度を極小(≒0)としている'
+                      '（圧縮が生じると検定比が非常に大きくなる）')
+
+
+def _w_note_lambda(section_no, ele_no, axial, section_name=''):
+    lam = _W_SLENDER_LAST.get('lam')
+    _W_SLENDER_LAST['lam'] = None
+    if lam is None or not np.isfinite(lam) or lam <= W_LAMBDA_LIMIT:
+        return
+    if not np.any(np.asarray(axial, dtype=float) < 0):
+        return
+    rec = W_LAMBDA_NOTE.setdefault(
+        float(section_no),
+        {'lam': 0.0, 'eles': set(), 'name': str(section_name).strip()})
+    rec['lam'] = max(rec['lam'], float(lam))
+    rec['eles'].add(int(ele_no))
+
+
+def w_lambda_note_lines():
+    """W_LAMBDA_NOTE を注記の行リストにする."""
+    lines = []
+    if not W_LAMBDA_NOTE:
+        return lines
+    lines.append('注意: 圧縮が生じる木部材に細長比 150 を超えるものがあります '
+                 '(圧縮許容応力度を極小(≒0)として検定しているため、検定比が'
+                 '非常に大きくなります。部材・座屈長さの確認をしてください)。')
+    keys = sorted(W_LAMBDA_NOTE)
+    for sn in keys[:15]:
+        rec = W_LAMBDA_NOTE[sn]
+        eles = sorted(rec['eles'])
+        shown = ', '.join(str(e) for e in eles[:10])
+        if len(eles) > 10:
+            shown += ' ほか%d要素' % (len(eles) - 10)
+        lines.append('・断面番号 %d %s: 最大細長比 %.0f / 要素 %s'
+                     % (int(sn), rec['name'], rec['lam'], shown))
+    if len(keys) > 15:
+        lines.append('・ほか %d 断面' % (len(keys) - 15))
+    return lines
+
+
+# ===========================================================================
 # W_SB_analysis.m (中実角断面)
 # ===========================================================================
 
@@ -502,6 +553,7 @@ def W_SB_analysis(sectionsize, length, stress, timecase, w_al, section_no,
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / iys
     lamdadfc = max(lamdax, lamday)
+    _W_SLENDER_LAST['lam'] = lamdadfc
 
     if lamdadfc > 150 or min(B, D) < 1:
         # 細長比が150を超えるものはfcを極小に %231017國江編集,50→1に変更
@@ -624,12 +676,13 @@ def W_SR_analysis(sectionsize, length, stress, timecase, w_al, section_no,
     lamdax = length[0] * 100 / ixs
     lamday = length[1] * 100 / ixs
     lamdadfc = max(lamdax, lamday)
+    _W_SLENDER_LAST['lam'] = lamdadfc
 
-    if lamdadfc > 150:  # 細長比が150を超えるものは壁扱いで圧縮検定対象外とする
-        Fxx = np.zeros(3)
-        My = np.zeros(3)
-        Mz = np.zeros(3)
-        fc = Fc * 1.1 / 3
+    if lamdadfc > 150:
+        # mgtkit独自拡張 2026-11: 角材(W_SB_analysis)に揃え、細長比が150を
+        # 超えるものは fc を極小とする (原典は軸力・曲げを0にして検定比0と
+        # していたため、引張・曲げも見逃していた)
+        fc = 0.000001
     elif lamdadfc > 100:
         fc = 3000 * Fc / (lamdadfc) ** 2 * 1.1 / 3
     elif lamdadfc > 30:
@@ -940,6 +993,8 @@ def W_SB_analysis_text(sectionsize, length, stress, timecase, w_al, ele_no,
     text.append('圧縮許容応力度：' + n2s(fc, '%15.2f') + 'N/mm2')
     text.append('細長比(強)：' + n2s(lamdax, '%15.0f') + '　細長比(弱)：'
                 + n2s(lamday, '%15.0f'))
+    if lamdadfc > 150:  # mgtkit独自拡張 2026-11
+        text.append(W_LAMBDA_TEXT_NOTE)
 
     text.append('曲げ許容応力度(強)：' + n2s(_m(fby, st_index), '%15.2f') + 'N/mm2')
     text.append('曲げ許容応力度(弱)：' + n2s(_m(fbz, st_index), '%15.2f') + 'N/mm2')
@@ -1034,11 +1089,9 @@ def W_SR_analysis_text(sectionsize, length, stress, timecase, w_al, ele_no,
     lamday = length[1] * 100 / ixs
     lamdadfc = max(lamdax, lamday)
 
-    if lamdadfc > 150:  # 細長比が150を超えるものは壁扱いで圧縮検定対象外とする
-        Fxx = np.zeros(3)
-        My = np.zeros(3)
-        Mz = np.zeros(3)
-        fc = Fc * 1.1 / 3
+    if lamdadfc > 150:
+        # mgtkit独自拡張 2026-11: 角材(W_SB_analysis_text)に揃え fc を極小とする
+        fc = 0.000001
     elif lamdadfc > 100:
         fc = 3000 * Fc / (lamdadfc) ** 2 * 1.1 / 3
     elif lamdadfc > 30:
@@ -1198,6 +1251,8 @@ def W_SR_analysis_text(sectionsize, length, stress, timecase, w_al, ele_no,
     text.append('圧縮許容応力度：' + n2s(fc, '%15.2f') + 'N/mm2')
     text.append('細長比(x)：' + n2s(lamdax, '%15.0f') + '　細長比(y)：'
                 + n2s(lamday, '%15.0f'))
+    if lamdadfc > 150:  # mgtkit独自拡張 2026-11
+        text.append(W_LAMBDA_TEXT_NOTE)
 
     text.append('曲げ許容応力度(強)：' + n2s(_m(fby, st_index), '%15.2f') + 'N/mm2')
     text.append('曲げ許容応力度(弱)：' + n2s(_m(fbz, st_index), '%15.2f') + 'N/mm2')
@@ -1380,6 +1435,7 @@ def W_ratio_analysis(sectionsize, buck_length, stress, timecase, material_no,
     maxratios = list(maxratios)
     n = max(sectionsize.shape)
     code = sectionsize[n - 2]
+    _W_SLENDER_LAST['lam'] = None
 
     if code == 1000:  # H鋼断面の検定
         print('木材のH断面は対応していません')
@@ -1420,6 +1476,10 @@ def W_ratio_analysis(sectionsize, buck_length, stress, timecase, material_no,
         print('木材の断面形状として不適切です．')
         raise RuntimeError('木材の断面形状として不適切です．')  # MATLAB: stop
 
+    # 細長比150超の圧縮材を記録 (mgtkit独自拡張 2026-11)
+    _w_note_lambda(section_no, ele_no,
+                   np.atleast_2d(np.asarray(stress, dtype=float))[:, 0],
+                   pick_section_name)
     return ratio_output, maxratios, maxratios_text
 
 
